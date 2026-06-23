@@ -6,12 +6,15 @@ use std::{
 };
 
 use async_trait::async_trait;
+use schemars::schema_for;
 use serde_json::{Value, json};
 
 use crate::{
-    CommandContext, CommandOutput, CommandSpec, FrameworkError, HelpRequest, HelpResult, HelpTopic,
-    InvocationPlan, InvocationToken, PermissionPolicy, Result, RunRequest, RunResponse,
-    TemplateToken, WorkspaceDecl, structured_error, value_matches_type,
+    CatalogIdentity, CommandCatalog, CommandContext, CommandOutput, CommandSpec, EffectLane,
+    FrameworkError, HelpRequest, HelpResult, HelpTopic, InvocationPlan, InvocationToken,
+    OperationSpec, PermissionPolicy, Result, RunRequest, RunResponse, ServerSpec, TemplateToken,
+    ToolLaneSpec, WorkspaceDecl, group_namespaces, stable_hash_value, structured_error,
+    value_matches_type,
 };
 use crate::{CommandTemplate, PermissionSpec};
 
@@ -87,6 +90,16 @@ impl CommandRegistry {
         self.commands.values().map(|command| &command.spec)
     }
 
+    pub fn operation_specs(&self) -> Vec<OperationSpec> {
+        let mut operations = self
+            .commands
+            .values()
+            .map(|command| OperationSpec::from_command_spec(&command.spec))
+            .collect::<Vec<_>>();
+        operations.sort_by(|left, right| left.path.cmp(&right.path));
+        operations
+    }
+
     pub fn workspaces(&self) -> impl Iterator<Item = &WorkspaceDecl> {
         self.workspaces.values()
     }
@@ -99,11 +112,99 @@ impl CommandRegistry {
         &self.server_description
     }
 
+    pub fn catalog(&self) -> CommandCatalog {
+        let operations = self.operation_specs();
+        let identity = self.catalog_identity_for(&operations);
+        CommandCatalog {
+            server: ServerSpec::new(&self.server_name, &self.server_description),
+            namespaces: group_namespaces(&operations),
+            operations,
+            workspaces: self.workspaces.values().cloned().collect(),
+            identity,
+        }
+    }
+
+    pub fn catalog_identity(&self) -> CatalogIdentity {
+        let operations = self.operation_specs();
+        self.catalog_identity_for(&operations)
+    }
+
+    fn catalog_identity_for(&self, operations: &[OperationSpec]) -> CatalogIdentity {
+        let catalog_value = json!({
+            "server": ServerSpec::new(&self.server_name, &self.server_description),
+            "namespaces": group_namespaces(operations),
+            "operations": operations,
+            "workspaces": self.workspaces.values().collect::<Vec<_>>(),
+        });
+        let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
+        let help_schema = serde_json::to_value(schema_for!(HelpRequest)).unwrap_or(Value::Null);
+
+        CatalogIdentity {
+            catalog_hash: stable_hash_value(&catalog_value),
+            run_schema_hash: stable_hash_value(&run_schema),
+            help_schema_hash: stable_hash_value(&help_schema),
+        }
+    }
+
+    pub fn lane_specs(&self, primary_tool_name: &str) -> Vec<ToolLaneSpec> {
+        let mut lanes = BTreeMap::<EffectLane, Vec<_>>::new();
+        lanes.entry(EffectLane::Primary).or_default();
+        for operation in self.operation_specs() {
+            lanes
+                .entry(operation.lane())
+                .or_default()
+                .push(operation.effect);
+        }
+
+        lanes
+            .into_iter()
+            .map(|(lane, mut allowed_effects)| {
+                allowed_effects.sort();
+                allowed_effects.dedup();
+                ToolLaneSpec {
+                    tool_name: lane.tool_name(primary_tool_name),
+                    lane,
+                    allowed_effects,
+                    description: lane_description(primary_tool_name, lane),
+                }
+            })
+            .collect()
+    }
+
+    pub fn tool_lane(&self, primary_tool_name: &str, tool_name: &str) -> Option<EffectLane> {
+        self.lane_specs(primary_tool_name)
+            .into_iter()
+            .find(|spec| spec.tool_name == tool_name)
+            .map(|spec| spec.lane)
+    }
+
+    pub fn required_tool_name(&self, primary_tool_name: &str, lane: EffectLane) -> String {
+        lane.tool_name(primary_tool_name)
+    }
+
+    pub fn validate_examples(&self) -> Result<()> {
+        for command in self.commands.values() {
+            for example in &command.spec.examples {
+                let request = RunRequest {
+                    command: example.command.clone(),
+                    args: example.args.clone(),
+                    stdin: None,
+                    output: None,
+                    dry_run: true,
+                };
+                self.build_plan(&request)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn build_plan(&self, request: &RunRequest) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
         let registered = self
             .match_command(&template)
             .ok_or_else(|| FrameworkError::UnknownCommand(request.command.clone()))?;
+        let operation = OperationSpec::from_command_spec(&registered.spec);
+        let identity = self.catalog_identity();
 
         let referenced: BTreeSet<_> = template
             .placeholders()
@@ -184,8 +285,12 @@ impl CommandRegistry {
             .collect();
 
         Ok(InvocationPlan {
+            operation_id: operation.id.clone(),
             command_path: registered.spec.path.clone(),
             raw_command: request.command.clone(),
+            catalog_hash: identity.catalog_hash,
+            effect: operation.effect.clone(),
+            lane: operation.lane(),
             tokens,
             bound_args,
             permissions: registered.spec.permissions.clone(),
@@ -195,7 +300,44 @@ impl CommandRegistry {
     }
 
     pub async fn run(&self, request: RunRequest) -> Result<RunResponse> {
+        self.run_with_lane(request, None, None, None).await
+    }
+
+    pub async fn run_in_lane(
+        &self,
+        request: RunRequest,
+        current_tool: impl Into<String>,
+        lane: EffectLane,
+        primary_tool_name: impl AsRef<str>,
+    ) -> Result<RunResponse> {
+        self.run_with_lane(
+            request,
+            Some(current_tool.into()),
+            Some(lane),
+            Some(primary_tool_name.as_ref().to_string()),
+        )
+        .await
+    }
+
+    async fn run_with_lane(
+        &self,
+        request: RunRequest,
+        current_tool: Option<String>,
+        current_lane: Option<EffectLane>,
+        primary_tool_name: Option<String>,
+    ) -> Result<RunResponse> {
         let plan = self.build_plan(&request)?;
+        if let Some(current_lane) = current_lane {
+            if plan.lane != current_lane {
+                let required_tool = self
+                    .required_tool_name(primary_tool_name.as_deref().unwrap_or("run"), plan.lane);
+                return Err(FrameworkError::WrongEffectLane {
+                    current_tool: current_tool.unwrap_or_else(|| current_lane.tool_name("run")),
+                    required_tool,
+                });
+            }
+        }
+
         if request.dry_run {
             return Ok(RunResponse {
                 plan,
@@ -236,6 +378,7 @@ impl CommandRegistry {
     pub fn resource_text(&self, uri: &str) -> Option<String> {
         match uri {
             "cli://server/overview" => Some(self.server_help().text),
+            "cli://catalog" => serde_json::to_string_pretty(&self.catalog()).ok(),
             "cli://commands" => Some(self.command_catalog_text()),
             "cli://permissions" => Some(self.permissions_text()),
             other if other.starts_with("cli://commands/") => {
@@ -269,7 +412,7 @@ impl CommandRegistry {
             format!("# {}", self.server_name),
             self.server_description.clone(),
             String::new(),
-            "Tools: `help`, `run`.".to_string(),
+            "Start with the primary execution tool. Use lane tools only when the framework returns structured retry data.".to_string(),
             "Command strings are typed templates, not shell programs.".to_string(),
             String::new(),
             "Commands:".to_string(),
@@ -283,6 +426,7 @@ impl CommandRegistry {
             text: lines.join("\n"),
             structured: json!({
                 "server": self.server_name,
+                "catalog": self.catalog(),
                 "commands": self.command_specs().collect::<Vec<_>>(),
                 "workspaces": self.workspaces().collect::<Vec<_>>()
             }),
@@ -374,6 +518,26 @@ impl CommandRegistry {
             lines.push(format!("- `{}` - {}", example.command, example.summary));
         }
         lines.join("\n")
+    }
+}
+
+fn lane_description(primary_tool_name: &str, lane: EffectLane) -> String {
+    match lane {
+        EffectLane::Primary => format!(
+            "Primary execution tool. Start here for all command templates; the framework returns structured retry data when another effect lane is required."
+        ),
+        EffectLane::Write => format!(
+            "Write execution lane. Use this tool when `{primary_tool_name}` returns structured retry data requiring this lane."
+        ),
+        EffectLane::Delete => format!(
+            "Delete execution lane. Use this tool when `{primary_tool_name}` returns structured retry data requiring this lane."
+        ),
+        EffectLane::Exec => format!(
+            "Process execution lane. Use this tool when `{primary_tool_name}` returns structured retry data requiring this lane."
+        ),
+        EffectLane::Network => format!(
+            "Network execution lane. Use this tool when `{primary_tool_name}` returns structured retry data requiring this lane."
+        ),
     }
 }
 

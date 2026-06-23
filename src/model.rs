@@ -79,6 +79,7 @@ pub enum PermissionEffect {
     Read,
     Write,
     Delete,
+    Exec,
     Network,
     Custom(String),
 }
@@ -89,6 +90,7 @@ impl PermissionEffect {
             PermissionEffect::Read => "read".to_string(),
             PermissionEffect::Write => "write".to_string(),
             PermissionEffect::Delete => "delete".to_string(),
+            PermissionEffect::Exec => "exec".to_string(),
             PermissionEffect::Network => "network".to_string(),
             PermissionEffect::Custom(value) => value.clone(),
         }
@@ -162,10 +164,35 @@ fn normalize_file_uri(value: &str) -> String {
 }
 
 fn normalize_path(value: &str) -> String {
-    let mut normalized = value.replace('\\', "/");
-    while normalized.contains("//") {
-        normalized = normalized.replace("//", "/");
+    let replaced = value.replace('\\', "/");
+    let absolute = replaced.starts_with('/');
+    let (prefix, rest) = if replaced.len() >= 2 && replaced.as_bytes()[1] == b':' {
+        (replaced[..2].to_string(), &replaced[2..])
+    } else {
+        (String::new(), replaced.as_str())
+    };
+
+    let mut parts = Vec::new();
+    for part in rest.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            value => parts.push(value),
+        }
     }
+
+    let mut normalized = String::new();
+    if !prefix.is_empty() {
+        normalized.push_str(&prefix);
+        if !parts.is_empty() {
+            normalized.push('/');
+        }
+    } else if absolute {
+        normalized.push('/');
+    }
+    normalized.push_str(&parts.join("/"));
     normalized.trim_end_matches('/').to_ascii_lowercase()
 }
 
@@ -255,9 +282,20 @@ pub enum OutputFormat {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub enum ResponseProfile {
+    Text,
+    Structured,
+    CompactStructured,
+    Debug,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct OutputSpec {
     #[serde(default = "default_output_format")]
     pub format: OutputFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ResponseProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -272,6 +310,7 @@ impl Default for OutputSpec {
     fn default() -> Self {
         Self {
             format: OutputFormat::Structured,
+            profile: None,
             limit: None,
             fields: None,
             cursor: None,
@@ -322,8 +361,12 @@ pub enum InvocationToken {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InvocationPlan {
+    pub operation_id: String,
     pub command_path: Vec<String>,
     pub raw_command: String,
+    pub catalog_hash: String,
+    pub effect: crate::EffectSpec,
+    pub lane: crate::EffectLane,
     pub tokens: Vec<InvocationToken>,
     pub bound_args: BTreeMap<String, BoundArg>,
     pub permissions: Vec<PermissionSpec>,
@@ -365,7 +408,10 @@ impl CommandOutput {
 
     pub fn apply_output_spec(mut self, spec: &OutputSpec) -> Self {
         if let Some(value) = self.structured.take() {
-            self.structured = Some(shape_structured(value, spec));
+            self.structured = Some(limit_structured(
+                shape_structured(value, spec),
+                spec.max_bytes,
+            ));
         }
 
         if let Some(text) = self.text.take() {
@@ -409,6 +455,26 @@ fn select_fields(value: Value, fields: &[String]) -> Value {
     }
 }
 
+fn limit_structured(value: Value, max_bytes: Option<usize>) -> Value {
+    let Some(max_bytes) = max_bytes else {
+        return value;
+    };
+    let Ok(bytes) = serde_json::to_vec(&value) else {
+        return value;
+    };
+    if bytes.len() <= max_bytes {
+        return value;
+    }
+
+    let preview = String::from_utf8_lossy(&bytes).to_string();
+    json!({
+        "truncated": true,
+        "maxBytes": max_bytes,
+        "actualBytes": bytes.len(),
+        "preview": limit_text(preview, Some(max_bytes)),
+    })
+}
+
 fn limit_text(text: String, max_bytes: Option<usize>) -> String {
     let Some(max_bytes) = max_bytes else {
         return text;
@@ -417,11 +483,17 @@ fn limit_text(text: String, max_bytes: Option<usize>) -> String {
         return text;
     }
 
-    let mut end = max_bytes;
+    let marker = "...[truncated]";
+    let target = max_bytes.saturating_sub(marker.len());
+    let mut end = if target == 0 { max_bytes } else { target };
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}...[truncated]", &text[..end])
+    if target == 0 {
+        text[..end].to_string()
+    } else {
+        format!("{}{}", &text[..end], marker)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -452,6 +524,7 @@ impl PermissionPolicy {
                 PermissionEffect::Read,
                 PermissionEffect::Write,
                 PermissionEffect::Delete,
+                PermissionEffect::Exec,
                 PermissionEffect::Network,
             ]
             .into_iter()

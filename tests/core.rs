@@ -1,9 +1,16 @@
 use mcp_twill::{
-    ArgSpec, CommandOutput, CommandRegistry, CommandSpec, FrameworkError, HelpRequest,
-    PermissionEffect, PermissionPolicy, PermissionSpec, RunRequest, WorkspaceDecl,
+    ArgSpec, CommandExample, CommandOutput, CommandRegistry, CommandSpec, EffectLane, EffectSpec,
+    FrameworkError, HelpRequest, OutputSpec, PermissionEffect, PermissionPolicy, PermissionSpec,
+    RunRequest, WorkspaceDecl,
 };
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 fn request(command: &str, args: serde_json::Value) -> RunRequest {
     RunRequest {
@@ -18,34 +25,54 @@ fn request(command: &str, args: serde_json::Value) -> RunRequest {
 fn registry() -> CommandRegistry {
     CommandRegistry::new("test", "test server")
         .declare_workspace(WorkspaceDecl::new("repo", "C:/repo"))
-        .register(
-            CommandSpec::new(["issues", "create"], "Create issue", "Create issue")
-                .with_arg(ArgSpec::string("title", "Issue title"))
-                .with_arg(ArgSpec::string("body", "Issue body"))
-                .with_permission(PermissionSpec::new(
-                    PermissionEffect::Write,
-                    "issues",
-                    "Creates an issue",
-                )),
-            |_context| async {
-                Ok(CommandOutput::structured(json!({
-                    "id": 1,
-                    "title": "Created",
-                    "body": "Body",
-                    "extra": "hidden"
-                })))
-            },
-        )
-        .register(
-            CommandSpec::new(["files", "read"], "Read file", "Read file")
-                .with_arg(ArgSpec::path("path", "Path to read", "repo"))
-                .with_permission(PermissionSpec::new(
-                    PermissionEffect::Read,
-                    "repo",
-                    "Reads a file",
-                )),
-            |_context| async { Ok(CommandOutput::text("file contents")) },
-        )
+        .register(create_issue_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({
+                "id": 1,
+                "title": "Created",
+                "body": "Body",
+                "extra": "hidden"
+            })))
+        })
+        .register(read_file_spec(), |_context| async {
+            Ok(CommandOutput::text("file contents"))
+        })
+}
+
+fn registry_reversed() -> CommandRegistry {
+    CommandRegistry::new("test", "test server")
+        .declare_workspace(WorkspaceDecl::new("repo", "C:/repo"))
+        .register(read_file_spec(), |_context| async {
+            Ok(CommandOutput::text("file contents"))
+        })
+        .register(create_issue_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({
+                "id": 1,
+                "title": "Created",
+                "body": "Body",
+                "extra": "hidden"
+            })))
+        })
+}
+
+fn create_issue_spec() -> CommandSpec {
+    CommandSpec::new(["issues", "create"], "Create issue", "Create issue")
+        .with_arg(ArgSpec::string("title", "Issue title"))
+        .with_arg(ArgSpec::string("body", "Issue body"))
+        .with_permission(PermissionSpec::new(
+            PermissionEffect::Write,
+            "issues",
+            "Creates an issue",
+        ))
+}
+
+fn read_file_spec() -> CommandSpec {
+    CommandSpec::new(["files", "read"], "Read file", "Read file")
+        .with_arg(ArgSpec::path("path", "Path to read", "repo"))
+        .with_permission(PermissionSpec::new(
+            PermissionEffect::Read,
+            "repo",
+            "Reads a file",
+        ))
 }
 
 #[test]
@@ -139,6 +166,17 @@ fn path_args_use_declared_workspaces() {
         ))
         .unwrap_err();
     assert!(matches!(denied, FrameworkError::WorkspaceMismatch { .. }));
+
+    let traversed = registry()
+        .build_plan(&request(
+            "files read $args.path",
+            json!({"path": "C:\\repo\\..\\other\\secret.txt"}),
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        traversed,
+        FrameworkError::WorkspaceMismatch { .. }
+    ));
 }
 
 #[tokio::test]
@@ -189,9 +227,32 @@ async fn output_selects_fields_and_limits_arrays() {
 }
 
 #[test]
+fn output_limits_structured_content_and_preserves_logs_and_cursors() {
+    let output = CommandOutput {
+        text: None,
+        structured: Some(json!([
+            { "id": 1, "title": "A very long title that should be truncated" },
+            { "id": 2, "title": "Another very long title that should be truncated" }
+        ])),
+        stderr: vec!["handler warning".to_string()],
+        next_cursor: Some("next-page".to_string()),
+    }
+    .apply_output_spec(&OutputSpec {
+        max_bytes: Some(48),
+        ..Default::default()
+    });
+
+    let structured = output.structured.unwrap();
+    assert_eq!(structured["truncated"], true);
+    assert_eq!(structured["maxBytes"], 48);
+    assert_eq!(output.stderr, vec!["handler warning"]);
+    assert_eq!(output.next_cursor.as_deref(), Some("next-page"));
+}
+
+#[test]
 fn help_returns_server_and_command_docs() {
     let server = registry().help(HelpRequest::default());
-    assert!(server.text.contains("Tools: `help`, `run`"));
+    assert!(server.text.contains("primary execution tool"));
 
     let command = registry().help(HelpRequest {
         command: Some("issues create".to_string()),
@@ -199,4 +260,128 @@ fn help_returns_server_and_command_docs() {
         detail: None,
     });
     assert!(command.text.contains("$args.title"));
+}
+
+#[test]
+fn catalog_identity_is_stable_across_registration_order() {
+    assert_eq!(
+        registry().catalog_identity().catalog_hash,
+        registry_reversed().catalog_identity().catalog_hash
+    );
+
+    let changed = registry().register(
+        CommandSpec::new(["issues", "close"], "Close issue", "Close issue"),
+        |_context| async { Ok(CommandOutput::structured(json!({ "ok": true }))) },
+    );
+    assert_ne!(
+        registry().catalog_identity().catalog_hash,
+        changed.catalog_identity().catalog_hash
+    );
+}
+
+#[test]
+fn catalog_examples_are_validated_against_the_planner() {
+    let mut example = CommandExample::new(
+        "issues create --title $args.title --body $args.body",
+        "Create an issue",
+    );
+    example.args.insert("title".to_string(), json!("Title"));
+    example.args.insert("body".to_string(), json!("Body"));
+
+    let valid = CommandRegistry::new("test", "test server").register(
+        create_issue_spec().with_example(example),
+        |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
+    );
+    valid.validate_examples().unwrap();
+
+    let invalid = CommandRegistry::new("test", "test server").register(
+        create_issue_spec().with_example(CommandExample::new(
+            "issues create --title $args.title --body $args.body",
+            "Missing args",
+        )),
+        |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
+    );
+    assert!(matches!(
+        invalid.validate_examples().unwrap_err(),
+        FrameworkError::MissingArgument(_)
+    ));
+}
+
+#[test]
+fn catalog_projects_composite_effects_and_required_lane() {
+    let reg = CommandRegistry::new("test", "test server").register(
+        CommandSpec::new(["deploy", "publish"], "Publish deploy", "Publish deploy")
+            .with_permission(PermissionSpec::new(
+                PermissionEffect::Write,
+                "repo",
+                "Writes deploy metadata",
+            ))
+            .with_permission(PermissionSpec::new(
+                PermissionEffect::Network,
+                "deploy-api",
+                "Calls deployment API",
+            )),
+        |_context| async { Ok(CommandOutput::structured(json!({ "ok": true }))) },
+    );
+
+    let operation = reg.operation_specs().remove(0);
+    assert!(matches!(operation.effect, EffectSpec::Composite(_)));
+    assert_eq!(operation.lane(), EffectLane::Network);
+
+    let lanes: Vec<_> = reg
+        .lane_specs("repo")
+        .into_iter()
+        .map(|lane| lane.tool_name)
+        .collect();
+    assert_eq!(lanes, vec!["repo", "repo-network"]);
+}
+
+#[tokio::test]
+async fn lane_checks_redirect_before_dispatch() {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let seen = dispatches.clone();
+    let reg = CommandRegistry::new("test", "test server").register(
+        create_issue_spec(),
+        move |_context| {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandOutput::structured(json!({ "id": 1 })))
+            }
+        },
+    );
+
+    let error = reg
+        .run_in_lane(
+            request(
+                "issues create --title $args.title --body $args.body",
+                json!({"title": "x", "body": "y"}),
+            ),
+            "repo",
+            EffectLane::Primary,
+            "repo",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        error,
+        FrameworkError::WrongEffectLane {
+            current_tool: "repo".to_string(),
+            required_tool: "repo-write".to_string(),
+        }
+    );
+
+    reg.run_in_lane(
+        request(
+            "issues create --title $args.title --body $args.body",
+            json!({"title": "x", "body": "y"}),
+        ),
+        "repo-write",
+        EffectLane::Write,
+        "repo",
+    )
+    .await
+    .unwrap();
+    assert_eq!(dispatches.load(Ordering::SeqCst), 1);
 }

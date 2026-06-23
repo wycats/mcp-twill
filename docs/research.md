@@ -6,12 +6,12 @@ This project is not a shell wrapper and not a proposal to replace MCP with CLIs.
 
 The framework uses the 2025-11-25 MCP specification surface:
 
-- Tools expose the two callable capabilities: `run` and `help`.
+- Tools expose `help`, one primary execution tool, and catalog-required effect-lane execution tools with truthful MCP annotations.
 - Resources expose server overview, command catalog, command docs, and permissions.
 - Prompts expose a reusable getting-started prompt.
-- Roots are treated as declared workspaces that can inform path-typed arguments.
-- Progress notifications make a single `run` call visible as parse, plan, dispatch, and complete phases.
-- Task-augmented `run` is supported as optional v1 behavior because MCP tasks are still an experimental protocol feature.
+- Declared workspaces constrain path-typed arguments. MCP roots can be projected into the same workspace model in a later workspace milestone.
+- Progress notifications make a single execution call visible as parse, plan, dispatch, and complete phases.
+- Task-augmented execution is supported as optional v1 behavior because MCP tasks are still an experimental protocol feature.
 
 ## Prior Art
 
