@@ -1,70 +1,71 @@
-use mcp_twill::{
-    ArgSpec, CliMcpServer, CommandExample, CommandOutput, CommandRegistry, CommandSpec,
-    PermissionEffect, PermissionSpec, Result, WorkspaceDecl,
-};
+use mcp_twill::{CommandContext, CommandOutput, CommandRegistry, Result, WorkspaceDecl, arg};
 use rmcp::{ServiceExt, transport::stdio};
+use serde::Deserialize;
 use serde_json::json;
 
-fn registry() -> CommandRegistry {
-    CommandRegistry::new(
+#[derive(Debug, Deserialize)]
+struct CreateIssueArgs {
+    title: String,
+    body: String,
+}
+
+async fn create_issue(_context: CommandContext, args: CreateIssueArgs) -> Result<CommandOutput> {
+    Ok(CommandOutput::structured(json!({
+        "id": 1,
+        "title": args.title,
+        "body": args.body,
+        "status": "open"
+    })))
+}
+
+fn registry() -> Result<CommandRegistry> {
+    CommandRegistry::build(
         "issues-example",
         "Example MCP Twill server for issue tracking commands.",
-    )
-    .declare_workspace(
-        WorkspaceDecl::new("repo", "C:/workspace").with_description("Example repository root"),
-    )
-    .register(
-        CommandSpec::new(
-            ["issues", "create"],
-            "Create an issue",
-            "Creates a new issue from typed title and body arguments.",
-        )
-        .with_arg(ArgSpec::string("title", "Issue title"))
-        .with_arg(ArgSpec::string("body", "Issue body"))
-        .with_permission(PermissionSpec::new(
-            PermissionEffect::Write,
-            "issues",
-            "Creates a new issue record",
-        ))
-        .with_example(CommandExample::new(
-            "issues create --title $args.title --body $args.body",
-            "Create an issue with typed title and body values",
-        )),
-        |_context| async {
-            Ok(CommandOutput::structured(json!({
-                "id": 1,
-                "title": "Created from MCP Twill",
-                "status": "open"
-            })))
-        },
-    )
-    .register(
-        CommandSpec::new(
-            ["issues", "list"],
-            "List issues",
-            "Lists open issues with structured output.",
-        )
-        .with_permission(PermissionSpec::new(
-            PermissionEffect::Read,
-            "issues",
-            "Reads issue records",
-        ))
-        .with_example(CommandExample::new(
-            "issues list",
-            "List issues without shell pipelines or jq",
-        )),
-        |_context| async {
-            Ok(CommandOutput::structured(json!([
-                { "id": 1, "title": "Crash on launch", "status": "open" },
-                { "id": 2, "title": "Improve help text", "status": "open" }
-            ])))
+        |server| {
+            server.workspace(
+                WorkspaceDecl::file("repo", "C:/workspace")
+                    .with_description("Example repository root"),
+            );
+
+            server.command("issues create", |command| {
+                command
+                    .summary("Create an issue")
+                    .description("Creates a new issue from typed title and body arguments.")
+                    .arg(arg::string("title").summary("Issue title"))
+                    .arg(arg::string("body").summary("Issue body"))
+                    .write("issues", "Creates a new issue record")
+                    .example_with_args(
+                        "issues create --title $args.title --body $args.body",
+                        "Create an issue with typed title and body values",
+                        json!({
+                            "title": "Crash on launch",
+                            "body": "The app exits after the splash screen."
+                        }),
+                    )
+                    .handle_typed(create_issue);
+            });
+
+            server.command("issues list", |command| {
+                command
+                    .summary("List issues")
+                    .description("Lists open issues with structured output.")
+                    .read("issues", "Reads issue records")
+                    .example("issues list", "List issues without shell pipelines or jq")
+                    .handle(|_context| async {
+                        Ok(CommandOutput::structured(json!([
+                            { "id": 1, "title": "Crash on launch", "status": "open" },
+                            { "id": 2, "title": "Improve help text", "status": "open" }
+                        ])))
+                    });
+            });
         },
     )
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let server = CliMcpServer::new(registry());
+    let server = mcp_twill::CliMcpServer::new(registry()?);
     server
         .serve(stdio())
         .await

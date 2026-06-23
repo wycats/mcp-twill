@@ -117,6 +117,26 @@ impl PermissionSpec {
             description: description.into(),
         }
     }
+
+    pub fn read(scope: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(PermissionEffect::Read, scope, description)
+    }
+
+    pub fn write(scope: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(PermissionEffect::Write, scope, description)
+    }
+
+    pub fn delete(scope: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(PermissionEffect::Delete, scope, description)
+    }
+
+    pub fn exec(scope: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(PermissionEffect::Exec, scope, description)
+    }
+
+    pub fn network(scope: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(PermissionEffect::Network, scope, description)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -135,6 +155,10 @@ impl WorkspaceDecl {
             uri: uri.into(),
             description: None,
         }
+    }
+
+    pub fn file(name: impl Into<String>, path: impl Into<String>) -> Self {
+        Self::new(name, path)
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
@@ -225,6 +249,8 @@ pub struct CommandSpec {
     pub path: Vec<String>,
     pub summary: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<crate::OutputContract>,
     #[serde(default)]
     pub args: Vec<ArgSpec>,
     #[serde(default)]
@@ -243,6 +269,7 @@ impl CommandSpec {
             path: path.into_iter().map(Into::into).collect(),
             summary: summary.into(),
             description: description.into(),
+            output: None,
             args: Vec::new(),
             permissions: Vec::new(),
             examples: Vec::new(),
@@ -255,6 +282,11 @@ impl CommandSpec {
 
     pub fn with_arg(mut self, arg: ArgSpec) -> Self {
         self.args.push(arg);
+        self
+    }
+
+    pub fn with_output(mut self, output: crate::OutputContract) -> Self {
+        self.output = Some(output);
         self
     }
 

@@ -237,7 +237,7 @@ impl OperationSpec {
             effect: EffectSpec::from_permissions(&spec.permissions),
             args: spec.args.clone(),
             stdin: None,
-            output: OutputContract::default(),
+            output: spec.output.clone().unwrap_or_default(),
             permissions: spec.permissions.clone(),
             examples: spec.examples.clone(),
             progress: Vec::new(),

@@ -34,6 +34,7 @@ pub enum ErrorCode {
     WrongEffectLane,
     PermissionDenied,
     ApprovalInvalid,
+    BuildFailed,
     HandlerFailed,
 }
 
@@ -52,6 +53,7 @@ impl ErrorCode {
             FrameworkError::WorkspaceMismatch { .. } => Self::WorkspaceMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
             FrameworkError::WrongEffectLane { .. } => Self::WrongEffectLane,
+            FrameworkError::Build(_) => Self::BuildFailed,
             FrameworkError::Handler(_) => Self::HandlerFailed,
         }
     }
@@ -260,6 +262,7 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
         FrameworkError::PermissionDenied { .. } => ResponseStatus::PermissionDenied,
         FrameworkError::WrongEffectLane { .. } => ResponseStatus::WrongEffectLane,
         FrameworkError::Handler(_) => ResponseStatus::Failed,
+        FrameworkError::Build(_) => ResponseStatus::Failed,
         _ => ResponseStatus::InvalidInput,
     }
 }
@@ -290,6 +293,7 @@ fn error_details(error: &FrameworkError) -> Value {
             "requiredTool": required_tool,
         }),
         FrameworkError::Handler(value) => json!({ "handler": value }),
+        FrameworkError::Build(value) => json!({ "build": value }),
         FrameworkError::EmptyCommand | FrameworkError::UnterminatedQuote => json!({}),
     }
 }

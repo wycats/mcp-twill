@@ -31,6 +31,8 @@ pub enum FrameworkError {
         current_tool: String,
         required_tool: String,
     },
+    #[error("registry build failed: {0}")]
+    Build(String),
     #[error("command handler failed: {0}")]
     Handler(String),
 }

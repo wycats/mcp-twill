@@ -1,3 +1,4 @@
+pub mod builder;
 pub mod catalog;
 pub mod error;
 pub mod help;
@@ -7,6 +8,7 @@ pub mod response;
 pub mod rmcp_adapter;
 pub mod template;
 
+pub use builder::*;
 pub use catalog::*;
 pub use error::{FrameworkError, Result};
 pub use help::{HelpDetail, HelpRequest, HelpResult, HelpTopic};
