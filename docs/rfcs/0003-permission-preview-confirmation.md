@@ -1,3 +1,5 @@
+<!-- exo:3 ulid:01kvrzwe4nbdzyb8xb1gmccfqx -->
+
 # RFC 0003: Effect Escalation, Preview, Confirmation, And Replay
 
 - Status: Draft

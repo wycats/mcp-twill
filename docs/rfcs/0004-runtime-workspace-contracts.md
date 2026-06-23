@@ -1,3 +1,5 @@
+<!-- exo:4 ulid:01kvrzxqkycwd2mzeawz1cvv1g -->
+
 # RFC 0004: Runtime Maturity, Workspace Identity, Events, And Contract Tests
 
 - Status: Draft

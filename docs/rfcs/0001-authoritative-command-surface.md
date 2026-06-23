@@ -1,3 +1,5 @@
+<!-- exo:1 ulid:01kvrzqm3pgr7jf8q2rkbdcs07 -->
+
 # RFC 0001: Authoritative Command Catalog
 
 - Status: Draft

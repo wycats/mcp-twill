@@ -1,3 +1,5 @@
+<!-- exo:2 ulid:01kvrzt4fkj5pn3svdgs8en58y -->
+
 # RFC 0002: Diagnostics, Steering, And Response Profiles
 
 - Status: Draft
