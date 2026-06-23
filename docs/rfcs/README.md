@@ -43,7 +43,8 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 - [RFC 0003: Effect Escalation, Preview, Confirmation, And Replay](0003-permission-preview-confirmation.md)
 - [RFC 0004: Runtime Maturity, Workspace Identity, Events, And Contract Tests](0004-runtime-workspace-contracts.md)
 - [RFC 0005: Effect-Lane Tool Surface](0005-effect-lane-tool-surface.md)
+- [RFC 0006: Author Ergonomics](0006-author-ergonomics.md)
 
 ## Suggested Implementation Order
 
-RFC 0001 should land first because the catalog is the authority used by the other proposals. RFC 0002 should follow because diagnostics and response profiles make catalog failures usable by agents. RFC 0005 should be implemented before the permission workflow in RFC 0003 is finalized, because effect-lane routing changes the MCP-facing execution surface. RFC 0003 then adds preview, confirmation, and replay on top of catalog effects and effect-lane routing. RFC 0004 can land incrementally because its runtime identity, workspace identity, event sinks, and generated contract tests are optional maturity features.
+RFC 0001 should land first because the catalog is the authority used by the other proposals. RFC 0002 should follow because diagnostics and response profiles make catalog failures usable by agents. RFC 0005 should be implemented before the permission workflow in RFC 0003 is finalized, because effect-lane routing changes the MCP-facing execution surface. RFC 0006 should land once the foundation API is stable enough to wrap, so new example servers teach the preferred authoring path before the preview and replay workflow adds more concepts. RFC 0003 then adds preview, confirmation, and replay on top of catalog effects and effect-lane routing. RFC 0004 can land incrementally because its runtime identity, workspace identity, event sinks, and generated contract tests are optional maturity features.
