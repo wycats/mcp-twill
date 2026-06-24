@@ -1,0 +1,14 @@
+[package]
+name = "mcp-workspace-resolver"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Workspace root resolution primitives for Rust MCP servers."
+
+[dependencies]
+schemars = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+
+[lib]
+name = "mcp_workspace_resolver"
+path = "src/lib.rs"
