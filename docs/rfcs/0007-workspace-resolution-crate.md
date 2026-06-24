@@ -34,7 +34,7 @@ let registry = CommandRegistry::build(
     "repo-tools",
     "Repository command server.",
     |server| {
-        server.workspace(WorkspaceDecl::file("repo", "V:/src/wycats/mcp-twill"));
+        server.workspace(WorkspaceDecl::file("repo", "/workspace/repo"));
 
         server.command("repo read", |command| {
             command
@@ -86,6 +86,7 @@ The resolver API centers on requirements and observations. Requirements are the 
 pub struct WorkspaceRequirement {
     pub id: WorkspaceId,
     pub display_name: Option<String>,
+    pub aliases: Vec<String>,
     pub selection: WorkspaceSelection,
     pub fallback: Option<DeclaredWorkspaceRoot>,
 }
@@ -102,7 +103,7 @@ pub struct ResolvedWorkspaceSet {
 }
 ```
 
-`WorkspaceSelection` describes how a requirement chooses among runtime roots. The default policy selects an MCP root whose `name` matches the requirement id. A server may also configure URI-based matching, aliases, or a primary-root policy for servers that intentionally use the only client root.
+`WorkspaceSelection` describes how a requirement chooses among runtime roots. The default policy selects an MCP root whose `name` matches the requirement id or one of the requirement aliases. A server may also configure URI-based matching or a primary-root policy for servers that intentionally use the only client root.
 
 ```rust
 pub enum WorkspaceSelection {
@@ -112,7 +113,7 @@ pub enum WorkspaceSelection {
 }
 ```
 
-`McpRootsObservation` represents the roots returned by an MCP client's `roots/list` request. The resolver treats the returned list as a set. If the list contains one root and the requirement allows `PrimaryWhenSingleRoot`, that root satisfies the requirement. If the list contains multiple roots, the requirement must select one by name, alias, or configured URI. If no root matches, the resolver returns an `unresolved_workspace_requirement` diagnostic. If several roots match, it returns an `ambiguous_workspace_root` diagnostic.
+`McpRootsObservation` represents the roots returned by an MCP client's `roots/list` request. The resolver treats the returned list as a set. If the list contains one root and the requirement allows `PrimaryWhenSingleRoot`, that root satisfies the requirement. If the list contains multiple roots, the requirement must select one by requirement id, requirement alias, or configured URI. If no root matches, the resolver returns an `unresolved_workspace_requirement` diagnostic. If several roots match, it returns an `ambiguous_workspace_root` diagnostic.
 
 ```rust
 pub struct McpRoot {
@@ -203,7 +204,8 @@ The crate should expose an `rmcp` feature that converts `rmcp` roots into `McpRo
 
 - A single MCP root resolves a primary workspace requirement.
 - Multiple MCP roots resolve by matching the requirement id to the MCP root name.
-- Multiple MCP roots with no match produce an ambiguous or unresolved workspace diagnostic.
+- Multiple MCP roots with no matching requirement id, alias, or URI produce an `unresolved_workspace_requirement` diagnostic.
+- Multiple MCP roots with several matching names, aliases, or URIs produce an `ambiguous_workspace_root` diagnostic.
 - Codex sandbox metadata resolves to a version-control project boundary when `.git`, `.jj`, or `.hg` is present above `sandboxCwd`.
 - Codex sandbox metadata resolves to a configured project marker when no version-control marker is visible.
 - Codex sandbox metadata resolves to `sandboxCwd` when no marker is visible.
