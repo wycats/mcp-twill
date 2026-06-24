@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -331,6 +334,10 @@ fn resolve_requirement(
     requirement: &WorkspaceRequirement,
     observations: &WorkspaceObservationSet,
 ) -> ResolutionOutcome {
+    if let WorkspaceSelection::ExplicitUri { uri } = &requirement.selection {
+        return resolve_explicit_uri_requirement(requirement, observations, uri);
+    }
+
     if let Some(mcp_roots) = &observations.mcp_roots {
         if !mcp_roots.roots.is_empty() {
             return resolve_mcp_requirement(requirement, mcp_roots);
@@ -348,22 +355,67 @@ fn resolve_requirement(
         });
     }
 
-    if let Some(declared) = requirement.fallback.as_ref().or_else(|| {
-        observations
-            .declared
-            .iter()
-            .find(|root| root.id == requirement.id)
-    }) {
-        return ResolutionOutcome::Resolved(ResolvedWorkspaceRoot {
-            id: requirement.id.clone(),
-            root_uri: declared.uri.clone(),
-            source: WorkspaceSource::Declared,
-            selection_reason: WorkspaceSelectionReason::DeclaredFallback,
-            capabilities: declared.capabilities.clone(),
-        });
+    if let Some(declared) = declared_root_for_requirement(requirement, observations) {
+        return ResolutionOutcome::Resolved(resolved_declared_root(
+            requirement,
+            declared,
+            WorkspaceSelectionReason::DeclaredFallback,
+        ));
     }
 
     ResolutionOutcome::Unresolved
+}
+
+fn resolve_explicit_uri_requirement(
+    requirement: &WorkspaceRequirement,
+    observations: &WorkspaceObservationSet,
+    uri: &str,
+) -> ResolutionOutcome {
+    if let Some(mcp_roots) = &observations.mcp_roots {
+        if !mcp_roots.roots.is_empty() {
+            return resolve_mcp_requirement(requirement, mcp_roots);
+        }
+    }
+
+    if let Some(sandbox) = &observations.codex_sandbox {
+        let (root_uri, _) = derive_codex_root(sandbox);
+        if root_uri == uri {
+            return ResolutionOutcome::Resolved(ResolvedWorkspaceRoot {
+                id: requirement.id.clone(),
+                root_uri,
+                source: WorkspaceSource::CodexSandboxMeta,
+                selection_reason: WorkspaceSelectionReason::ExplicitUri {
+                    uri: uri.to_string(),
+                },
+                capabilities: WorkspaceCapabilities::default(),
+            });
+        }
+        return ResolutionOutcome::Diagnostic(unresolved_diagnostic_with_candidates(
+            requirement,
+            vec![root_uri],
+        ));
+    }
+
+    let matches = explicit_declared_roots(requirement, observations, uri);
+    match matches.as_slice() {
+        [] => ResolutionOutcome::Diagnostic(unresolved_diagnostic(requirement)),
+        [declared] => ResolutionOutcome::Resolved(resolved_declared_root(
+            requirement,
+            declared,
+            WorkspaceSelectionReason::ExplicitUri {
+                uri: uri.to_string(),
+            },
+        )),
+        _ => ResolutionOutcome::Diagnostic(WorkspaceDiagnostic {
+            code: WorkspaceDiagnosticCode::AmbiguousWorkspaceRoot,
+            message: format!(
+                "workspace requirement `{}` matched multiple declared workspace roots",
+                requirement.id
+            ),
+            workspace_id: requirement.id.clone(),
+            candidates: matches.iter().map(|root| root.uri.clone()).collect(),
+        }),
+    }
 }
 
 fn resolve_mcp_requirement(
@@ -449,34 +501,71 @@ fn resolved_mcp_root(
     }
 }
 
+fn declared_root_for_requirement<'a>(
+    requirement: &'a WorkspaceRequirement,
+    observations: &'a WorkspaceObservationSet,
+) -> Option<&'a DeclaredWorkspaceRoot> {
+    requirement.fallback.as_ref().or_else(|| {
+        observations
+            .declared
+            .iter()
+            .find(|root| root.id == requirement.id)
+    })
+}
+
+fn explicit_declared_roots<'a>(
+    requirement: &'a WorkspaceRequirement,
+    observations: &'a WorkspaceObservationSet,
+    uri: &str,
+) -> Vec<&'a DeclaredWorkspaceRoot> {
+    requirement
+        .fallback
+        .iter()
+        .chain(observations.declared.iter())
+        .filter(|root| root.uri == uri)
+        .collect()
+}
+
+fn resolved_declared_root(
+    requirement: &WorkspaceRequirement,
+    root: &DeclaredWorkspaceRoot,
+    reason: WorkspaceSelectionReason,
+) -> ResolvedWorkspaceRoot {
+    ResolvedWorkspaceRoot {
+        id: requirement.id.clone(),
+        root_uri: root.uri.clone(),
+        source: WorkspaceSource::Declared,
+        selection_reason: reason,
+        capabilities: root.capabilities.clone(),
+    }
+}
+
 fn derive_codex_root(observation: &CodexSandboxObservation) -> (String, WorkspaceSelectionReason) {
+    let sandbox_cwd = normalized_path(&observation.sandbox_cwd);
+
     match &observation.root_derivation {
         RootDerivationPolicy::ExactDirectory => (
-            file_uri(&observation.sandbox_cwd),
+            file_uri(&sandbox_cwd),
             WorkspaceSelectionReason::CodexExactDirectory,
         ),
         RootDerivationPolicy::ProjectBoundary {
             vcs_markers,
             project_markers,
         } => {
-            if let Some((path, marker)) =
-                find_ancestor_with_marker(&observation.sandbox_cwd, vcs_markers)
-            {
+            if let Some((path, marker)) = find_ancestor_with_marker(&sandbox_cwd, vcs_markers) {
                 return (
                     file_uri(&path),
                     WorkspaceSelectionReason::CodexProjectMarker { marker },
                 );
             }
-            if let Some((path, marker)) =
-                find_ancestor_with_marker(&observation.sandbox_cwd, project_markers)
-            {
+            if let Some((path, marker)) = find_ancestor_with_marker(&sandbox_cwd, project_markers) {
                 return (
                     file_uri(&path),
                     WorkspaceSelectionReason::CodexProjectMarker { marker },
                 );
             }
             (
-                file_uri(&observation.sandbox_cwd),
+                file_uri(&sandbox_cwd),
                 WorkspaceSelectionReason::CodexExactDirectory,
             )
         }
@@ -484,6 +573,7 @@ fn derive_codex_root(observation: &CodexSandboxObservation) -> (String, Workspac
 }
 
 fn find_ancestor_with_marker(start: &Path, markers: &[String]) -> Option<(PathBuf, String)> {
+    let start = normalized_path(start);
     for ancestor in start.ancestors() {
         for marker in markers {
             if ancestor.join(marker).exists() {
@@ -494,7 +584,18 @@ fn find_ancestor_with_marker(start: &Path, markers: &[String]) -> Option<(PathBu
     None
 }
 
+fn normalized_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn unresolved_diagnostic(requirement: &WorkspaceRequirement) -> WorkspaceDiagnostic {
+    unresolved_diagnostic_with_candidates(requirement, Vec::new())
+}
+
+fn unresolved_diagnostic_with_candidates(
+    requirement: &WorkspaceRequirement,
+    candidates: Vec<String>,
+) -> WorkspaceDiagnostic {
     WorkspaceDiagnostic {
         code: WorkspaceDiagnosticCode::UnresolvedWorkspaceRequirement,
         message: format!(
@@ -502,7 +603,7 @@ fn unresolved_diagnostic(requirement: &WorkspaceRequirement) -> WorkspaceDiagnos
             requirement.id
         ),
         workspace_id: requirement.id.clone(),
-        candidates: Vec::new(),
+        candidates,
     }
 }
 
@@ -523,6 +624,15 @@ fn ambiguous_diagnostic(
 
 fn file_uri(path: &Path) -> String {
     let value = path.to_string_lossy().replace('\\', "/");
+    if let Some(unc) = value.strip_prefix("//?/UNC/") {
+        return format!("file://{unc}");
+    }
+    if let Some(local) = value.strip_prefix("//?/") {
+        return format!("file:///{local}");
+    }
+    if let Some(unc) = value.strip_prefix("//") {
+        return format!("file://{unc}");
+    }
     if value.starts_with('/') {
         format!("file://{value}")
     } else {
@@ -638,6 +748,76 @@ mod tests {
     }
 
     #[test]
+    fn explicit_uri_resolves_declared_workspace_by_uri() {
+        let uri = "file:///workspace/repo";
+        let resolved = resolve_one(
+            WorkspaceRequirement::new("repo").with_selection(WorkspaceSelection::ExplicitUri {
+                uri: uri.to_string(),
+            }),
+            WorkspaceObservationSet::new()
+                .with_declared(DeclaredWorkspaceRoot::file("source", uri)),
+        );
+
+        assert!(resolved.diagnostics.is_empty());
+        let root = resolved.root("repo").unwrap();
+        assert_eq!(root.root_uri, uri);
+        assert_eq!(root.source, WorkspaceSource::Declared);
+        assert_eq!(
+            root.selection_reason,
+            WorkspaceSelectionReason::ExplicitUri {
+                uri: uri.to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_uri_matches_codex_derived_root() {
+        let temp = test_dir("explicit_codex_match");
+        let repo = temp.join("repo");
+        let nested = repo.join("src").join("lib");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        let uri = file_uri(&repo);
+
+        let resolved = resolve_one(
+            WorkspaceRequirement::new("repo")
+                .with_selection(WorkspaceSelection::ExplicitUri { uri: uri.clone() }),
+            WorkspaceObservationSet::new()
+                .with_codex_sandbox(CodexSandboxObservation::new(&nested)),
+        );
+
+        assert!(resolved.diagnostics.is_empty());
+        let root = resolved.root("repo").unwrap();
+        assert_eq!(root.root_uri, uri);
+        assert_eq!(root.source, WorkspaceSource::CodexSandboxMeta);
+        assert_eq!(
+            root.selection_reason,
+            WorkspaceSelectionReason::ExplicitUri { uri }
+        );
+    }
+
+    #[test]
+    fn explicit_uri_rejects_mismatched_codex_derived_root() {
+        let nested = test_dir("explicit_codex_mismatch");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let resolved = resolve_one(
+            WorkspaceRequirement::new("repo").with_selection(WorkspaceSelection::ExplicitUri {
+                uri: "file:///workspace/other".to_string(),
+            }),
+            WorkspaceObservationSet::new()
+                .with_codex_sandbox(CodexSandboxObservation::new(&nested)),
+        );
+
+        assert!(resolved.roots.is_empty());
+        assert_eq!(
+            resolved.diagnostics[0].code,
+            WorkspaceDiagnosticCode::UnresolvedWorkspaceRequirement
+        );
+        assert_eq!(resolved.diagnostics[0].candidates, vec![file_uri(&nested)]);
+    }
+
+    #[test]
     fn codex_sandbox_derives_vcs_project_boundary() {
         let temp = test_dir("codex_vcs");
         let repo = temp.join("repo");
@@ -686,6 +866,36 @@ mod tests {
     }
 
     #[test]
+    fn codex_sandbox_canonicalizes_cwd_before_marker_derivation() {
+        let temp = test_dir("codex_canonical_marker");
+        let repo = temp.join("repo");
+        let nested = repo.join("src").join("lib");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        let non_canonical_nested = repo
+            .join("src")
+            .join("..")
+            .join("src")
+            .join("lib")
+            .join(".");
+
+        let resolved = resolve_one(
+            WorkspaceRequirement::new("repo"),
+            WorkspaceObservationSet::new()
+                .with_codex_sandbox(CodexSandboxObservation::new(non_canonical_nested)),
+        );
+
+        let root = resolved.root("repo").unwrap();
+        assert_eq!(root.root_uri, file_uri(&repo));
+        assert_eq!(
+            root.selection_reason,
+            WorkspaceSelectionReason::CodexProjectMarker {
+                marker: ".git".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn codex_sandbox_falls_back_to_sandbox_directory() {
         let nested = test_dir("codex_exact");
         std::fs::create_dir_all(&nested).unwrap();
@@ -722,6 +932,19 @@ mod tests {
             root.selection_reason,
             WorkspaceSelectionReason::DeclaredFallback
         );
+    }
+
+    #[test]
+    fn file_uri_formats_windows_network_and_verbatim_paths() {
+        assert_eq!(
+            file_uri(Path::new(r"\\server\share\repo")),
+            "file://server/share/repo"
+        );
+        assert_eq!(
+            file_uri(Path::new(r"\\?\UNC\server\share\repo")),
+            "file://server/share/repo"
+        );
+        assert_eq!(file_uri(Path::new(r"\\?\C:\repo")), "file:///C:/repo");
     }
 
     fn test_dir(name: &str) -> PathBuf {
