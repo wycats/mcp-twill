@@ -292,6 +292,13 @@ fn invocation_fingerprint_is_stable_for_equivalent_plans() {
     let second = registry().build_plan(&request).unwrap();
 
     assert_eq!(first.invocation_fingerprint, second.invocation_fingerprint);
+    assert_eq!(first.invocation_fingerprint.len(), 64);
+    assert!(
+        first
+            .invocation_fingerprint
+            .chars()
+            .all(|value| value.is_ascii_hexdigit())
+    );
 }
 
 #[test]

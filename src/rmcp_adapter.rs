@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::Utc;
+use rand::{RngCore, rngs::OsRng};
 use rmcp::{
     Peer, RoleServer, ServerHandler,
     handler::server::tool::schema_for_type,
@@ -66,7 +67,6 @@ pub struct CliMcpServer {
     tasks: Arc<Mutex<BTreeMap<String, TaskRecord>>>,
     task_counter: Arc<AtomicU64>,
     replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
-    replay_counter: Arc<AtomicU64>,
     authorizer: Arc<dyn PermissionAuthorizer>,
 }
 
@@ -88,7 +88,6 @@ impl CliMcpServer {
             tasks: Arc::new(Mutex::new(BTreeMap::new())),
             task_counter: Arc::new(AtomicU64::new(1)),
             replay: Arc::new(Mutex::new(BTreeMap::new())),
-            replay_counter: Arc::new(AtomicU64::new(1)),
             authorizer: Arc::new(DefaultPermissionAuthorizer),
         }
     }
@@ -180,7 +179,6 @@ impl CliMcpServer {
         registry: Arc<CommandRegistry>,
         config: CliMcpServerConfig,
         replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
-        replay_counter: Arc<AtomicU64>,
         authorizer: Arc<dyn PermissionAuthorizer>,
         tool_name: String,
         meta: Meta,
@@ -223,10 +221,20 @@ impl CliMcpServer {
         }
 
         if matches!(mode, RunMode::Preview) {
-            let requires_confirmation = matches!(
-                authorizer.decide(&plan),
-                PermissionDecision::RequireConfirmation
-            );
+            let requires_confirmation = match authorizer.decide(&plan) {
+                PermissionDecision::Allow => false,
+                PermissionDecision::RequireConfirmation => true,
+                PermissionDecision::Deny { reason } => {
+                    return envelope_result(ResponseEnvelope::framework_error(
+                        FrameworkError::PermissionDenied {
+                            effect: effect_label(&plan.effect),
+                            scope: reason,
+                        },
+                        Some(request),
+                        Some(plan),
+                    ));
+                }
+            };
             Self::notify_progress(&meta, &client, 4.0, 4.0, "Preview ready").await;
             return envelope_result(ResponseEnvelope::preview(plan, requires_confirmation));
         }
@@ -257,14 +265,9 @@ impl CliMcpServer {
                         ));
                     }
                 } else {
-                    let record = issue_replay_record(
-                        &config,
-                        &replay,
-                        &replay_counter,
-                        &plan,
-                        Utc::now().timestamp_millis(),
-                    )
-                    .await;
+                    let record =
+                        issue_replay_record(&config, &replay, &plan, Utc::now().timestamp_millis())
+                            .await;
                     Self::notify_progress(&meta, &client, 4.0, 4.0, "Confirmation required").await;
                     return envelope_result(ResponseEnvelope::permission_required(
                         plan, record, request, tool_name,
@@ -376,7 +379,6 @@ impl ServerHandler for CliMcpServer {
             self.registry.clone(),
             self.config.clone(),
             self.replay.clone(),
-            self.replay_counter.clone(),
             self.authorizer.clone(),
             tool_name,
             context.meta.clone(),
@@ -493,7 +495,6 @@ impl ServerHandler for CliMcpServer {
         let registry = self.registry.clone();
         let config = self.config.clone();
         let replay = self.replay.clone();
-        let replay_counter = self.replay_counter.clone();
         let authorizer = self.authorizer.clone();
         let meta = context.meta.clone();
         let client = context.peer.clone();
@@ -502,7 +503,6 @@ impl ServerHandler for CliMcpServer {
                 registry,
                 config,
                 replay,
-                replay_counter,
                 authorizer,
                 tool_name,
                 meta,
@@ -600,23 +600,38 @@ impl ServerHandler for CliMcpServer {
 async fn issue_replay_record(
     config: &CliMcpServerConfig,
     replay: &Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
-    replay_counter: &Arc<AtomicU64>,
     plan: &InvocationPlan,
     issued_at_unix_ms: i64,
 ) -> ReplayRecord {
-    let token = format!("replay-{}", replay_counter.fetch_add(1, Ordering::SeqCst));
-    let record = ReplayRecord {
-        token: token.clone(),
-        invocation_fingerprint: plan.invocation_fingerprint.clone(),
-        operation_id: plan.operation_id.clone(),
-        command_path: plan.command_path.clone(),
-        lane: plan.lane,
-        issued_at_unix_ms,
-        expires_at_unix_ms: issued_at_unix_ms.saturating_add(config.replay_ttl_ms),
-        single_use: true,
-    };
-    replay.lock().await.insert(token, record.clone());
-    record
+    loop {
+        let token = generate_replay_token();
+        let record = ReplayRecord {
+            token: token.clone(),
+            invocation_fingerprint: plan.invocation_fingerprint.clone(),
+            operation_id: plan.operation_id.clone(),
+            command_path: plan.command_path.clone(),
+            lane: plan.lane,
+            issued_at_unix_ms,
+            expires_at_unix_ms: issued_at_unix_ms.saturating_add(config.replay_ttl_ms),
+            single_use: true,
+        };
+        let mut replay = replay.lock().await;
+        if !replay.contains_key(&token) {
+            replay.insert(token, record.clone());
+            return record;
+        }
+    }
+}
+
+fn generate_replay_token() -> String {
+    let mut bytes = [0_u8; 32];
+    let mut rng = OsRng;
+    rng.fill_bytes(&mut bytes);
+    let encoded = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("replay-{encoded}")
 }
 
 async fn validate_replay(
@@ -629,18 +644,36 @@ async fn validate_replay(
         return Err("approval confirmation was not set".to_string());
     }
 
+    {
+        let replay = replay.lock().await;
+        let Some(record) = replay.get(&approval.token) else {
+            return Err("approval token is unknown or already used".to_string());
+        };
+
+        if record.expires_at_unix_ms <= now_unix_ms {
+            return Err("approval token expired".to_string());
+        }
+        if record.invocation_fingerprint != plan.invocation_fingerprint {
+            return Err("approved invocation does not match current invocation".to_string());
+        }
+        if record.operation_id != plan.operation_id || record.lane != plan.lane {
+            return Err("approved operation does not match current operation".to_string());
+        }
+        if !record.single_use {
+            return Ok(());
+        }
+    }
+
     let Some(record) = replay.lock().await.remove(&approval.token) else {
         return Err("approval token is unknown or already used".to_string());
     };
 
-    if record.expires_at_unix_ms <= now_unix_ms {
-        return Err("approval token expired".to_string());
-    }
-    if record.invocation_fingerprint != plan.invocation_fingerprint {
-        return Err("approved invocation does not match current invocation".to_string());
-    }
-    if record.operation_id != plan.operation_id || record.lane != plan.lane {
-        return Err("approved operation does not match current operation".to_string());
+    if record.expires_at_unix_ms <= now_unix_ms
+        || record.invocation_fingerprint != plan.invocation_fingerprint
+        || record.operation_id != plan.operation_id
+        || record.lane != plan.lane
+    {
+        return Err("approval token changed during validation".to_string());
     }
 
     Ok(())

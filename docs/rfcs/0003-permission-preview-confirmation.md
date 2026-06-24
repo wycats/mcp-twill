@@ -90,7 +90,7 @@ pub enum ConfirmationPolicy {
 }
 ```
 
-When confirmation is required, the framework stores a server-side replay record and returns a replay envelope through the response contract from RFC 0002. The first implementation uses opaque in-memory token handles with a ten-minute default expiration and single-use consumption. The display content states the required approval in plain language. The replay token is present only in structured content.
+When confirmation is required, the framework stores a server-side replay record and returns a replay envelope through the response contract from RFC 0002. The first implementation uses opaque, cryptographically random, in-memory token handles with a ten-minute default expiration and single-use consumption. The display content states the required approval in plain language. The replay token is present only in structured content.
 
 ```rust
 pub struct ReplayRecord {
@@ -105,7 +105,7 @@ pub struct ReplayRecord {
 }
 ```
 
-The invocation fingerprint is computed from the normalized command template, structured arguments, stdin metadata, workspace declarations, operation id, effect list, permission targets, and the full `OutputSpec`. The exact hashing format is an implementation detail, but two meaningfully different invocations must not share a replay fingerprint.
+The invocation fingerprint is computed with SHA-256 over the normalized command template, structured arguments, stdin metadata, workspace declarations, operation id, effect list, permission targets, and the full `OutputSpec`. Two meaningfully different invocations must not share a replay fingerprint.
 
 ### Required Validation Rules
 

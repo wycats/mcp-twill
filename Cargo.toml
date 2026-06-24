@@ -8,10 +8,12 @@ description = "A Rust MCP framework for CLI-shaped command templates over typed 
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rand = "0.8"
 rmcp = { version = "1.7.0", features = ["client", "transport-io"] }
 schemars = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread", "sync", "time"] }
 

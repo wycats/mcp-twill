@@ -70,6 +70,25 @@ fn counted_write_registry(dispatches: Arc<AtomicUsize>) -> CommandRegistry {
     )
 }
 
+fn custom_effect_registry(dispatches: Arc<AtomicUsize>) -> CommandRegistry {
+    registry().register(
+        CommandSpec::new(["issues", "sync"], "Sync issues", "Sync issues").with_permission(
+            PermissionSpec::new(
+                PermissionEffect::Custom("sync".to_string()),
+                "issues",
+                "Syncs issues through a custom effect",
+            ),
+        ),
+        move |_context| {
+            let dispatches = dispatches.clone();
+            async move {
+                dispatches.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandOutput::structured(json!({ "synced": true })))
+            }
+        },
+    )
+}
+
 fn registry() -> CommandRegistry {
     CommandRegistry::new("mcp-test", "MCP integration test server").register(
         CommandSpec::new(["issues", "list"], "List issues", "List issues").with_permission(
@@ -387,6 +406,10 @@ async fn generated_effect_lane_tools_redirect_and_dispatch() -> anyhow::Result<(
     );
     assert_eq!(structured["steering"][0]["request"]["tool"], "repo-write");
     let token = structured["replay"]["token"].as_str().unwrap().to_string();
+    let random_suffix = token.strip_prefix("replay-").unwrap();
+    assert_eq!(random_suffix.len(), 64);
+    assert!(random_suffix.chars().all(|value| value.is_ascii_hexdigit()));
+    assert_ne!(token, "replay-1");
     assert!(
         !structured["display"]["summary"]
             .as_str()
@@ -406,6 +429,35 @@ async fn generated_effect_lane_tools_redirect_and_dispatch() -> anyhow::Result<(
     let structured = dispatched.structured_content.unwrap();
     assert_eq!(structured["status"], "ok");
     assert_eq!(structured["output"]["structured"]["title"], "Created");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn preview_returns_denial_without_dispatch_for_denied_effects() -> anyhow::Result<()> {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::with_config(
+        custom_effect_registry(dispatches.clone()),
+        CliMcpServerConfig::default().with_execution_tool_name("repo"),
+    );
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let mut preview = request("issues sync", json!({}))?;
+    preview.mode = mcp_twill::RunMode::Preview;
+    let result = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(preview)?))
+        .await?;
+    assert_eq!(result.is_error, Some(true));
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["status"], "permissionDenied");
+    assert_eq!(structured["error"]["code"], "permission_denied");
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
 
     client.cancel().await?;
     Ok(())
@@ -487,7 +539,10 @@ async fn changed_args_fail_replay() -> anyhow::Result<()> {
     let client = TestClient::new().serve(client_transport).await?;
     let requested = write_request("Original")?;
     let permission_required = client
-        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(requested)?))
+        .call_tool(
+            CallToolRequestParams::new("repo-write")
+                .with_arguments(json_object(requested.clone())?),
+        )
         .await?;
     let token = permission_required.structured_content.unwrap()["replay"]["token"]
         .as_str()
@@ -496,7 +551,7 @@ async fn changed_args_fail_replay() -> anyhow::Result<()> {
 
     let mut changed = write_request("Changed")?;
     changed.approval = Some(mcp_twill::ApprovalInput {
-        token,
+        token: token.clone(),
         confirm: true,
     });
     let result = client
@@ -507,6 +562,17 @@ async fn changed_args_fail_replay() -> anyhow::Result<()> {
     assert_eq!(structured["status"], "approvalInvalid");
     assert_eq!(structured["error"]["code"], "approval_invalid");
     assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+
+    let mut approved = requested;
+    approved.approval = Some(mcp_twill::ApprovalInput {
+        token,
+        confirm: true,
+    });
+    let dispatched = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(approved)?))
+        .await?;
+    assert_eq!(dispatched.is_error, Some(false));
+    assert_eq!(dispatches.load(Ordering::SeqCst), 1);
 
     client.cancel().await?;
     Ok(())
