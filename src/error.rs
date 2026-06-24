@@ -26,6 +26,8 @@ pub enum FrameworkError {
     WorkspaceMismatch { argument: String, workspace: String },
     #[error("permission denied for `{effect}` on `{scope}`")]
     PermissionDenied { effect: String, scope: String },
+    #[error("approval invalid: {0}")]
+    ApprovalInvalid(String),
     #[error("This command requires {required_tool}.")]
     WrongEffectLane {
         current_tool: String,

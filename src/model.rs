@@ -359,6 +359,28 @@ pub struct StdinSpec {
     pub mime_type: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RunMode {
+    Execute,
+    Preview,
+    DryRun,
+}
+
+impl Default for RunMode {
+    fn default() -> Self {
+        Self::Execute
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalInput {
+    pub token: String,
+    #[serde(default)]
+    pub confirm: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
@@ -370,7 +392,21 @@ pub struct RunRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<OutputSpec>,
     #[serde(default)]
+    pub mode: RunMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalInput>,
+    #[serde(default)]
     pub dry_run: bool,
+}
+
+impl RunRequest {
+    pub fn effective_mode(&self) -> RunMode {
+        if self.dry_run {
+            RunMode::DryRun
+        } else {
+            self.mode
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -397,6 +433,7 @@ pub struct InvocationPlan {
     pub command_path: Vec<String>,
     pub raw_command: String,
     pub catalog_hash: String,
+    pub invocation_fingerprint: String,
     pub effect: crate::EffectSpec,
     pub lane: crate::EffectLane,
     pub tokens: Vec<InvocationToken>,
@@ -404,6 +441,81 @@ pub struct InvocationPlan {
     pub permissions: Vec<PermissionSpec>,
     pub workspaces: Vec<WorkspaceDecl>,
     pub output: OutputSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionDecision {
+    Allow,
+    RequireConfirmation,
+    Deny { reason: String },
+}
+
+pub trait PermissionAuthorizer: Send + Sync {
+    fn decide(&self, plan: &InvocationPlan) -> PermissionDecision;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DefaultPermissionAuthorizer;
+
+impl PermissionAuthorizer for DefaultPermissionAuthorizer {
+    fn decide(&self, plan: &InvocationPlan) -> PermissionDecision {
+        decision_for_effect(&plan.effect)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfirmationPolicy {
+    EffectDefault,
+}
+
+impl Default for ConfirmationPolicy {
+    fn default() -> Self {
+        Self::EffectDefault
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayRecord {
+    pub token: String,
+    pub invocation_fingerprint: String,
+    pub operation_id: String,
+    pub command_path: Vec<String>,
+    pub lane: crate::EffectLane,
+    pub issued_at_unix_ms: i64,
+    pub expires_at_unix_ms: i64,
+    pub single_use: bool,
+}
+
+fn decision_for_effect(effect: &crate::EffectSpec) -> PermissionDecision {
+    match effect {
+        crate::EffectSpec::Pure | crate::EffectSpec::Read => PermissionDecision::Allow,
+        crate::EffectSpec::Write
+        | crate::EffectSpec::Delete
+        | crate::EffectSpec::Exec
+        | crate::EffectSpec::Network => PermissionDecision::RequireConfirmation,
+        crate::EffectSpec::Custom(value) => PermissionDecision::Deny {
+            reason: format!("custom effect `{value}` does not have a configured authorizer"),
+        },
+        crate::EffectSpec::Composite(effects) => {
+            let mut requires_confirmation = false;
+            for effect in effects {
+                match decision_for_effect(effect) {
+                    PermissionDecision::Allow => {}
+                    PermissionDecision::RequireConfirmation => requires_confirmation = true,
+                    PermissionDecision::Deny { reason } => {
+                        return PermissionDecision::Deny { reason };
+                    }
+                }
+            }
+            if requires_confirmation {
+                PermissionDecision::RequireConfirmation
+            } else {
+                PermissionDecision::Allow
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

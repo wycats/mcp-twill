@@ -15,6 +15,8 @@ fn request(command: &str, args: serde_json::Value) -> RunRequest {
         args: serde_json::from_value(args).unwrap_or_else(|_| BTreeMap::new()),
         stdin: None,
         output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: false,
     }
 }

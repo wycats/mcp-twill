@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     ArgSpec, CommandExample, CommandSpec, PermissionEffect, PermissionSpec, WorkspaceDecl,
@@ -307,12 +308,8 @@ pub(crate) fn stable_hash_value(value: &serde_json::Value) -> String {
 }
 
 pub(crate) fn stable_hash_bytes(bytes: &[u8]) -> String {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub(crate) fn group_namespaces(operations: &[OperationSpec]) -> Vec<NamespaceSpec> {

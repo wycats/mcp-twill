@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::Utc;
+use rand::{RngCore, rngs::OsRng};
 use rmcp::{
     Peer, RoleServer, ServerHandler,
     handler::server::tool::schema_for_type,
@@ -26,19 +27,23 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::{
-    CommandRegistry, EffectLane, FrameworkError, HelpRequest, HelpResult, ResponseEnvelope,
-    ResponseProfile, RunRequest, RunResponse, ToolLaneSpec,
+    ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, FrameworkError,
+    HelpRequest, HelpResult, InvocationPlan, PermissionAuthorizer, PermissionDecision,
+    ReplayRecord, ResponseEnvelope, ResponseProfile, RunMode, RunRequest, RunResponse,
+    ToolLaneSpec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliMcpServerConfig {
     pub execution_tool_name: String,
+    pub replay_ttl_ms: i64,
 }
 
 impl Default for CliMcpServerConfig {
     fn default() -> Self {
         Self {
             execution_tool_name: "run".to_string(),
+            replay_ttl_ms: 10 * 60 * 1000,
         }
     }
 }
@@ -46,6 +51,11 @@ impl Default for CliMcpServerConfig {
 impl CliMcpServerConfig {
     pub fn with_execution_tool_name(mut self, name: impl Into<String>) -> Self {
         self.execution_tool_name = name.into();
+        self
+    }
+
+    pub fn with_replay_ttl_seconds(mut self, seconds: i64) -> Self {
+        self.replay_ttl_ms = seconds.saturating_mul(1000);
         self
     }
 }
@@ -56,6 +66,8 @@ pub struct CliMcpServer {
     config: CliMcpServerConfig,
     tasks: Arc<Mutex<BTreeMap<String, TaskRecord>>>,
     task_counter: Arc<AtomicU64>,
+    replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
+    authorizer: Arc<dyn PermissionAuthorizer>,
 }
 
 #[derive(Clone)]
@@ -75,6 +87,8 @@ impl CliMcpServer {
             config,
             tasks: Arc::new(Mutex::new(BTreeMap::new())),
             task_counter: Arc::new(AtomicU64::new(1)),
+            replay: Arc::new(Mutex::new(BTreeMap::new())),
+            authorizer: Arc::new(DefaultPermissionAuthorizer),
         }
     }
 
@@ -164,12 +178,15 @@ impl CliMcpServer {
     async fn execute_run_tool(
         registry: Arc<CommandRegistry>,
         config: CliMcpServerConfig,
+        replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
+        authorizer: Arc<dyn PermissionAuthorizer>,
         tool_name: String,
         meta: Meta,
         client: Peer<RoleServer>,
         request: RunRequest,
     ) -> CallToolResult {
         let profile = response_profile(&request);
+        let mode = request.effective_mode();
         Self::notify_progress(&meta, &client, 1.0, 4.0, "Parsing command template").await;
         let plan = match registry.build_plan(&request) {
             Ok(plan) => plan,
@@ -203,7 +220,26 @@ impl CliMcpServer {
             ));
         }
 
-        if request.dry_run {
+        if matches!(mode, RunMode::Preview) {
+            let requires_confirmation = match authorizer.decide(&plan) {
+                PermissionDecision::Allow => false,
+                PermissionDecision::RequireConfirmation => true,
+                PermissionDecision::Deny { reason } => {
+                    return envelope_result(ResponseEnvelope::framework_error(
+                        FrameworkError::PermissionDenied {
+                            effect: effect_label(&plan.effect),
+                            scope: reason,
+                        },
+                        Some(request),
+                        Some(plan),
+                    ));
+                }
+            };
+            Self::notify_progress(&meta, &client, 4.0, 4.0, "Preview ready").await;
+            return envelope_result(ResponseEnvelope::preview(plan, requires_confirmation));
+        }
+
+        if matches!(mode, RunMode::DryRun) {
             return envelope_result(ResponseEnvelope::success(
                 RunResponse {
                     plan,
@@ -212,6 +248,42 @@ impl CliMcpServer {
                 },
                 ResponseProfile::Debug,
             ));
+        }
+
+        match authorizer.decide(&plan) {
+            PermissionDecision::Allow => {}
+            PermissionDecision::RequireConfirmation => {
+                if let Some(approval) = &request.approval {
+                    if let Err(message) =
+                        validate_replay(&replay, approval, &plan, Utc::now().timestamp_millis())
+                            .await
+                    {
+                        return envelope_result(ResponseEnvelope::framework_error(
+                            FrameworkError::ApprovalInvalid(message),
+                            Some(request),
+                            Some(plan),
+                        ));
+                    }
+                } else {
+                    let record =
+                        issue_replay_record(&config, &replay, &plan, Utc::now().timestamp_millis())
+                            .await;
+                    Self::notify_progress(&meta, &client, 4.0, 4.0, "Confirmation required").await;
+                    return envelope_result(ResponseEnvelope::permission_required(
+                        plan, record, request, tool_name,
+                    ));
+                }
+            }
+            PermissionDecision::Deny { reason } => {
+                return envelope_result(ResponseEnvelope::framework_error(
+                    FrameworkError::PermissionDenied {
+                        effect: effect_label(&plan.effect),
+                        scope: reason,
+                    },
+                    Some(request),
+                    Some(plan),
+                ));
+            }
         }
 
         Self::notify_progress(&meta, &client, 3.0, 4.0, "Dispatching command handler").await;
@@ -306,6 +378,8 @@ impl ServerHandler for CliMcpServer {
         Ok(Self::execute_run_tool(
             self.registry.clone(),
             self.config.clone(),
+            self.replay.clone(),
+            self.authorizer.clone(),
             tool_name,
             context.meta.clone(),
             context.peer.clone(),
@@ -420,12 +494,16 @@ impl ServerHandler for CliMcpServer {
         let tasks = self.tasks.clone();
         let registry = self.registry.clone();
         let config = self.config.clone();
+        let replay = self.replay.clone();
+        let authorizer = self.authorizer.clone();
         let meta = context.meta.clone();
         let client = context.peer.clone();
         tokio::spawn(async move {
             let result = CliMcpServer::execute_run_tool(
                 registry,
                 config,
+                replay,
+                authorizer,
                 tool_name,
                 meta,
                 client,
@@ -519,8 +597,107 @@ impl ServerHandler for CliMcpServer {
     }
 }
 
+async fn issue_replay_record(
+    config: &CliMcpServerConfig,
+    replay: &Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
+    plan: &InvocationPlan,
+    issued_at_unix_ms: i64,
+) -> ReplayRecord {
+    loop {
+        let token = generate_replay_token();
+        let record = ReplayRecord {
+            token: token.clone(),
+            invocation_fingerprint: plan.invocation_fingerprint.clone(),
+            operation_id: plan.operation_id.clone(),
+            command_path: plan.command_path.clone(),
+            lane: plan.lane,
+            issued_at_unix_ms,
+            expires_at_unix_ms: issued_at_unix_ms.saturating_add(config.replay_ttl_ms),
+            single_use: true,
+        };
+        let mut replay = replay.lock().await;
+        if !replay.contains_key(&token) {
+            replay.insert(token, record.clone());
+            return record;
+        }
+    }
+}
+
+fn generate_replay_token() -> String {
+    let mut bytes = [0_u8; 32];
+    let mut rng = OsRng;
+    rng.fill_bytes(&mut bytes);
+    let encoded = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("replay-{encoded}")
+}
+
+async fn validate_replay(
+    replay: &Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
+    approval: &ApprovalInput,
+    plan: &InvocationPlan,
+    now_unix_ms: i64,
+) -> std::result::Result<(), String> {
+    if !approval.confirm {
+        return Err("approval confirmation was not set".to_string());
+    }
+
+    {
+        let replay = replay.lock().await;
+        let Some(record) = replay.get(&approval.token) else {
+            return Err("approval token is unknown or already used".to_string());
+        };
+
+        if record.expires_at_unix_ms <= now_unix_ms {
+            return Err("approval token expired".to_string());
+        }
+        if record.invocation_fingerprint != plan.invocation_fingerprint {
+            return Err("approved invocation does not match current invocation".to_string());
+        }
+        if record.operation_id != plan.operation_id || record.lane != plan.lane {
+            return Err("approved operation does not match current operation".to_string());
+        }
+        if !record.single_use {
+            return Ok(());
+        }
+    }
+
+    let Some(record) = replay.lock().await.remove(&approval.token) else {
+        return Err("approval token is unknown or already used".to_string());
+    };
+
+    if record.expires_at_unix_ms <= now_unix_ms
+        || record.invocation_fingerprint != plan.invocation_fingerprint
+        || record.operation_id != plan.operation_id
+        || record.lane != plan.lane
+    {
+        return Err("approval token changed during validation".to_string());
+    }
+
+    Ok(())
+}
+
+fn effect_label(effect: &crate::EffectSpec) -> String {
+    match effect {
+        crate::EffectSpec::Pure => "pure".to_string(),
+        crate::EffectSpec::Read => "read".to_string(),
+        crate::EffectSpec::Write => "write".to_string(),
+        crate::EffectSpec::Delete => "delete".to_string(),
+        crate::EffectSpec::Exec => "exec".to_string(),
+        crate::EffectSpec::Network => "network".to_string(),
+        crate::EffectSpec::Custom(value) => value.clone(),
+        crate::EffectSpec::Composite(effects) => effects
+            .iter()
+            .map(effect_label)
+            .collect::<Vec<_>>()
+            .join("+"),
+    }
+}
+
 fn response_profile(request: &RunRequest) -> ResponseProfile {
-    if request.dry_run {
+    if matches!(request.effective_mode(), RunMode::DryRun) {
         return ResponseProfile::Debug;
     }
     let Some(output) = &request.output else {

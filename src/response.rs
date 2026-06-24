@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    CommandOutput, FrameworkError, InvocationPlan, ResponseProfile, RunRequest, RunResponse,
+    CommandOutput, ConfirmationPolicy, FrameworkError, InvocationPlan, OutputSpec, PermissionSpec,
+    ReplayRecord, ResponseProfile, RunRequest, RunResponse, WorkspaceDecl,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -14,6 +15,7 @@ pub enum ResponseStatus {
     PermissionRequired,
     PermissionDenied,
     WrongEffectLane,
+    ApprovalInvalid,
     NotFound,
     Failed,
 }
@@ -32,6 +34,7 @@ pub enum ErrorCode {
     InvalidArgumentType,
     WorkspaceMismatch,
     WrongEffectLane,
+    PermissionRequired,
     PermissionDenied,
     ApprovalInvalid,
     BuildFailed,
@@ -52,6 +55,7 @@ impl ErrorCode {
             FrameworkError::InvalidArgumentType(_, _) => Self::InvalidArgumentType,
             FrameworkError::WorkspaceMismatch { .. } => Self::WorkspaceMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
+            FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
             FrameworkError::WrongEffectLane { .. } => Self::WrongEffectLane,
             FrameworkError::Build(_) => Self::BuildFailed,
             FrameworkError::Handler(_) => Self::HandlerFailed,
@@ -146,6 +150,22 @@ pub struct RetryAction {
 #[serde(rename_all = "camelCase")]
 pub struct ReplayEnvelope {
     pub token: String,
+    #[serde(rename = "expiresAtUnixMs")]
+    pub expires_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionPreview {
+    pub operation_id: String,
+    pub command: Vec<String>,
+    pub effect: crate::EffectSpec,
+    pub lane: crate::EffectLane,
+    pub permissions: Vec<PermissionSpec>,
+    pub workspaces: Vec<WorkspaceDecl>,
+    pub output: OutputSpec,
+    pub confirmation_policy: ConfirmationPolicy,
+    pub requires_confirmation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -166,6 +186,8 @@ pub struct ResponseEnvelope {
     pub display: Option<DisplayHint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay: Option<ReplayEnvelope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<PermissionPreview>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<InvocationPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,7 +221,78 @@ impl ResponseEnvelope {
                 summary,
             }),
             replay: None,
+            preview: None,
             plan: include_plan.then_some(response.plan),
+            retry: None,
+        }
+    }
+
+    pub fn preview(plan: InvocationPlan, requires_confirmation: bool) -> Self {
+        let command = Some(plan.command_path.clone());
+        let preview = permission_preview(&plan, requires_confirmation);
+        Self {
+            status: ResponseStatus::Ok,
+            command,
+            output: None,
+            error: None,
+            diagnostics: Vec::new(),
+            steering: Vec::new(),
+            display: Some(DisplayHint {
+                title: "Command preview".to_string(),
+                summary: format!("Preview ready for `{}`.", plan.command_path.join(" ")),
+            }),
+            replay: None,
+            preview: Some(preview),
+            plan: None,
+            retry: None,
+        }
+    }
+
+    pub fn permission_required(
+        plan: InvocationPlan,
+        record: ReplayRecord,
+        request: RunRequest,
+        tool_name: impl Into<String>,
+    ) -> Self {
+        let command = Some(plan.command_path.clone());
+        let preview = permission_preview(&plan, true);
+        let tool_name = tool_name.into();
+        Self {
+            status: ResponseStatus::PermissionRequired,
+            command,
+            output: None,
+            error: Some(ErrorBody {
+                code: ErrorCode::PermissionRequired,
+                message: "This command requires confirmation.".to_string(),
+                details: json!({
+                    "operationId": plan.operation_id,
+                    "lane": plan.lane,
+                    "expiresAtUnixMs": record.expires_at_unix_ms,
+                }),
+            }),
+            diagnostics: Vec::new(),
+            steering: vec![SteeringAction {
+                kind: SteeringKind::RequestPermission,
+                label: "Confirm and replay this invocation".to_string(),
+                request: json!({
+                    "tool": tool_name,
+                    "arguments": with_approval(request, &record),
+                }),
+                priority: SteeringPriority::Primary,
+            }],
+            display: Some(DisplayHint {
+                title: "Confirmation required".to_string(),
+                summary: format!(
+                    "Confirmation required for `{}`.",
+                    plan.command_path.join(" ")
+                ),
+            }),
+            replay: Some(ReplayEnvelope {
+                token: record.token,
+                expires_at_unix_ms: record.expires_at_unix_ms,
+            }),
+            preview: Some(preview),
+            plan: None,
             retry: None,
         }
     }
@@ -242,6 +335,7 @@ impl ResponseEnvelope {
                 summary: message,
             }),
             replay: None,
+            preview: None,
             plan,
             retry,
         }
@@ -261,6 +355,7 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
         FrameworkError::UnknownCommand(_) => ResponseStatus::NotFound,
         FrameworkError::PermissionDenied { .. } => ResponseStatus::PermissionDenied,
         FrameworkError::WrongEffectLane { .. } => ResponseStatus::WrongEffectLane,
+        FrameworkError::ApprovalInvalid(_) => ResponseStatus::ApprovalInvalid,
         FrameworkError::Handler(_) => ResponseStatus::Failed,
         FrameworkError::Build(_) => ResponseStatus::Failed,
         _ => ResponseStatus::InvalidInput,
@@ -285,6 +380,7 @@ fn error_details(error: &FrameworkError) -> Value {
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
         }
+        FrameworkError::ApprovalInvalid(value) => json!({ "reason": value }),
         FrameworkError::WrongEffectLane {
             current_tool,
             required_tool,
@@ -296,6 +392,28 @@ fn error_details(error: &FrameworkError) -> Value {
         FrameworkError::Build(value) => json!({ "build": value }),
         FrameworkError::EmptyCommand | FrameworkError::UnterminatedQuote => json!({}),
     }
+}
+
+fn permission_preview(plan: &InvocationPlan, requires_confirmation: bool) -> PermissionPreview {
+    PermissionPreview {
+        operation_id: plan.operation_id.clone(),
+        command: plan.command_path.clone(),
+        effect: plan.effect.clone(),
+        lane: plan.lane,
+        permissions: plan.permissions.clone(),
+        workspaces: plan.workspaces.clone(),
+        output: plan.output.clone(),
+        confirmation_policy: ConfirmationPolicy::EffectDefault,
+        requires_confirmation,
+    }
+}
+
+fn with_approval(mut request: RunRequest, record: &ReplayRecord) -> RunRequest {
+    request.approval = Some(crate::ApprovalInput {
+        token: record.token.clone(),
+        confirm: true,
+    });
+    request
 }
 
 fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic {
