@@ -2,7 +2,7 @@
 
 # RFC 0003: Effect Escalation, Preview, Confirmation, And Replay
 
-- Status: Draft
+- Status: Implemented
 - Area: permissions, preview, confirmation, replay
 - Target milestone: v0.3
 - Depends on: RFC 0001, RFC 0002, RFC 0005
@@ -27,7 +27,7 @@ The normal path starts with the primary execution tool. An agent sends the comma
 
 After the request reaches a tool whose lane may execute the command, the framework builds or reuses the invocation plan. A preview request explains the user-facing intent and effects without dispatching. A dry run explains the technical plan. A normal execution request either dispatches, returns a confirmation requirement, or returns a denial.
 
-When confirmation is required, the response includes a display message for the user and a replay envelope for the agent or client. The replay token is opaque and hidden from display text. A later request may include the token as approval. Before dispatch, the framework verifies that the token was issued for the same command template, structured arguments, operation id, effect list, workspace resolution, and permission targets. If any meaningful part of the plan changed, the approval is invalid.
+When confirmation is required, the response includes a display message for the user and a replay envelope for the agent or client. The replay token is opaque and hidden from display text. A later request may include the token as approval. Before dispatch, the framework verifies that the token was issued for the same command template, structured arguments, operation id, effect list, workspace declarations, permission targets, and output request. If any meaningful part of the plan changed, the approval is invalid.
 
 This flow makes the primary tool the expected starting point. Escalation is a structured redirect when the catalog requires a different MCP tool annotation profile; confirmation is a separate framework decision about whether the planned effects may run.
 
@@ -72,7 +72,7 @@ pub trait PermissionAuthorizer {
 }
 ```
 
-The default authorizer should allow `Pure` and `Read`, require confirmation for `Write`, `Delete`, `Exec`, and `Network`, and deny unknown custom effects unless configured. A server may replace the authorizer, but it must still receive an invocation plan that includes catalog operation identity, effect classification, workspace resolution, and permission targets.
+The default authorizer allows `Pure` and `Read`, requires confirmation for `Write`, `Delete`, `Exec`, and `Network`, and denies unknown custom effects until custom authorizer configuration exists. The `PermissionAuthorizer` trait is the policy boundary: it receives an invocation plan that includes catalog operation identity, effect classification, workspace declarations, and permission targets.
 
 `PermissionSpec` describes the effect in terms a user can approve. The target must be derived from typed arguments, workspace identity, or handler-provided planning metadata. It must not be recovered by parsing a shell-like command string.
 
@@ -86,27 +86,26 @@ pub struct PermissionSpec {
 }
 
 pub enum ConfirmationPolicy {
-    Never,
-    WhenClientRequires,
-    Always,
+    EffectDefault,
 }
 ```
 
-When confirmation is required, the framework stores or signs a replay record and returns a replay envelope through the response contract from RFC 0002. The display content should state the required approval in plain language. The replay token must be present only in structured content.
+When confirmation is required, the framework stores a server-side replay record and returns a replay envelope through the response contract from RFC 0002. The first implementation uses opaque in-memory token handles with a ten-minute default expiration and single-use consumption. The display content states the required approval in plain language. The replay token is present only in structured content.
 
 ```rust
 pub struct ReplayRecord {
-    pub token_id: String,
-    pub issued_at: Timestamp,
-    pub expires_at: Timestamp,
+    pub token: String,
     pub invocation_fingerprint: String,
     pub operation_id: String,
-    pub effects: Vec<PermissionEffect>,
-    pub reusable: bool,
+    pub command_path: Vec<String>,
+    pub lane: EffectLane,
+    pub issued_at_unix_ms: i64,
+    pub expires_at_unix_ms: i64,
+    pub single_use: bool,
 }
 ```
 
-The invocation fingerprint is computed from the normalized command template, structured arguments, stdin metadata, workspace resolution, operation id, effect list, permission targets, and output-affecting fields that matter for the approved operation. The exact hashing format is an implementation detail, but two meaningfully different invocations must not share a replay fingerprint.
+The invocation fingerprint is computed from the normalized command template, structured arguments, stdin metadata, workspace declarations, operation id, effect list, permission targets, and the full `OutputSpec`. The exact hashing format is an implementation detail, but two meaningfully different invocations must not share a replay fingerprint.
 
 ### Required Validation Rules
 
@@ -121,9 +120,9 @@ The invocation fingerprint is computed from the normalized command template, str
 ### Implementation Phases
 
 1. Add `RunMode`, `ApprovalInput`, replay records, and invocation fingerprinting.
-2. Extend `InvocationPlan` with operation id, effects, permission targets, workspace identity, output-affecting request fields, and idempotency metadata.
+2. Extend `InvocationPlan` with operation id, effects, permission targets, workspace declarations, and the full output request contract.
 3. Add `PermissionAuthorizer` and default policy.
-4. Add an in-memory confirmation store, then keep the trait open for durable stores.
+4. Add an in-memory replay store with opaque server-side handles.
 5. Project permission-required, permission-denied, and approval-invalid results through RFC 0002.
 6. Update generated help and prompts to teach primary-tool-first escalation from RFC 0005.
 
@@ -164,13 +163,10 @@ Capability and transaction systems provide a useful analogy: approval should be 
 
 ## Unresolved Questions
 
-- Should preview be represented as `mode: "preview"` or as a dedicated request field?
-- Should confirmation tokens be signed stateless values, server-side handles, or both?
-- Which output request fields should participate in the replay fingerprint?
-- Should custom effects default to denial or confirmation when a server provides a user-facing permission description?
+- How should servers configure custom `PermissionAuthorizer` implementations and custom-effect confirmation policy?
 
 ## Future Possibilities
 
-The replay contract could support durable approval stores for long-running clients, explicit cancellation of pending approvals, or user-visible approval history. A future client might also use preview data to render richer approval dialogs with affected resources, workspace labels, and before/after summaries.
+The replay contract could support durable approval stores, signed stateless tokens, explicit cancellation of pending approvals, or user-visible approval history. A future client might also use preview data to render richer approval dialogs with affected resources, workspace labels, and before/after summaries.
 
 The same invocation fingerprinting machinery may later support idempotency keys for safe retry after ambiguous runtime failures.

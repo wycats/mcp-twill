@@ -18,6 +18,8 @@ fn request(command: &str, args: serde_json::Value) -> RunRequest {
         args: serde_json::from_value(args).unwrap_or_else(|_| BTreeMap::new()),
         stdin: None,
         output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: false,
     }
 }
@@ -276,6 +278,81 @@ fn catalog_identity_is_stable_across_registration_order() {
     assert_ne!(
         registry().catalog_identity().catalog_hash,
         changed.catalog_identity().catalog_hash
+    );
+}
+
+#[test]
+fn invocation_fingerprint_is_stable_for_equivalent_plans() {
+    let request = request(
+        "issues create --title $args.title --body $args.body",
+        json!({"title": "x", "body": "y"}),
+    );
+
+    let first = registry().build_plan(&request).unwrap();
+    let second = registry().build_plan(&request).unwrap();
+
+    assert_eq!(first.invocation_fingerprint, second.invocation_fingerprint);
+}
+
+#[test]
+fn invocation_fingerprint_changes_with_contract_inputs() {
+    let base_request = request(
+        "issues create --title $args.title --body $args.body",
+        json!({"title": "x", "body": "y"}),
+    );
+    let base = registry().build_plan(&base_request).unwrap();
+
+    let changed_args = registry()
+        .build_plan(&request(
+            "issues create --title $args.title --body $args.body",
+            json!({"title": "changed", "body": "y"}),
+        ))
+        .unwrap();
+    assert_ne!(
+        base.invocation_fingerprint,
+        changed_args.invocation_fingerprint
+    );
+
+    let mut changed_output_request = base_request.clone();
+    changed_output_request.output = Some(OutputSpec {
+        fields: Some(vec!["id".to_string()]),
+        ..Default::default()
+    });
+    let changed_output = registry().build_plan(&changed_output_request).unwrap();
+    assert_ne!(
+        base.invocation_fingerprint,
+        changed_output.invocation_fingerprint
+    );
+
+    let changed_workspace_registry = CommandRegistry::new("test", "test server")
+        .declare_workspace(WorkspaceDecl::new("repo", "C:/other"))
+        .register(create_issue_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({ "id": 1 })))
+        });
+    let changed_workspace = changed_workspace_registry
+        .build_plan(&base_request)
+        .unwrap();
+    assert_ne!(
+        base.invocation_fingerprint,
+        changed_workspace.invocation_fingerprint
+    );
+
+    let changed_permission_registry = CommandRegistry::new("test", "test server")
+        .declare_workspace(WorkspaceDecl::new("repo", "C:/repo"))
+        .register(
+            create_issue_spec().with_permission(PermissionSpec::new(
+                PermissionEffect::Network,
+                "issues-api",
+                "Calls the issue API",
+            )),
+            |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
+        );
+    let changed_permissions = changed_permission_registry
+        .build_plan(&base_request)
+        .unwrap();
+    assert_ne!(
+        base.invocation_fingerprint,
+        changed_permissions.invocation_fingerprint
     );
 }
 

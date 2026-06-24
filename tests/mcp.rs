@@ -1,4 +1,10 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use futures::StreamExt;
 use mcp_twill::{
@@ -22,6 +28,46 @@ fn json_object<T: serde::Serialize>(value: T) -> anyhow::Result<serde_json::Map<
         Value::Object(map) => Ok(map),
         other => anyhow::bail!("expected JSON object, got {other:?}"),
     }
+}
+
+fn request(command: &str, args: serde_json::Value) -> anyhow::Result<RunRequest> {
+    Ok(RunRequest {
+        command: command.to_string(),
+        args: serde_json::from_value(args)?,
+        stdin: None,
+        output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
+        dry_run: false,
+    })
+}
+
+fn write_request(title: &str) -> anyhow::Result<RunRequest> {
+    request(
+        "issues create --title $args.title",
+        json!({ "title": title }),
+    )
+}
+
+fn counted_write_registry(dispatches: Arc<AtomicUsize>) -> CommandRegistry {
+    registry().register(
+        CommandSpec::new(["issues", "create"], "Create issue", "Create issue")
+            .with_arg(ArgSpec::string("title", "Issue title"))
+            .with_permission(PermissionSpec::new(
+                PermissionEffect::Write,
+                "issues",
+                "Creates issues",
+            )),
+        move |_context| {
+            let dispatches = dispatches.clone();
+            async move {
+                dispatches.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandOutput::structured(
+                    json!({ "id": 3, "title": "Created" }),
+                ))
+            }
+        },
+    )
 }
 
 fn registry() -> CommandRegistry {
@@ -143,6 +189,8 @@ async fn mcp_run_emits_progress_and_returns_structured_content() -> anyhow::Resu
         args: BTreeMap::new(),
         stdin: None,
         output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: false,
     };
     let params = CallToolRequestParams::new("run").with_arguments(json_object(request)?);
@@ -196,6 +244,8 @@ async fn task_augmented_run_completes_when_negotiated() -> anyhow::Result<()> {
         args: BTreeMap::new(),
         stdin: None,
         output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: false,
     };
     let params = CallToolRequestParams::new("run")
@@ -302,6 +352,8 @@ async fn generated_effect_lane_tools_redirect_and_dispatch() -> anyhow::Result<(
         args: serde_json::from_value(json!({ "title": "New" }))?,
         stdin: None,
         output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: false,
     };
     let wrong_lane = client
@@ -319,13 +371,293 @@ async fn generated_effect_lane_tools_redirect_and_dispatch() -> anyhow::Result<(
         "issues create --title $args.title"
     );
 
+    let permission_required = client
+        .call_tool(
+            CallToolRequestParams::new("repo-write").with_arguments(json_object(request.clone())?),
+        )
+        .await?;
+    assert_eq!(permission_required.is_error, Some(true));
+    let structured = permission_required.structured_content.unwrap();
+    assert_eq!(structured["status"], "permissionRequired");
+    assert_eq!(structured["error"]["code"], "permission_required");
+    assert!(
+        structured["preview"]["requiresConfirmation"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(structured["steering"][0]["request"]["tool"], "repo-write");
+    let token = structured["replay"]["token"].as_str().unwrap().to_string();
+    assert!(
+        !structured["display"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains(&token)
+    );
+
+    let mut approved = request;
+    approved.approval = Some(mcp_twill::ApprovalInput {
+        token,
+        confirm: true,
+    });
     let dispatched = client
-        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(request)?))
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(approved)?))
         .await?;
     assert_eq!(dispatched.is_error, Some(false));
     let structured = dispatched.structured_content.unwrap();
     assert_eq!(structured["status"], "ok");
     assert_eq!(structured["output"]["structured"]["title"], "Created");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn preview_returns_permission_data_without_dispatch() -> anyhow::Result<()> {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::with_config(
+        counted_write_registry(dispatches.clone()),
+        CliMcpServerConfig::default().with_execution_tool_name("repo"),
+    );
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let mut preview = write_request("Preview")?;
+    preview.mode = mcp_twill::RunMode::Preview;
+    let result = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(preview)?))
+        .await?;
+    assert_eq!(result.is_error, Some(false));
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["status"], "ok");
+    assert_eq!(structured["preview"]["lane"], "write");
+    assert_eq!(structured["preview"]["requiresConfirmation"], true);
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn dry_run_mode_returns_plan_without_dispatch_or_confirmation() -> anyhow::Result<()> {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::with_config(
+        counted_write_registry(dispatches.clone()),
+        CliMcpServerConfig::default().with_execution_tool_name("repo"),
+    );
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let mut dry_run = write_request("Dry")?;
+    dry_run.mode = mcp_twill::RunMode::DryRun;
+    let result = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(dry_run)?))
+        .await?;
+    assert_eq!(result.is_error, Some(false));
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["status"], "ok");
+    assert!(structured.get("plan").is_some());
+    assert_eq!(structured["plan"]["lane"], "write");
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_args_fail_replay() -> anyhow::Result<()> {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::with_config(
+        counted_write_registry(dispatches.clone()),
+        CliMcpServerConfig::default().with_execution_tool_name("repo"),
+    );
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let requested = write_request("Original")?;
+    let permission_required = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(requested)?))
+        .await?;
+    let token = permission_required.structured_content.unwrap()["replay"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut changed = write_request("Changed")?;
+    changed.approval = Some(mcp_twill::ApprovalInput {
+        token,
+        confirm: true,
+    });
+    let result = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(changed)?))
+        .await?;
+    assert_eq!(result.is_error, Some(true));
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["status"], "approvalInvalid");
+    assert_eq!(structured["error"]["code"], "approval_invalid");
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_output_fields_fail_replay() -> anyhow::Result<()> {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::with_config(
+        counted_write_registry(dispatches.clone()),
+        CliMcpServerConfig::default().with_execution_tool_name("repo"),
+    );
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let mut requested = write_request("Original")?;
+    requested.output = Some(OutputSpec {
+        fields: Some(vec!["id".to_string()]),
+        ..Default::default()
+    });
+    let permission_required = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(requested)?))
+        .await?;
+    let token = permission_required.structured_content.unwrap()["replay"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut changed = write_request("Original")?;
+    changed.output = Some(OutputSpec {
+        fields: Some(vec!["title".to_string()]),
+        ..Default::default()
+    });
+    changed.approval = Some(mcp_twill::ApprovalInput {
+        token,
+        confirm: true,
+    });
+    let result = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(changed)?))
+        .await?;
+    assert_eq!(result.is_error, Some(true));
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["status"], "approvalInvalid");
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn expired_token_fails_replay() -> anyhow::Result<()> {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::with_config(
+        counted_write_registry(dispatches.clone()),
+        CliMcpServerConfig::default()
+            .with_execution_tool_name("repo")
+            .with_replay_ttl_seconds(-1),
+    );
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let requested = write_request("Expired")?;
+    let permission_required = client
+        .call_tool(
+            CallToolRequestParams::new("repo-write")
+                .with_arguments(json_object(requested.clone())?),
+        )
+        .await?;
+    let token = permission_required.structured_content.unwrap()["replay"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut approved = requested;
+    approved.approval = Some(mcp_twill::ApprovalInput {
+        token,
+        confirm: true,
+    });
+    let result = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(approved)?))
+        .await?;
+    assert_eq!(result.is_error, Some(true));
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["status"], "approvalInvalid");
+    assert_eq!(
+        structured["error"]["details"]["reason"],
+        "approval token expired"
+    );
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn reused_token_fails_replay() -> anyhow::Result<()> {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::with_config(
+        counted_write_registry(dispatches.clone()),
+        CliMcpServerConfig::default().with_execution_tool_name("repo"),
+    );
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let requested = write_request("Reuse")?;
+    let permission_required = client
+        .call_tool(
+            CallToolRequestParams::new("repo-write")
+                .with_arguments(json_object(requested.clone())?),
+        )
+        .await?;
+    let token = permission_required.structured_content.unwrap()["replay"]["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut approved = requested.clone();
+    approved.approval = Some(mcp_twill::ApprovalInput {
+        token: token.clone(),
+        confirm: true,
+    });
+    let dispatched = client
+        .call_tool(
+            CallToolRequestParams::new("repo-write").with_arguments(json_object(approved.clone())?),
+        )
+        .await?;
+    assert_eq!(dispatched.is_error, Some(false));
+
+    let reused = client
+        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(approved)?))
+        .await?;
+    assert_eq!(reused.is_error, Some(true));
+    let structured = reused.structured_content.unwrap();
+    assert_eq!(structured["status"], "approvalInvalid");
+    assert_eq!(
+        structured["error"]["details"]["reason"],
+        "approval token is unknown or already used"
+    );
+    assert_eq!(dispatches.load(Ordering::SeqCst), 1);
 
     client.cancel().await?;
     Ok(())
@@ -346,6 +678,8 @@ async fn dry_run_uses_debug_response_profile() -> anyhow::Result<()> {
         args: BTreeMap::new(),
         stdin: None,
         output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: true,
     };
     let result = client
@@ -378,6 +712,8 @@ async fn text_response_profile_omits_structured_content_on_success() -> anyhow::
             profile: Some(ResponseProfile::Text),
             ..Default::default()
         }),
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: false,
     };
     let result = client
@@ -408,6 +744,8 @@ async fn text_output_format_omits_structured_content_on_success() -> anyhow::Res
             format: OutputFormat::Text,
             ..Default::default()
         }),
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
         dry_run: false,
     };
     let result = client

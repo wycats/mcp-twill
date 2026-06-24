@@ -190,6 +190,8 @@ impl CommandRegistry {
                     args: example.args.clone(),
                     stdin: None,
                     output: None,
+                    mode: crate::RunMode::DryRun,
+                    approval: None,
                     dry_run: true,
                 };
                 self.build_plan(&request)?;
@@ -283,19 +285,43 @@ impl CommandRegistry {
                 },
             })
             .collect();
+        let output = request.output.clone().unwrap_or_default();
+        let workspaces = self.workspaces.values().cloned().collect::<Vec<_>>();
+        let stdin_fingerprint = request.stdin.as_ref().map(|stdin| {
+            json!({
+                "mimeType": stdin.mime_type,
+                "textBytes": stdin.text.len(),
+                "textHash": stable_hash_value(&json!(stdin.text)),
+            })
+        });
+        let invocation_fingerprint = stable_hash_value(&json!({
+            "normalizedCommand": {
+                "path": &registered.spec.path,
+                "tokens": &tokens,
+                "boundArgs": &bound_args,
+            },
+            "stdin": stdin_fingerprint,
+            "operationId": &operation.id,
+            "effect": &operation.effect,
+            "lane": operation.lane(),
+            "permissions": &registered.spec.permissions,
+            "workspaces": &workspaces,
+            "output": &output,
+        }));
 
         Ok(InvocationPlan {
             operation_id: operation.id.clone(),
             command_path: registered.spec.path.clone(),
             raw_command: request.command.clone(),
             catalog_hash: identity.catalog_hash,
+            invocation_fingerprint,
             effect: operation.effect.clone(),
             lane: operation.lane(),
             tokens,
             bound_args,
             permissions: registered.spec.permissions.clone(),
-            workspaces: self.workspaces.values().cloned().collect(),
-            output: request.output.clone().unwrap_or_default(),
+            workspaces,
+            output,
         })
     }
 
@@ -338,7 +364,7 @@ impl CommandRegistry {
             }
         }
 
-        if request.dry_run {
+        if matches!(request.effective_mode(), crate::RunMode::DryRun) {
             return Ok(RunResponse {
                 plan,
                 output: None,
