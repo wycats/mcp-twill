@@ -14,8 +14,11 @@ pub enum FrameworkError {
     PlaceholderInterpolation(String),
     #[error("placeholder `{0}` is not an `$args.<name>` placeholder")]
     InvalidPlaceholder(String),
-    #[error("unknown command `{0}`")]
-    UnknownCommand(String),
+    #[error("unknown command `{command}`")]
+    UnknownCommand {
+        command: String,
+        nearest: Vec<String>,
+    },
     #[error("unknown argument `{0}`")]
     UnknownArgument(String),
     #[error("missing argument `{0}`")]

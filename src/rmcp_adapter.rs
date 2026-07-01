@@ -206,7 +206,10 @@ impl CliMcpServer {
         Self::notify_progress(&meta, &client, 2.0, 4.0, "Invocation plan ready").await;
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
             return envelope_result(ResponseEnvelope::framework_error(
-                FrameworkError::UnknownCommand(tool_name),
+                FrameworkError::UnknownCommand {
+                    command: tool_name,
+                    nearest: Vec::new(),
+                },
                 Some(request),
                 Some(plan),
             ));

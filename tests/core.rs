@@ -469,3 +469,53 @@ async fn lane_checks_redirect_before_dispatch() {
     .unwrap();
     assert_eq!(dispatches.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn unknown_commands_include_nearest_alternatives() {
+    let error = registry()
+        .build_plan(&request(
+            "issues creat --title $args.title",
+            json!({ "title": "x" }),
+        ))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert_eq!(nearest, &vec!["issues create".to_string()]);
+
+    let envelope = mcp_twill::ResponseEnvelope::framework_error(error, None, None);
+    let diagnostic = envelope
+        .diagnostics
+        .first()
+        .expect("unknown command has diagnostic");
+    assert!(
+        diagnostic
+            .suggestions
+            .iter()
+            .any(|suggestion| suggestion.message == "Did you mean `issues create`?"),
+        "suggestions: {:?}",
+        diagnostic.suggestions
+    );
+}
+
+#[test]
+fn unknown_commands_fall_back_to_namespace_alternatives() {
+    let error = registry()
+        .build_plan(&request("issues synchronize-everything", json!({})))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert_eq!(nearest, &vec!["issues create".to_string()]);
+}
+
+#[test]
+fn unknown_commands_without_candidates_have_no_alternatives() {
+    let error = registry()
+        .build_plan(&request("zap blorp", json!({})))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert!(nearest.is_empty(), "nearest: {nearest:?}");
+}

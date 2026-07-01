@@ -49,7 +49,7 @@ impl ErrorCode {
             FrameworkError::ShellSyntax(_) => Self::ShellSyntax,
             FrameworkError::PlaceholderInterpolation(_) => Self::PlaceholderInterpolation,
             FrameworkError::InvalidPlaceholder(_) => Self::InvalidPlaceholder,
-            FrameworkError::UnknownCommand(_) => Self::UnknownCommand,
+            FrameworkError::UnknownCommand { .. } => Self::UnknownCommand,
             FrameworkError::UnknownArgument(_) => Self::UnknownArgument,
             FrameworkError::MissingArgument(_) => Self::MissingArgument,
             FrameworkError::InvalidArgumentType(_, _) => Self::InvalidArgumentType,
@@ -352,7 +352,7 @@ impl ResponseEnvelope {
 
 fn status_for_error(error: &FrameworkError) -> ResponseStatus {
     match error {
-        FrameworkError::UnknownCommand(_) => ResponseStatus::NotFound,
+        FrameworkError::UnknownCommand { .. } => ResponseStatus::NotFound,
         FrameworkError::PermissionDenied { .. } => ResponseStatus::PermissionDenied,
         FrameworkError::WrongEffectLane { .. } => ResponseStatus::WrongEffectLane,
         FrameworkError::ApprovalInvalid(_) => ResponseStatus::ApprovalInvalid,
@@ -367,9 +367,11 @@ fn error_details(error: &FrameworkError) -> Value {
         FrameworkError::ShellSyntax(value) => json!({ "syntax": value }),
         FrameworkError::PlaceholderInterpolation(value)
         | FrameworkError::InvalidPlaceholder(value)
-        | FrameworkError::UnknownCommand(value)
         | FrameworkError::UnknownArgument(value)
         | FrameworkError::MissingArgument(value) => json!({ "value": value }),
+        FrameworkError::UnknownCommand { command, nearest } => {
+            json!({ "value": command, "nearest": nearest })
+        }
         FrameworkError::InvalidArgumentType(name, expected) => {
             json!({ "argument": name, "expected": expected })
         }
@@ -467,6 +469,13 @@ fn suggestions_for_error(error: &FrameworkError) -> Vec<Suggestion> {
                     .to_string(),
             replacement: None,
         }],
+        FrameworkError::UnknownCommand { nearest, .. } if !nearest.is_empty() => nearest
+            .iter()
+            .map(|candidate| Suggestion {
+                message: format!("Did you mean `{candidate}`?"),
+                replacement: Some(Value::String(candidate.clone())),
+            })
+            .collect(),
         FrameworkError::MissingArgument(_) | FrameworkError::UnknownArgument(_) => {
             vec![Suggestion {
                 message: "Call help for this command to inspect accepted arguments.".to_string(),
@@ -495,7 +504,7 @@ fn steering_for_error(error: &FrameworkError, retry: Option<&RetryAction>) -> Ve
     }
 
     match error {
-        FrameworkError::UnknownCommand(_)
+        FrameworkError::UnknownCommand { .. }
         | FrameworkError::MissingArgument(_)
         | FrameworkError::UnknownArgument(_)
         | FrameworkError::ShellSyntax(_) => vec![SteeringAction {

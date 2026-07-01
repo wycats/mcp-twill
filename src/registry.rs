@@ -218,9 +218,12 @@ impl CommandRegistry {
 
     pub fn build_plan(&self, request: &RunRequest) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
-        let registered = self
-            .match_command(&template)
-            .ok_or_else(|| FrameworkError::UnknownCommand(request.command.clone()))?;
+        let registered = self.match_command(&template).ok_or_else(|| {
+            FrameworkError::UnknownCommand {
+                command: request.command.clone(),
+                nearest: self.nearest_commands(&template.literal_prefix()),
+            }
+        })?;
         let operation = OperationSpec::from_command_spec(&registered.spec);
         let identity = self.catalog_identity();
 
@@ -392,7 +395,10 @@ impl CommandRegistry {
         let registered = self
             .commands
             .get(&plan.command_path)
-            .ok_or_else(|| FrameworkError::UnknownCommand(plan.command_path.join(" ")))?;
+            .ok_or_else(|| FrameworkError::UnknownCommand {
+                command: plan.command_path.join(" "),
+                nearest: Vec::new(),
+            })?;
 
         let output = registered
             .handler
@@ -449,6 +455,41 @@ impl CommandRegistry {
             .max_by_key(|command| command.spec.path.len())
     }
 
+    fn nearest_commands<S: AsRef<str>>(&self, requested: &[S]) -> Vec<String> {
+        if requested.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scored = Vec::new();
+        for path in self.commands.keys() {
+            let candidate = path.join(" ").to_lowercase();
+            let compared = requested
+                .iter()
+                .take(path.len())
+                .map(|token| token.as_ref().to_lowercase())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let distance = edit_distance(&compared, &candidate);
+            if distance <= 2.max(candidate.len() / 3) {
+                scored.push((distance, path.join(" ")));
+            }
+        }
+
+        if scored.is_empty() {
+            let namespace = requested[0].as_ref();
+            scored.extend(
+                self.commands
+                    .keys()
+                    .filter(|path| path.first().is_some_and(|first| first == namespace))
+                    .map(|path| (0, path.join(" "))),
+            );
+        }
+
+        scored.sort();
+        scored.dedup_by(|left, right| left.1 == right.1);
+        scored.into_iter().take(3).map(|(_, name)| name).collect()
+    }
+
     fn server_help(&self) -> HelpResult {
         let mut lines = vec![
             format!("# {}", self.server_name),
@@ -483,7 +524,14 @@ impl CommandRegistry {
         });
 
         let Some(spec) = spec else {
-            let error = FrameworkError::UnknownCommand(command.to_string());
+            let tokens = command
+                .split_whitespace()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let error = FrameworkError::UnknownCommand {
+                command: command.to_string(),
+                nearest: self.nearest_commands(&tokens),
+            };
             return HelpResult {
                 title: "Unknown command".to_string(),
                 text: error.to_string(),
@@ -597,4 +645,24 @@ fn format_permissions(permissions: &[PermissionSpec]) -> String {
         ));
     }
     lines.join("\n")
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (row, left_char) in left.iter().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != right_char);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right.len()]
 }
