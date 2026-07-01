@@ -357,6 +357,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp-workspace-resolver"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
