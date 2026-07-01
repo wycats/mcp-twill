@@ -77,19 +77,23 @@ struct TaskRecord {
 }
 
 impl CliMcpServer {
-    pub fn new(registry: CommandRegistry) -> Self {
+    pub fn new(registry: CommandRegistry) -> crate::Result<Self> {
         Self::with_config(registry, CliMcpServerConfig::default())
     }
 
-    pub fn with_config(registry: CommandRegistry, config: CliMcpServerConfig) -> Self {
-        Self {
+    pub fn with_config(
+        registry: CommandRegistry,
+        config: CliMcpServerConfig,
+    ) -> crate::Result<Self> {
+        registry.validate_effects()?;
+        Ok(Self {
             registry: Arc::new(registry),
             config,
             tasks: Arc::new(Mutex::new(BTreeMap::new())),
             task_counter: Arc::new(AtomicU64::new(1)),
             replay: Arc::new(Mutex::new(BTreeMap::new())),
             authorizer: Arc::new(DefaultPermissionAuthorizer),
-        }
+        })
     }
 
     pub fn registry(&self) -> &CommandRegistry {

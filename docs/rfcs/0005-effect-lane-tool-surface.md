@@ -48,9 +48,12 @@ pub enum EffectLane {
     Delete,
     Exec,
     Network,
-    Custom(String),
 }
+```
 
+The first implementation restricts lanes to this standard set. A catalog that declares a custom permission effect fails server construction with a build diagnostic naming the command, the custom effect, and the standard effects an author should declare instead. Rejecting custom effects at construction keeps every generated tool annotation truthful: the framework never has to guess which lane an unknown effect belongs to, and clients never see a lane whose worst-case behavior the catalog cannot describe.
+
+```rust
 pub struct ToolLaneSpec {
     pub tool_name: String,
     pub lane: EffectLane,
@@ -163,10 +166,11 @@ Capability-based systems distinguish naming a capability from exercising it. The
 
 - Should the primary lane be named `Primary` internally, or should it always map to a concrete effect such as `Read`?
 - Should `Write` and `Delete` always be separate lanes, or should catalogs be allowed to merge them when annotations are identical?
-- Should custom lanes be allowed in v1, or should the first implementation restrict lanes to the standard set?
 - How should task-capable commands report lane redirects when the client also negotiated task support?
 
 ## Future Possibilities
+
+Custom lanes could be reintroduced if a real catalog needs an effect the standard set cannot describe. A future proposal would need to define how a custom lane names its tool, which annotations it advertises, and how agents learn its escalation rules; until then custom effects fail server construction.
 
 Effect lanes could support dynamic tool-list changes if a catalog is loaded or replaced at runtime. If MCP clients broadly support tool-list change notifications, a runtime host could expose new lanes only when a server activates commands that require them.
 

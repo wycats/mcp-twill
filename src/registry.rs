@@ -200,6 +200,22 @@ impl CommandRegistry {
         Ok(())
     }
 
+    pub fn validate_effects(&self) -> Result<()> {
+        for command in self.commands.values() {
+            for permission in &command.spec.permissions {
+                if let crate::PermissionEffect::Custom(effect) = &permission.effect {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` declares custom effect `{effect}`; \
+                         custom effects are not supported. Declare read, write, \
+                         delete, exec, or network permissions instead",
+                        command.spec.path.join(" ")
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn build_plan(&self, request: &RunRequest) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
         let registered = self

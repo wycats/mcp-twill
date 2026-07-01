@@ -223,7 +223,8 @@ fn builder_commands_project_help_lanes_and_annotations() {
     let server = CliMcpServer::with_config(
         registry,
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
-    );
+    )
+    .expect("builder registry has no custom effects");
     let repo = server.get_tool("repo").unwrap();
     let repo_write = server.get_tool("repo-write").unwrap();
     assert_eq!(

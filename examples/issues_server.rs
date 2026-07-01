@@ -65,7 +65,7 @@ fn registry() -> Result<CommandRegistry> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let server = mcp_twill::CliMcpServer::new(registry()?);
+    let server = mcp_twill::CliMcpServer::new(registry()?)?;
     server
         .serve(stdio())
         .await

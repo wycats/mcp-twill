@@ -113,9 +113,11 @@ impl EffectSpec {
     pub fn lane(&self) -> EffectLane {
         match self {
             EffectSpec::Pure | EffectSpec::Read => EffectLane::Primary,
-            EffectSpec::Write | EffectSpec::Custom(_) => EffectLane::Write,
+            EffectSpec::Write => EffectLane::Write,
             EffectSpec::Delete => EffectLane::Delete,
-            EffectSpec::Exec => EffectLane::Exec,
+            // Custom effects are rejected at server construction. If one gets
+            // here anyway, treat it as the most restrictive lane.
+            EffectSpec::Exec | EffectSpec::Custom(_) => EffectLane::Exec,
             EffectSpec::Network => EffectLane::Network,
             EffectSpec::Composite(effects) => effects
                 .iter()
