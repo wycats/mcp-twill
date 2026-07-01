@@ -1,3 +1,5 @@
+<!-- exo:6 ulid:01kwfys9ar0d6kat4g8drsskj5 -->
+
 # RFC 0006: Author Ergonomics
 
 - Status: Draft

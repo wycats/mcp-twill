@@ -1,3 +1,5 @@
+<!-- exo:7 ulid:01kwfyscpm9xmswvkt6jkw0c9s -->
+
 # RFC 0007: Workspace Resolution Crate
 
 - Status: Draft
