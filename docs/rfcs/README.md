@@ -38,13 +38,13 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 ## Index
 
 - [RFC 0000: Template](0000-template.md)
-- [RFC 0001: Authoritative Command Catalog](0001-authoritative-command-surface.md)
-- [RFC 0002: Diagnostics, Steering, And Response Profiles](0002-diagnostics-steering-response-profiles.md)
-- [RFC 0003: Effect Escalation, Preview, Confirmation, And Replay](0003-permission-preview-confirmation.md)
-- [RFC 0004: Runtime Maturity, Workspace Identity, Events, And Contract Tests](0004-runtime-workspace-contracts.md)
-- [RFC 0005: Effect-Lane Tool Surface](0005-effect-lane-tool-surface.md)
-- [RFC 0006: Author Ergonomics](0006-author-ergonomics.md)
-- [RFC 0007: Workspace Resolution Crate](0007-workspace-resolution-crate.md)
+- [RFC 0001: Authoritative Command Catalog](stage-4/0001-authoritative-command-surface.md)
+- [RFC 0002: Diagnostics, Steering, And Response Profiles](stage-4/0002-diagnostics-steering-response-profiles.md)
+- [RFC 0003: Effect Escalation, Preview, Confirmation, And Replay](stage-4/0003-permission-preview-confirmation.md)
+- [RFC 0004: Runtime Maturity, Workspace Identity, Events, And Contract Tests](stage-1/0004-runtime-workspace-contracts.md)
+- [RFC 0005: Effect-Lane Tool Surface](stage-4/0005-effect-lane-tool-surface.md)
+- [RFC 0006: Author Ergonomics](stage-4/0006-author-ergonomics.md)
+- [RFC 0007: Workspace Resolution Crate](stage-1/0007-workspace-resolution-crate.md)
 
 ## Suggested Implementation Order
 

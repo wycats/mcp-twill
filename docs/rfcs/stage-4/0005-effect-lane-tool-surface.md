@@ -2,7 +2,7 @@
 
 # RFC 0005: Effect-Lane Tool Surface
 
-- Status: Draft
+- Status: Implemented
 - Area: MCP tool surface, tool annotations, effect routing, agent steering
 - Target milestone: v0.3
 - Depends on: RFC 0001, RFC 0002

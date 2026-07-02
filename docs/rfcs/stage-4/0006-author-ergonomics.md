@@ -2,7 +2,7 @@
 
 # RFC 0006: Author Ergonomics
 
-- Status: Draft
+- Status: Implemented
 - Area: Rust authoring API, catalog builders, typed handlers, generated examples
 - Target milestone: v0.4
 - Depends on: RFC 0001, RFC 0002, RFC 0005
