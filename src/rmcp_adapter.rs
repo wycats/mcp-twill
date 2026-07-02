@@ -105,6 +105,19 @@ impl CliMcpServer {
         &self.config
     }
 
+    /// URIs of every resource the server advertises through MCP list_resources.
+    pub fn resource_uris(&self) -> Vec<String> {
+        self.resources()
+            .into_iter()
+            .map(|resource| resource.uri)
+            .collect()
+    }
+
+    /// Every tool the server advertises through MCP list_tools.
+    pub fn generated_tools(&self) -> Vec<Tool> {
+        self.tools()
+    }
+
     async fn notify_progress(
         meta: &Meta,
         client: &Peer<RoleServer>,
