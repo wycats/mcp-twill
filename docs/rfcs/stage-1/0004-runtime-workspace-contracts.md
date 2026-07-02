@@ -101,6 +101,8 @@ The default sink is no-op. Optional sinks may persist events, but storage format
 
 Generated contract tests accept a catalog and a test server or fixture harness. They should verify discovery, planning, examples, resources, prompts, effect-lane metadata, and output projection. The tests should fail with catalog operation ids and projection names so authors can repair the source of drift.
 
+The first implementation ships this as per-rule check functions plus a `contract_tests!` declarative macro. Each check returns `ContractViolation` values naming the operation id and drifted projection; the macro expands to one `#[test]` per rule over a registry constructor, so each contract rule reports as an individual test result. The check functions remain public so authors who want custom aggregation can call them directly.
+
 ### Required Contract Coverage
 
 - Every catalog operation appears in command resources and command help.
@@ -162,7 +164,6 @@ Rust and Ember both use testable contracts around public APIs and documentation.
 - Should the runtime host live behind a crate feature or in a sibling crate?
 - Should the core framework include any persistent event sink, or only the trait and no-op implementation?
 - Should workspace identity include VCS metadata, or should that remain server-specific?
-- Should generated contract tests be a test helper API, a macro, or a standalone test harness?
 
 ## Future Possibilities
 
