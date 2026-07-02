@@ -143,9 +143,36 @@ impl ClientHandler for TestClient {
 }
 
 #[tokio::test]
+async fn getting_started_prompt_includes_declared_guidance() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(registry().declare_guidance(
+        mcp_twill::CommandGuidance::run_command(
+            "quickstart",
+            "getting-started",
+            "issues list",
+        ),
+    ))?;
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let prompt = client
+        .get_prompt(GetPromptRequestParams::new("getting_started"))
+        .await?;
+    let text = serde_json::to_string(&prompt)?;
+    assert!(text.contains("Guidance:"), "{text}");
+    assert!(text.contains("issues list"), "{text}");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_exposes_two_tools_and_resources_prompts() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::new(registry());
+    let server = CliMcpServer::new(registry())?;
     let server_handle = tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -193,7 +220,7 @@ async fn mcp_exposes_two_tools_and_resources_prompts() -> anyhow::Result<()> {
 #[tokio::test]
 async fn mcp_run_emits_progress_and_returns_structured_content() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::new(registry());
+    let server = CliMcpServer::new(registry())?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -251,7 +278,7 @@ async fn mcp_run_emits_progress_and_returns_structured_content() -> anyhow::Resu
 #[tokio::test]
 async fn task_augmented_run_completes_when_negotiated() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::new(registry());
+    let server = CliMcpServer::new(registry())?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -335,7 +362,7 @@ async fn generated_effect_lane_tools_redirect_and_dispatch() -> anyhow::Result<(
     let server = CliMcpServer::with_config(
         write_registry(),
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
-    );
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -435,31 +462,24 @@ async fn generated_effect_lane_tools_redirect_and_dispatch() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn preview_returns_denial_without_dispatch_for_denied_effects() -> anyhow::Result<()> {
+async fn custom_effects_are_rejected_at_server_construction() -> anyhow::Result<()> {
     let dispatches = Arc::new(AtomicUsize::new(0));
-    let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::with_config(
+    let result = CliMcpServer::with_config(
         custom_effect_registry(dispatches.clone()),
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
     );
-    tokio::spawn(async move {
-        server.serve(server_transport).await?.waiting().await?;
-        anyhow::Ok(())
-    });
-
-    let client = TestClient::new().serve(client_transport).await?;
-    let mut preview = request("issues sync", json!({}))?;
-    preview.mode = mcp_twill::RunMode::Preview;
-    let result = client
-        .call_tool(CallToolRequestParams::new("repo-write").with_arguments(json_object(preview)?))
-        .await?;
-    assert_eq!(result.is_error, Some(true));
-    let structured = result.structured_content.unwrap();
-    assert_eq!(structured["status"], "permissionDenied");
-    assert_eq!(structured["error"]["code"], "permission_denied");
+    let error = match result {
+        Ok(_) => panic!("expected custom effect to fail server construction"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    assert!(message.contains("issues sync"), "names the command: {message}");
+    assert!(message.contains("sync"), "names the effect: {message}");
+    assert!(
+        message.contains("read, write, delete, exec, or network"),
+        "names the standard effects: {message}"
+    );
     assert_eq!(dispatches.load(Ordering::SeqCst), 0);
-
-    client.cancel().await?;
     Ok(())
 }
 
@@ -470,7 +490,7 @@ async fn preview_returns_permission_data_without_dispatch() -> anyhow::Result<()
     let server = CliMcpServer::with_config(
         counted_write_registry(dispatches.clone()),
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
-    );
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -500,7 +520,7 @@ async fn dry_run_mode_returns_plan_without_dispatch_or_confirmation() -> anyhow:
     let server = CliMcpServer::with_config(
         counted_write_registry(dispatches.clone()),
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
-    );
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -530,7 +550,7 @@ async fn changed_args_fail_replay() -> anyhow::Result<()> {
     let server = CliMcpServer::with_config(
         counted_write_registry(dispatches.clone()),
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
-    );
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -585,7 +605,7 @@ async fn changed_output_fields_fail_replay() -> anyhow::Result<()> {
     let server = CliMcpServer::with_config(
         counted_write_registry(dispatches.clone()),
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
-    );
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -635,7 +655,7 @@ async fn expired_token_fails_replay() -> anyhow::Result<()> {
         CliMcpServerConfig::default()
             .with_execution_tool_name("repo")
             .with_replay_ttl_seconds(-1),
-    );
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -682,7 +702,7 @@ async fn reused_token_fails_replay() -> anyhow::Result<()> {
     let server = CliMcpServer::with_config(
         counted_write_registry(dispatches.clone()),
         CliMcpServerConfig::default().with_execution_tool_name("repo"),
-    );
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -732,7 +752,7 @@ async fn reused_token_fails_replay() -> anyhow::Result<()> {
 #[tokio::test]
 async fn dry_run_uses_debug_response_profile() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::new(registry());
+    let server = CliMcpServer::new(registry())?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -763,7 +783,7 @@ async fn dry_run_uses_debug_response_profile() -> anyhow::Result<()> {
 #[tokio::test]
 async fn text_response_profile_omits_structured_content_on_success() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::new(registry());
+    let server = CliMcpServer::new(registry())?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -795,7 +815,7 @@ async fn text_response_profile_omits_structured_content_on_success() -> anyhow::
 #[tokio::test]
 async fn text_output_format_omits_structured_content_on_success() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::new(registry());
+    let server = CliMcpServer::new(registry())?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())

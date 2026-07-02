@@ -77,19 +77,24 @@ struct TaskRecord {
 }
 
 impl CliMcpServer {
-    pub fn new(registry: CommandRegistry) -> Self {
+    pub fn new(registry: CommandRegistry) -> crate::Result<Self> {
         Self::with_config(registry, CliMcpServerConfig::default())
     }
 
-    pub fn with_config(registry: CommandRegistry, config: CliMcpServerConfig) -> Self {
-        Self {
+    pub fn with_config(
+        registry: CommandRegistry,
+        config: CliMcpServerConfig,
+    ) -> crate::Result<Self> {
+        registry.validate_effects()?;
+        registry.validate_guidance()?;
+        Ok(Self {
             registry: Arc::new(registry),
             config,
             tasks: Arc::new(Mutex::new(BTreeMap::new())),
             task_counter: Arc::new(AtomicU64::new(1)),
             replay: Arc::new(Mutex::new(BTreeMap::new())),
             authorizer: Arc::new(DefaultPermissionAuthorizer),
-        }
+        })
     }
 
     pub fn registry(&self) -> &CommandRegistry {
@@ -202,7 +207,10 @@ impl CliMcpServer {
         Self::notify_progress(&meta, &client, 2.0, 4.0, "Invocation plan ready").await;
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
             return envelope_result(ResponseEnvelope::framework_error(
-                FrameworkError::UnknownCommand(tool_name),
+                FrameworkError::UnknownCommand {
+                    command: tool_name,
+                    nearest: Vec::new(),
+                },
                 Some(request),
                 Some(plan),
             ));
@@ -439,14 +447,35 @@ impl ServerHandler for CliMcpServer {
                 None,
             ));
         }
+        let mut text = format!(
+            "First call `help` with no command. Then call `help` for a command. Start execution with `{}` and use escalated lane tools only when a structured response asks for one. Use typed `$args.*` values; do not use shell syntax in the command string.",
+            self.config.execution_tool_name
+        );
+        let guidance = self.registry.guidance();
+        if !guidance.is_empty() {
+            text.push_str("\n\nGuidance:");
+            for entry in guidance {
+                match entry.kind {
+                    crate::GuidanceKind::RunCommand => {
+                        text.push_str(&format!("\n- `{}` ({})", entry.text, entry.surface));
+                    }
+                    crate::GuidanceKind::HumanAction => {
+                        text.push_str(&format!(
+                            "\n- (human action) {} ({})",
+                            entry.text, entry.surface
+                        ));
+                    }
+                    crate::GuidanceKind::ExternalShell => {
+                        text.push_str(&format!(
+                            "\n- (external shell, not a framework command) `{}` ({})",
+                            entry.text, entry.surface
+                        ));
+                    }
+                }
+            }
+        }
         Ok(GetPromptResult::new(vec![
-            rmcp::model::PromptMessage::new_text(
-                rmcp::model::PromptMessageRole::User,
-                format!(
-                    "First call `help` with no command. Then call `help` for a command. Start execution with `{}` and use escalated lane tools only when a structured response asks for one. Use typed `$args.*` values; do not use shell syntax in the command string.",
-                    self.config.execution_tool_name
-                ),
-            ),
+            rmcp::model::PromptMessage::new_text(rmcp::model::PromptMessageRole::User, text),
         ]))
     }
 

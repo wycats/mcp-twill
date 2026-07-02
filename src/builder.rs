@@ -10,9 +10,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ArgSpec, ArgType, CommandContext, CommandExample, CommandHandler, CommandOutput,
-    CommandRegistry, CommandSpec, FrameworkError, OutputContract, PermissionSpec, Result,
-    WorkspaceDecl,
+    ArgSpec, ArgType, CommandContext, CommandExample, CommandGuidance, CommandHandler,
+    CommandOutput, CommandRegistry, CommandSpec, FrameworkError, OutputContract, PermissionSpec,
+    ProgressPhaseSpec, Result, StdinContract, WorkspaceDecl,
 };
 
 pub mod arg {
@@ -56,6 +56,7 @@ pub struct ServerBuilder {
     name: String,
     description: String,
     workspaces: Vec<WorkspaceDecl>,
+    guidance: Vec<CommandGuidance>,
     commands: Vec<BuiltCommand>,
     command_paths: BTreeSet<Vec<String>>,
     errors: Vec<FrameworkError>,
@@ -72,6 +73,7 @@ impl ServerBuilder {
             name: name.into(),
             description: description.into(),
             workspaces: Vec::new(),
+            guidance: Vec::new(),
             commands: Vec::new(),
             command_paths: BTreeSet::new(),
             errors: Vec::new(),
@@ -80,6 +82,11 @@ impl ServerBuilder {
 
     pub fn workspace(&mut self, workspace: WorkspaceDecl) -> &mut Self {
         self.workspaces.push(workspace);
+        self
+    }
+
+    pub fn guidance(&mut self, guidance: CommandGuidance) -> &mut Self {
+        self.guidance.push(guidance);
         self
     }
 
@@ -127,10 +134,14 @@ impl ServerBuilder {
         for workspace in self.workspaces.drain(..) {
             registry = registry.declare_workspace(workspace);
         }
+        for guidance in self.guidance.drain(..) {
+            registry = registry.declare_guidance(guidance);
+        }
         for command in self.commands {
             registry = registry.register(command.spec, command.handler);
         }
         registry.validate_examples()?;
+        registry.validate_guidance()?;
         Ok(registry)
     }
 }
@@ -143,6 +154,8 @@ pub struct CommandBuilder {
     permissions: Vec<PermissionSpec>,
     examples: Vec<CommandExample>,
     output: Option<OutputContract>,
+    stdin: Option<StdinContract>,
+    progress: Vec<ProgressPhaseSpec>,
     handler: Option<SharedCommandHandler>,
     errors: Vec<FrameworkError>,
 }
@@ -157,6 +170,8 @@ impl CommandBuilder {
             permissions: Vec::new(),
             examples: Vec::new(),
             output: None,
+            stdin: None,
+            progress: Vec::new(),
             handler: None,
             errors: Vec::new(),
         }
@@ -222,6 +237,26 @@ impl CommandBuilder {
 
     pub fn output(&mut self, output: OutputContract) -> &mut Self {
         self.output = Some(output);
+        self
+    }
+
+    pub fn stdin(&mut self, mime_type: impl Into<String>, summary: impl Into<String>) -> &mut Self {
+        self.stdin = Some(StdinContract {
+            mime_type: mime_type.into(),
+            summary: summary.into(),
+        });
+        self
+    }
+
+    pub fn progress_phase(
+        &mut self,
+        name: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> &mut Self {
+        self.progress.push(ProgressPhaseSpec {
+            name: name.into(),
+            summary: summary.into(),
+        });
         self
     }
 
@@ -305,6 +340,12 @@ impl CommandBuilder {
         let mut spec = CommandSpec::new(self.path, summary, description);
         if let Some(output) = self.output {
             spec = spec.with_output(output);
+        }
+        if let Some(stdin) = self.stdin {
+            spec = spec.with_stdin(stdin);
+        }
+        for phase in self.progress {
+            spec = spec.with_progress_phase(phase);
         }
         for arg in self.args {
             spec = spec.with_arg(arg);

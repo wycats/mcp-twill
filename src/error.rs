@@ -14,8 +14,11 @@ pub enum FrameworkError {
     PlaceholderInterpolation(String),
     #[error("placeholder `{0}` is not an `$args.<name>` placeholder")]
     InvalidPlaceholder(String),
-    #[error("unknown command `{0}`")]
-    UnknownCommand(String),
+    #[error("unknown command `{command}`")]
+    UnknownCommand {
+        command: String,
+        nearest: Vec<String>,
+    },
     #[error("unknown argument `{0}`")]
     UnknownArgument(String),
     #[error("missing argument `{0}`")]
@@ -24,6 +27,8 @@ pub enum FrameworkError {
     InvalidArgumentType(String, &'static str),
     #[error("path argument `{argument}` is outside declared workspace `{workspace}`")]
     WorkspaceMismatch { argument: String, workspace: String },
+    #[error("stdin mismatch: {0}")]
+    StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]
     PermissionDenied { effect: String, scope: String },
     #[error("approval invalid: {0}")]

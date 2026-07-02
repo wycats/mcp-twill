@@ -2,7 +2,7 @@
 
 # RFC 0001: Authoritative Command Catalog
 
-- Status: Draft
+- Status: Implemented
 - Area: command model, help, resources, prompts, generated projections
 - Target milestone: v0.2
 

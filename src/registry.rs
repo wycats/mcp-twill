@@ -10,11 +10,11 @@ use schemars::schema_for;
 use serde_json::{Value, json};
 
 use crate::{
-    CatalogIdentity, CommandCatalog, CommandContext, CommandOutput, CommandSpec, EffectLane,
-    FrameworkError, HelpRequest, HelpResult, HelpTopic, InvocationPlan, InvocationToken,
-    OperationSpec, PermissionPolicy, Result, RunRequest, RunResponse, ServerSpec, TemplateToken,
-    ToolLaneSpec, WorkspaceDecl, group_namespaces, stable_hash_value, structured_error,
-    value_matches_type,
+    CatalogIdentity, CommandCatalog, CommandContext, CommandGuidance, CommandOutput, CommandSpec,
+    EffectLane, FrameworkError, HelpRequest, HelpResult, HelpTopic, InvocationPlan,
+    InvocationToken, OperationSpec, PermissionPolicy, Result, RunRequest, RunResponse, ServerSpec,
+    TemplateToken, ToolLaneSpec, WorkspaceDecl, group_namespaces, stable_hash_value,
+    structured_error, value_matches_type,
 };
 use crate::{CommandTemplate, PermissionSpec};
 
@@ -42,6 +42,7 @@ pub struct CommandRegistry {
     server_description: String,
     commands: BTreeMap<Vec<String>, RegisteredCommand>,
     workspaces: BTreeMap<String, WorkspaceDecl>,
+    guidance: Vec<CommandGuidance>,
     policy: PermissionPolicy,
 }
 
@@ -58,6 +59,7 @@ impl CommandRegistry {
             server_description: server_description.into(),
             commands: BTreeMap::new(),
             workspaces: BTreeMap::new(),
+            guidance: Vec::new(),
             policy: PermissionPolicy::default(),
         }
     }
@@ -70,6 +72,15 @@ impl CommandRegistry {
     pub fn declare_workspace(mut self, workspace: WorkspaceDecl) -> Self {
         self.workspaces.insert(workspace.name.clone(), workspace);
         self
+    }
+
+    pub fn declare_guidance(mut self, guidance: CommandGuidance) -> Self {
+        self.guidance.push(guidance);
+        self
+    }
+
+    pub fn guidance(&self) -> &[CommandGuidance] {
+        &self.guidance
     }
 
     pub fn register<H>(mut self, spec: CommandSpec, handler: H) -> Self
@@ -120,6 +131,7 @@ impl CommandRegistry {
             namespaces: group_namespaces(&operations),
             operations,
             workspaces: self.workspaces.values().cloned().collect(),
+            guidance: self.guidance.clone(),
             identity,
         }
     }
@@ -135,6 +147,7 @@ impl CommandRegistry {
             "namespaces": group_namespaces(operations),
             "operations": operations,
             "workspaces": self.workspaces.values().collect::<Vec<_>>(),
+            "guidance": self.guidance,
         });
         let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
         let help_schema = serde_json::to_value(schema_for!(HelpRequest)).unwrap_or(Value::Null);
@@ -200,13 +213,94 @@ impl CommandRegistry {
         Ok(())
     }
 
+    pub fn validate_effects(&self) -> Result<()> {
+        for command in self.commands.values() {
+            for permission in &command.spec.permissions {
+                if let crate::PermissionEffect::Custom(effect) = &permission.effect {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` declares custom effect `{effect}`; \
+                         custom effects are not supported. Declare read, write, \
+                         delete, exec, or network permissions instead",
+                        command.spec.path.join(" ")
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_guidance(&self) -> Result<()> {
+        for guidance in &self.guidance {
+            if guidance.kind != crate::GuidanceKind::RunCommand {
+                continue;
+            }
+            let template = CommandTemplate::parse(&guidance.text).map_err(|error| {
+                FrameworkError::Build(format!(
+                    "guidance `{}` is marked runCommand but does not parse: {error}",
+                    guidance.id
+                ))
+            })?;
+            let Some(registered) = self.match_command(&template) else {
+                return Err(FrameworkError::Build(format!(
+                    "guidance `{}` is marked runCommand but `{}` matches no catalog command",
+                    guidance.id, guidance.text
+                )));
+            };
+            for placeholder in template.placeholders() {
+                if registered.spec.arg(placeholder).is_none() {
+                    return Err(FrameworkError::Build(format!(
+                        "guidance `{}` references `$args.{placeholder}`, which `{}` does not declare",
+                        guidance.id,
+                        registered.spec.name()
+                    )));
+                }
+            }
+            let placeholders: BTreeSet<_> = template.placeholders().into_iter().collect();
+            for arg in &registered.spec.args {
+                if arg.required && !placeholders.contains(arg.name.as_str()) {
+                    return Err(FrameworkError::Build(format!(
+                        "guidance `{}` omits required argument `{}` of `{}`; the guidance would fail planning",
+                        guidance.id,
+                        arg.name,
+                        registered.spec.name()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn build_plan(&self, request: &RunRequest) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
-        let registered = self
-            .match_command(&template)
-            .ok_or_else(|| FrameworkError::UnknownCommand(request.command.clone()))?;
+        let registered =
+            self.match_command(&template)
+                .ok_or_else(|| FrameworkError::UnknownCommand {
+                    command: request.command.clone(),
+                    nearest: self.nearest_commands(&template.literal_prefix()),
+                })?;
         let operation = OperationSpec::from_command_spec(&registered.spec);
         let identity = self.catalog_identity();
+
+        match (&registered.spec.stdin, &request.stdin) {
+            (None, Some(_)) => {
+                return Err(FrameworkError::StdinMismatch(format!(
+                    "`{}` does not accept stdin",
+                    registered.spec.name()
+                )));
+            }
+            (Some(contract), Some(stdin)) => {
+                if let Some(mime_type) = &stdin.mime_type
+                    && mime_type != &contract.mime_type
+                {
+                    return Err(FrameworkError::StdinMismatch(format!(
+                        "`{}` accepts {} stdin, got {mime_type}",
+                        registered.spec.name(),
+                        contract.mime_type
+                    )));
+                }
+            }
+            _ => {}
+        }
 
         let referenced: BTreeSet<_> = template
             .placeholders()
@@ -373,10 +467,12 @@ impl CommandRegistry {
         }
 
         self.policy.check(&plan.permissions)?;
-        let registered = self
-            .commands
-            .get(&plan.command_path)
-            .ok_or_else(|| FrameworkError::UnknownCommand(plan.command_path.join(" ")))?;
+        let registered = self.commands.get(&plan.command_path).ok_or_else(|| {
+            FrameworkError::UnknownCommand {
+                command: plan.command_path.join(" "),
+                nearest: Vec::new(),
+            }
+        })?;
 
         let output = registered
             .handler
@@ -433,6 +529,44 @@ impl CommandRegistry {
             .max_by_key(|command| command.spec.path.len())
     }
 
+    fn nearest_commands<S: AsRef<str>>(&self, requested: &[S]) -> Vec<String> {
+        if requested.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scored = Vec::new();
+        for path in self.commands.keys() {
+            let candidate = path.join(" ").to_lowercase();
+            let compared = requested
+                .iter()
+                .take(path.len())
+                .map(|token| token.as_ref().to_lowercase())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let distance = edit_distance(&compared, &candidate);
+            if distance <= 2.max(candidate.len() / 3) {
+                scored.push((distance, path.join(" ")));
+            }
+        }
+
+        if scored.is_empty() {
+            let namespace = requested[0].as_ref().to_lowercase();
+            scored.extend(
+                self.commands
+                    .keys()
+                    .filter(|path| {
+                        path.first()
+                            .is_some_and(|first| first.to_lowercase() == namespace)
+                    })
+                    .map(|path| (0, path.join(" "))),
+            );
+        }
+
+        scored.sort();
+        scored.dedup_by(|left, right| left.1 == right.1);
+        scored.into_iter().take(3).map(|(_, name)| name).collect()
+    }
+
     fn server_help(&self) -> HelpResult {
         let mut lines = vec![
             format!("# {}", self.server_name),
@@ -445,6 +579,30 @@ impl CommandRegistry {
         ];
         for spec in self.command_specs() {
             lines.push(format!("- `{}`: {}", spec.name(), spec.summary));
+        }
+
+        if !self.guidance.is_empty() {
+            lines.push(String::new());
+            lines.push("Guidance:".to_string());
+            for guidance in &self.guidance {
+                match guidance.kind {
+                    crate::GuidanceKind::RunCommand => {
+                        lines.push(format!("- `{}` - {}", guidance.text, guidance.surface));
+                    }
+                    crate::GuidanceKind::HumanAction => {
+                        lines.push(format!(
+                            "- (human action) {} - {}",
+                            guidance.text, guidance.surface
+                        ));
+                    }
+                    crate::GuidanceKind::ExternalShell => {
+                        lines.push(format!(
+                            "- (external shell, not a framework command) `{}` - {}",
+                            guidance.text, guidance.surface
+                        ));
+                    }
+                }
+            }
         }
 
         HelpResult {
@@ -467,11 +625,33 @@ impl CommandRegistry {
         });
 
         let Some(spec) = spec else {
-            let error = FrameworkError::UnknownCommand(command.to_string());
+            let tokens = command
+                .split_whitespace()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let error = FrameworkError::UnknownCommand {
+                command: command.to_string(),
+                nearest: self.nearest_commands(&tokens),
+            };
+            let mut text = error.to_string();
+            if let FrameworkError::UnknownCommand { nearest, .. } = &error
+                && !nearest.is_empty()
+            {
+                text.push_str("\n\nDid you mean:\n");
+                for candidate in nearest {
+                    text.push_str(&format!("- `{candidate}`\n"));
+                }
+            }
+            let mut structured = structured_error(&error);
+            if let FrameworkError::UnknownCommand { nearest, .. } = &error
+                && let Some(map) = structured.as_object_mut()
+            {
+                map.insert("nearest".to_string(), json!(nearest));
+            }
             return HelpResult {
                 title: "Unknown command".to_string(),
-                text: error.to_string(),
-                structured: structured_error(&error),
+                text,
+                structured,
             };
         };
 
@@ -506,13 +686,23 @@ impl CommandRegistry {
     }
 
     fn usage_text(&self, spec: &CommandSpec) -> String {
-        format!(
-            "# `{}`\n\n{}\n\n{}\n\n{}",
-            spec.name(),
-            spec.description,
+        let mut sections = vec![
+            format!("# `{}`", spec.name()),
+            spec.description.clone(),
             self.arguments_text(spec),
-            self.examples_text(spec)
-        )
+        ];
+        if let Some(stdin) = &spec.stdin {
+            sections.push(format!("Stdin: {} ({}).", stdin.summary, stdin.mime_type));
+        }
+        if !spec.progress.is_empty() {
+            let mut lines = vec!["Progress phases:".to_string()];
+            for phase in &spec.progress {
+                lines.push(format!("- {}: {}", phase.name, phase.summary));
+            }
+            sections.push(lines.join("\n"));
+        }
+        sections.push(self.examples_text(spec));
+        sections.join("\n\n")
     }
 
     fn arguments_text(&self, spec: &CommandSpec) -> String {
@@ -581,4 +771,24 @@ fn format_permissions(permissions: &[PermissionSpec]) -> String {
         ));
     }
     lines.join("\n")
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (row, left_char) in left.iter().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != right_char);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right.len()]
 }

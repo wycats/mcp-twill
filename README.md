@@ -27,7 +27,7 @@ Agents operate a Twill server by reading the generated help, resources, and gett
 
 ### Writing Twill Servers
 
-Agents helping write Twill servers should keep the command declaration and handler aligned with the catalog. A command's path, summary, description, typed args, workspace relationships, permissions, examples, output contract, and handler should be added together. The planned ergonomics API in [RFC 0006](docs/rfcs/0006-author-ergonomics.md) makes that the ordinary authoring path with builders, typed handler extraction, permission helpers, workspace helpers, and example validation.
+Agents helping write Twill servers should keep the command declaration and handler aligned with the catalog. A command's path, summary, description, typed args, workspace relationships, permissions, examples, output contract, and handler should be added together. The ergonomics API in [RFC 0006](docs/rfcs/stage-4/0006-author-ergonomics.md) makes that the ordinary authoring path with builders, typed handler extraction, permission helpers, workspace helpers, and example validation.
 
 ## Design Notes
 

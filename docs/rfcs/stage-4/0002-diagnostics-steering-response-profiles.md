@@ -2,7 +2,7 @@
 
 # RFC 0002: Diagnostics, Steering, And Response Profiles
 
-- Status: Draft
+- Status: Implemented
 - Area: errors, output shaping, help steering, MCP tool results
 - Target milestone: v0.2
 - Depends on: RFC 0001

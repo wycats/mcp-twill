@@ -469,3 +469,280 @@ async fn lane_checks_redirect_before_dispatch() {
     .unwrap();
     assert_eq!(dispatches.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn unknown_commands_include_nearest_alternatives() {
+    let error = registry()
+        .build_plan(&request(
+            "issues creat --title $args.title",
+            json!({ "title": "x" }),
+        ))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert_eq!(nearest, &vec!["issues create".to_string()]);
+
+    let envelope = mcp_twill::ResponseEnvelope::framework_error(error, None, None);
+    let diagnostic = envelope
+        .diagnostics
+        .first()
+        .expect("unknown command has diagnostic");
+    assert!(
+        diagnostic
+            .suggestions
+            .iter()
+            .any(|suggestion| suggestion.message == "Did you mean `issues create`?"),
+        "suggestions: {:?}",
+        diagnostic.suggestions
+    );
+}
+
+#[test]
+fn unknown_commands_fall_back_to_namespace_alternatives() {
+    let error = registry()
+        .build_plan(&request("issues synchronize-everything", json!({})))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert_eq!(nearest, &vec!["issues create".to_string()]);
+}
+
+#[test]
+fn namespace_fallback_is_case_insensitive() {
+    let error = registry()
+        .build_plan(&request("Issues synchronize-everything", json!({})))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert_eq!(nearest, &vec!["issues create".to_string()]);
+}
+
+#[test]
+fn unknown_commands_without_candidates_have_no_alternatives() {
+    let error = registry()
+        .build_plan(&request("zap blorp", json!({})))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert!(nearest.is_empty(), "nearest: {nearest:?}");
+}
+
+#[test]
+fn run_command_guidance_is_validated_against_the_catalog() {
+    registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "create-issue",
+            "getting-started",
+            "issues create --title $args.title --body $args.body",
+        ))
+        .validate_guidance()
+        .unwrap();
+
+    let error = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "unknown-command",
+            "getting-started",
+            "issues frobnicate",
+        ))
+        .validate_guidance()
+        .unwrap_err();
+    assert!(matches!(error, FrameworkError::Build(_)), "{error:?}");
+
+    let error = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "unknown-arg",
+            "getting-started",
+            "issues create --nope $args.nope",
+        ))
+        .validate_guidance()
+        .unwrap_err();
+    assert!(matches!(error, FrameworkError::Build(_)), "{error:?}");
+}
+
+#[test]
+fn external_shell_guidance_is_excluded_from_command_validation() {
+    registry()
+        .declare_guidance(mcp_twill::CommandGuidance::external_shell(
+            "install",
+            "readme",
+            "cargo install mcp-twill | tee install.log",
+        ))
+        .validate_guidance()
+        .unwrap();
+}
+
+#[test]
+fn run_command_guidance_must_include_required_arguments() {
+    let error = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "missing-body",
+            "getting-started",
+            "issues create --title $args.title",
+        ))
+        .validate_guidance()
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("omits required argument `body`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn stdin_is_rejected_for_commands_without_a_contract() {
+    let error = registry()
+        .build_plan(&RunRequest {
+            stdin: Some(mcp_twill::StdinSpec {
+                text: "hello".to_string(),
+                mime_type: None,
+            }),
+            ..request(
+                "issues create --title $args.title --body $args.body",
+                json!({ "title": "x", "body": "y" }),
+            )
+        })
+        .unwrap_err();
+    assert!(
+        matches!(error, FrameworkError::StdinMismatch(_)),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn stdin_mime_type_must_match_the_declared_contract() {
+    let spec = create_issue_spec().with_stdin(mcp_twill::StdinContract {
+        mime_type: "text/markdown".to_string(),
+        summary: "Issue body as markdown".to_string(),
+    });
+    let reg = CommandRegistry::new("test", "test server").register(spec, |_context| async {
+        Ok(CommandOutput::structured(json!({ "id": 1 })))
+    });
+    let base = request(
+        "issues create --title $args.title --body $args.body",
+        json!({ "title": "x", "body": "y" }),
+    );
+
+    let error = reg
+        .build_plan(&RunRequest {
+            stdin: Some(mcp_twill::StdinSpec {
+                text: "hello".to_string(),
+                mime_type: Some("application/json".to_string()),
+            }),
+            ..base.clone()
+        })
+        .unwrap_err();
+    assert!(
+        matches!(error, FrameworkError::StdinMismatch(_)),
+        "{error:?}"
+    );
+
+    reg.build_plan(&RunRequest {
+        stdin: Some(mcp_twill::StdinSpec {
+            text: "hello".to_string(),
+            mime_type: Some("text/markdown".to_string()),
+        }),
+        ..base.clone()
+    })
+    .unwrap();
+
+    reg.build_plan(&RunRequest {
+        stdin: Some(mcp_twill::StdinSpec {
+            text: "hello".to_string(),
+            mime_type: None,
+        }),
+        ..base
+    })
+    .unwrap();
+}
+
+#[test]
+fn help_for_unknown_commands_surfaces_nearest_alternatives() {
+    let help = registry().help(HelpRequest {
+        command: Some("issues creat".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(help.text.contains("Did you mean:"), "{}", help.text);
+    assert!(help.text.contains("`issues create`"), "{}", help.text);
+    assert_eq!(help.structured["nearest"], json!(["issues create"]));
+}
+
+#[test]
+fn guidance_appears_in_server_help_and_catalog_identity() {
+    let reg = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "create-issue",
+            "getting-started",
+            "issues create --title $args.title --body $args.body",
+        ))
+        .declare_guidance(mcp_twill::CommandGuidance::external_shell(
+            "install",
+            "readme",
+            "cargo install mcp-twill",
+        ));
+
+    let help = reg.help(HelpRequest::default());
+    assert!(help.text.contains("Guidance:"), "{}", help.text);
+    assert!(
+        help.text
+            .contains("(external shell, not a framework command)"),
+        "{}",
+        help.text
+    );
+
+    assert_ne!(
+        reg.catalog_identity().catalog_hash,
+        registry().catalog_identity().catalog_hash,
+        "guidance must change catalog identity"
+    );
+    assert_eq!(reg.catalog().guidance.len(), 2);
+}
+
+#[test]
+fn stdin_and_progress_declarations_project_into_catalog_and_help() {
+    let spec = create_issue_spec()
+        .with_stdin(mcp_twill::StdinContract {
+            mime_type: "text/markdown".to_string(),
+            summary: "Issue body as markdown".to_string(),
+        })
+        .with_progress_phase(mcp_twill::ProgressPhaseSpec {
+            name: "persist".to_string(),
+            summary: "Store the issue record".to_string(),
+        });
+    let reg = CommandRegistry::new("test", "test server").register(spec, |_context| async {
+        Ok(CommandOutput::structured(json!({ "id": 1 })))
+    });
+
+    let operation = reg
+        .operation_specs()
+        .into_iter()
+        .find(|operation| operation.name() == "issues create")
+        .unwrap();
+    assert_eq!(
+        operation.stdin.as_ref().map(|stdin| stdin.mime_type.as_str()),
+        Some("text/markdown")
+    );
+    assert_eq!(operation.progress.len(), 1);
+
+    let help = reg.help(HelpRequest {
+        command: Some("issues create".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(help.text.contains("Stdin:"), "{}", help.text);
+    assert!(help.text.contains("Progress phases:"), "{}", help.text);
+
+    let plain = CommandRegistry::new("test", "test server").register(
+        create_issue_spec(),
+        |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
+    );
+    assert_ne!(
+        reg.catalog_identity().catalog_hash,
+        plain.catalog_identity().catalog_hash,
+        "stdin and progress must change catalog identity"
+    );
+}
