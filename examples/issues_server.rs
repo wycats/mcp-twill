@@ -19,13 +19,17 @@ async fn create_issue(_context: CommandContext, args: CreateIssueArgs) -> Result
 }
 
 fn registry() -> Result<CommandRegistry> {
+    let repo_root = std::env::current_dir()
+        .map_err(|error| mcp_twill::FrameworkError::Build(error.to_string()))?
+        .to_string_lossy()
+        .into_owned();
+
     CommandRegistry::build(
         "issues-example",
         "Example MCP Twill server for issue tracking commands.",
         |server| {
             server.workspace(
-                WorkspaceDecl::file("repo", "C:/workspace")
-                    .with_description("Example repository root"),
+                WorkspaceDecl::file("repo", repo_root).with_description("Example repository root"),
             );
 
             server.command("issues create", |command| {

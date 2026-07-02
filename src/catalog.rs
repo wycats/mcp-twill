@@ -239,11 +239,11 @@ impl OperationSpec {
             description: spec.description.clone(),
             effect: EffectSpec::from_permissions(&spec.permissions),
             args: spec.args.clone(),
-            stdin: None,
+            stdin: spec.stdin.clone(),
             output: spec.output.clone().unwrap_or_default(),
             permissions: spec.permissions.clone(),
             examples: spec.examples.clone(),
-            progress: Vec::new(),
+            progress: spec.progress.clone(),
             task_support: TaskSupportSpec::Optional,
             stability: Stability::Draft,
         }
@@ -275,6 +275,8 @@ pub struct CommandCatalog {
     pub operations: Vec<OperationSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<WorkspaceDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guidance: Vec<CommandGuidance>,
     pub identity: CatalogIdentity,
 }
 
@@ -293,6 +295,47 @@ pub struct CommandGuidance {
     pub surface: String,
     pub text: String,
     pub kind: GuidanceKind,
+}
+
+impl CommandGuidance {
+    pub fn run_command(
+        id: impl Into<String>,
+        surface: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            surface: surface.into(),
+            text: text.into(),
+            kind: GuidanceKind::RunCommand,
+        }
+    }
+
+    pub fn human_action(
+        id: impl Into<String>,
+        surface: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            surface: surface.into(),
+            text: text.into(),
+            kind: GuidanceKind::HumanAction,
+        }
+    }
+
+    pub fn external_shell(
+        id: impl Into<String>,
+        surface: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            surface: surface.into(),
+            text: text.into(),
+            kind: GuidanceKind::ExternalShell,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

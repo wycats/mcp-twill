@@ -86,6 +86,7 @@ impl CliMcpServer {
         config: CliMcpServerConfig,
     ) -> crate::Result<Self> {
         registry.validate_effects()?;
+        registry.validate_guidance()?;
         Ok(Self {
             registry: Arc::new(registry),
             config,

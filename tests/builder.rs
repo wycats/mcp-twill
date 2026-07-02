@@ -359,3 +359,61 @@ fn builder_rejects_duplicate_paths_args_unknown_workspaces_and_missing_handlers(
         }));
     assert!(missing_handler.to_string().contains("missing a handler"));
 }
+
+#[test]
+fn builder_declares_guidance_stdin_and_progress() {
+    let registry = CommandRegistry::build("notes", "Note-taking server", |server| {
+        server.guidance(mcp_twill::CommandGuidance::run_command(
+            "quickstart",
+            "getting-started",
+            "notes add --text $args.text",
+        ));
+        server.command("notes add", |command| {
+            command
+                .summary("Add note")
+                .description("Adds a note from typed text.")
+                .arg(arg::string("text").summary("Note text"))
+                .stdin("text/plain", "Note body")
+                .progress_phase("persist", "Store the note")
+                .write("notes", "Writes note records")
+                .handle(|_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) });
+        });
+    })
+    .unwrap();
+
+    let catalog = registry.catalog();
+    assert_eq!(catalog.guidance.len(), 1);
+    let operation = catalog
+        .operations
+        .iter()
+        .find(|operation| operation.name() == "notes add")
+        .unwrap();
+    assert_eq!(
+        operation.stdin.as_ref().map(|stdin| stdin.mime_type.as_str()),
+        Some("text/plain")
+    );
+    assert_eq!(operation.progress.len(), 1);
+}
+
+#[test]
+fn builder_rejects_run_command_guidance_that_does_not_plan() {
+    let error = expect_build_err(CommandRegistry::build("notes", "Note-taking server", |server| {
+        server.guidance(mcp_twill::CommandGuidance::run_command(
+            "quickstart",
+            "getting-started",
+            "notes frobnicate --text $args.text",
+        ));
+        server.command("notes add", |command| {
+            command
+                .summary("Add note")
+                .description("Adds a note from typed text.")
+                .arg(arg::string("text").summary("Note text"))
+                .write("notes", "Writes note records")
+                .handle(|_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) });
+        });
+    }));
+    assert!(
+        error.to_string().contains("matches no catalog command"),
+        "{error}"
+    );
+}

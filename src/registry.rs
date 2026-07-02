@@ -10,11 +10,11 @@ use schemars::schema_for;
 use serde_json::{Value, json};
 
 use crate::{
-    CatalogIdentity, CommandCatalog, CommandContext, CommandOutput, CommandSpec, EffectLane,
-    FrameworkError, HelpRequest, HelpResult, HelpTopic, InvocationPlan, InvocationToken,
-    OperationSpec, PermissionPolicy, Result, RunRequest, RunResponse, ServerSpec, TemplateToken,
-    ToolLaneSpec, WorkspaceDecl, group_namespaces, stable_hash_value, structured_error,
-    value_matches_type,
+    CatalogIdentity, CommandCatalog, CommandContext, CommandGuidance, CommandOutput, CommandSpec,
+    EffectLane, FrameworkError, HelpRequest, HelpResult, HelpTopic, InvocationPlan,
+    InvocationToken, OperationSpec, PermissionPolicy, Result, RunRequest, RunResponse, ServerSpec,
+    TemplateToken, ToolLaneSpec, WorkspaceDecl, group_namespaces, stable_hash_value,
+    structured_error, value_matches_type,
 };
 use crate::{CommandTemplate, PermissionSpec};
 
@@ -42,6 +42,7 @@ pub struct CommandRegistry {
     server_description: String,
     commands: BTreeMap<Vec<String>, RegisteredCommand>,
     workspaces: BTreeMap<String, WorkspaceDecl>,
+    guidance: Vec<CommandGuidance>,
     policy: PermissionPolicy,
 }
 
@@ -58,6 +59,7 @@ impl CommandRegistry {
             server_description: server_description.into(),
             commands: BTreeMap::new(),
             workspaces: BTreeMap::new(),
+            guidance: Vec::new(),
             policy: PermissionPolicy::default(),
         }
     }
@@ -70,6 +72,15 @@ impl CommandRegistry {
     pub fn declare_workspace(mut self, workspace: WorkspaceDecl) -> Self {
         self.workspaces.insert(workspace.name.clone(), workspace);
         self
+    }
+
+    pub fn declare_guidance(mut self, guidance: CommandGuidance) -> Self {
+        self.guidance.push(guidance);
+        self
+    }
+
+    pub fn guidance(&self) -> &[CommandGuidance] {
+        &self.guidance
     }
 
     pub fn register<H>(mut self, spec: CommandSpec, handler: H) -> Self
@@ -120,6 +131,7 @@ impl CommandRegistry {
             namespaces: group_namespaces(&operations),
             operations,
             workspaces: self.workspaces.values().cloned().collect(),
+            guidance: self.guidance.clone(),
             identity,
         }
     }
@@ -135,6 +147,7 @@ impl CommandRegistry {
             "namespaces": group_namespaces(operations),
             "operations": operations,
             "workspaces": self.workspaces.values().collect::<Vec<_>>(),
+            "guidance": self.guidance,
         });
         let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
         let help_schema = serde_json::to_value(schema_for!(HelpRequest)).unwrap_or(Value::Null);
@@ -209,6 +222,36 @@ impl CommandRegistry {
                          custom effects are not supported. Declare read, write, \
                          delete, exec, or network permissions instead",
                         command.spec.path.join(" ")
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_guidance(&self) -> Result<()> {
+        for guidance in &self.guidance {
+            if guidance.kind != crate::GuidanceKind::RunCommand {
+                continue;
+            }
+            let template = CommandTemplate::parse(&guidance.text).map_err(|error| {
+                FrameworkError::Build(format!(
+                    "guidance `{}` is marked runCommand but does not parse: {error}",
+                    guidance.id
+                ))
+            })?;
+            let Some(registered) = self.match_command(&template) else {
+                return Err(FrameworkError::Build(format!(
+                    "guidance `{}` is marked runCommand but `{}` matches no catalog command",
+                    guidance.id, guidance.text
+                )));
+            };
+            for placeholder in template.placeholders() {
+                if registered.spec.arg(placeholder).is_none() {
+                    return Err(FrameworkError::Build(format!(
+                        "guidance `{}` references `$args.{placeholder}`, which `{}` does not declare",
+                        guidance.id,
+                        registered.spec.name()
                     )));
                 }
             }
@@ -504,6 +547,30 @@ impl CommandRegistry {
             lines.push(format!("- `{}`: {}", spec.name(), spec.summary));
         }
 
+        if !self.guidance.is_empty() {
+            lines.push(String::new());
+            lines.push("Guidance:".to_string());
+            for guidance in &self.guidance {
+                match guidance.kind {
+                    crate::GuidanceKind::RunCommand => {
+                        lines.push(format!("- `{}` - {}", guidance.text, guidance.surface));
+                    }
+                    crate::GuidanceKind::HumanAction => {
+                        lines.push(format!(
+                            "- (human action) {} - {}",
+                            guidance.text, guidance.surface
+                        ));
+                    }
+                    crate::GuidanceKind::ExternalShell => {
+                        lines.push(format!(
+                            "- (external shell, not a framework command) `{}` - {}",
+                            guidance.text, guidance.surface
+                        ));
+                    }
+                }
+            }
+        }
+
         HelpResult {
             title: self.server_name.clone(),
             text: lines.join("\n"),
@@ -570,13 +637,23 @@ impl CommandRegistry {
     }
 
     fn usage_text(&self, spec: &CommandSpec) -> String {
-        format!(
-            "# `{}`\n\n{}\n\n{}\n\n{}",
-            spec.name(),
-            spec.description,
+        let mut sections = vec![
+            format!("# `{}`", spec.name()),
+            spec.description.clone(),
             self.arguments_text(spec),
-            self.examples_text(spec)
-        )
+        ];
+        if let Some(stdin) = &spec.stdin {
+            sections.push(format!("Stdin: {} ({}).", stdin.summary, stdin.mime_type));
+        }
+        if !spec.progress.is_empty() {
+            let mut lines = vec!["Progress phases:".to_string()];
+            for phase in &spec.progress {
+                lines.push(format!("- {}: {}", phase.name, phase.summary));
+            }
+            sections.push(lines.join("\n"));
+        }
+        sections.push(self.examples_text(spec));
+        sections.join("\n\n")
     }
 
     fn arguments_text(&self, spec: &CommandSpec) -> String {

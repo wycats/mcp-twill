@@ -519,3 +519,123 @@ fn unknown_commands_without_candidates_have_no_alternatives() {
     };
     assert!(nearest.is_empty(), "nearest: {nearest:?}");
 }
+
+#[test]
+fn run_command_guidance_is_validated_against_the_catalog() {
+    registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "create-issue",
+            "getting-started",
+            "issues create --title $args.title --body $args.body",
+        ))
+        .validate_guidance()
+        .unwrap();
+
+    let error = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "unknown-command",
+            "getting-started",
+            "issues frobnicate",
+        ))
+        .validate_guidance()
+        .unwrap_err();
+    assert!(matches!(error, FrameworkError::Build(_)), "{error:?}");
+
+    let error = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "unknown-arg",
+            "getting-started",
+            "issues create --nope $args.nope",
+        ))
+        .validate_guidance()
+        .unwrap_err();
+    assert!(matches!(error, FrameworkError::Build(_)), "{error:?}");
+}
+
+#[test]
+fn external_shell_guidance_is_excluded_from_command_validation() {
+    registry()
+        .declare_guidance(mcp_twill::CommandGuidance::external_shell(
+            "install",
+            "readme",
+            "cargo install mcp-twill | tee install.log",
+        ))
+        .validate_guidance()
+        .unwrap();
+}
+
+#[test]
+fn guidance_appears_in_server_help_and_catalog_identity() {
+    let reg = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "create-issue",
+            "getting-started",
+            "issues create --title $args.title --body $args.body",
+        ))
+        .declare_guidance(mcp_twill::CommandGuidance::external_shell(
+            "install",
+            "readme",
+            "cargo install mcp-twill",
+        ));
+
+    let help = reg.help(HelpRequest::default());
+    assert!(help.text.contains("Guidance:"), "{}", help.text);
+    assert!(
+        help.text
+            .contains("(external shell, not a framework command)"),
+        "{}",
+        help.text
+    );
+
+    assert_ne!(
+        reg.catalog_identity().catalog_hash,
+        registry().catalog_identity().catalog_hash,
+        "guidance must change catalog identity"
+    );
+    assert_eq!(reg.catalog().guidance.len(), 2);
+}
+
+#[test]
+fn stdin_and_progress_declarations_project_into_catalog_and_help() {
+    let spec = create_issue_spec()
+        .with_stdin(mcp_twill::StdinContract {
+            mime_type: "text/markdown".to_string(),
+            summary: "Issue body as markdown".to_string(),
+        })
+        .with_progress_phase(mcp_twill::ProgressPhaseSpec {
+            name: "persist".to_string(),
+            summary: "Store the issue record".to_string(),
+        });
+    let reg = CommandRegistry::new("test", "test server").register(spec, |_context| async {
+        Ok(CommandOutput::structured(json!({ "id": 1 })))
+    });
+
+    let operation = reg
+        .operation_specs()
+        .into_iter()
+        .find(|operation| operation.name() == "issues create")
+        .unwrap();
+    assert_eq!(
+        operation.stdin.as_ref().map(|stdin| stdin.mime_type.as_str()),
+        Some("text/markdown")
+    );
+    assert_eq!(operation.progress.len(), 1);
+
+    let help = reg.help(HelpRequest {
+        command: Some("issues create".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(help.text.contains("Stdin:"), "{}", help.text);
+    assert!(help.text.contains("Progress phases:"), "{}", help.text);
+
+    let plain = CommandRegistry::new("test", "test server").register(
+        create_issue_spec(),
+        |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
+    );
+    assert_ne!(
+        reg.catalog_identity().catalog_hash,
+        plain.catalog_identity().catalog_hash,
+        "stdin and progress must change catalog identity"
+    );
+}

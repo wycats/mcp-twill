@@ -251,12 +251,16 @@ pub struct CommandSpec {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<crate::OutputContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<crate::StdinContract>,
     #[serde(default)]
     pub args: Vec<ArgSpec>,
     #[serde(default)]
     pub permissions: Vec<PermissionSpec>,
     #[serde(default)]
     pub examples: Vec<CommandExample>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress: Vec<crate::ProgressPhaseSpec>,
 }
 
 impl CommandSpec {
@@ -270,9 +274,11 @@ impl CommandSpec {
             summary: summary.into(),
             description: description.into(),
             output: None,
+            stdin: None,
             args: Vec::new(),
             permissions: Vec::new(),
             examples: Vec::new(),
+            progress: Vec::new(),
         }
     }
 
@@ -287,6 +293,16 @@ impl CommandSpec {
 
     pub fn with_output(mut self, output: crate::OutputContract) -> Self {
         self.output = Some(output);
+        self
+    }
+
+    pub fn with_stdin(mut self, stdin: crate::StdinContract) -> Self {
+        self.stdin = Some(stdin);
+        self
+    }
+
+    pub fn with_progress_phase(mut self, phase: crate::ProgressPhaseSpec) -> Self {
+        self.progress.push(phase);
         self
     }
 
