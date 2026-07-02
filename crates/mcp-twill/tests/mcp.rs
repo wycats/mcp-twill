@@ -142,6 +142,28 @@ impl ClientHandler for TestClient {
     }
 }
 
+/// A client that declares the MCP roots capability and serves `roots/list`.
+struct RootsClient {
+    roots: Vec<rmcp::model::Root>,
+}
+
+impl ClientHandler for RootsClient {
+    fn get_info(&self) -> rmcp::model::ClientInfo {
+        let mut info = rmcp::model::ClientInfo::default();
+        info.capabilities = rmcp::model::ClientCapabilities::builder()
+            .enable_roots()
+            .build();
+        info
+    }
+
+    async fn list_roots(
+        &self,
+        _context: rmcp::service::RequestContext<rmcp::RoleClient>,
+    ) -> Result<rmcp::model::ListRootsResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListRootsResult::new(self.roots.clone()))
+    }
+}
+
 #[tokio::test]
 async fn getting_started_prompt_includes_declared_guidance() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
@@ -840,6 +862,143 @@ async fn text_output_format_omits_structured_content_on_success() -> anyhow::Res
     assert_eq!(result.is_error, Some(false));
     assert!(result.structured_content.is_none());
     assert!(serde_json::to_string(&result)?.contains("One"));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+fn workspace_registry() -> CommandRegistry {
+    registry()
+        .declare_workspace(mcp_twill::WorkspaceDecl::file(
+            "repo",
+            "file:///declared/repo",
+        ))
+        .register(
+            CommandSpec::new(["files", "read"], "Read file", "Read a repository file")
+                .with_arg(mcp_twill::ArgSpec::path("path", "File to read", "repo"))
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Read,
+                    "repo",
+                    "Reads repository files",
+                )),
+            |context: mcp_twill::CommandContext| async move {
+                Ok(CommandOutput::structured(
+                    json!({ "planned": context.plan.workspace_roots }),
+                ))
+            },
+        )
+}
+
+// End-to-end over the real protocol: a client that declares the roots
+// capability serves roots/list, and the selected MCP root (not the declared
+// fallback) governs planning and containment.
+#[tokio::test]
+async fn client_roots_resolve_workspaces_over_mcp() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(workspace_registry())?;
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = RootsClient {
+        roots: vec![rmcp::model::Root::new("file:///client/repo").with_name("repo")],
+    }
+    .serve(client_transport)
+    .await?;
+
+    // Dry run: the plan must show the client root, its source, and the
+    // selection reason.
+    let mut dry_run = request(
+        "files read $args.path",
+        json!({ "path": "file:///client/repo/src/lib.rs" }),
+    )?;
+    dry_run.dry_run = true;
+    let result = client
+        .call_tool(CallToolRequestParams::new("run").with_arguments(json_object(dry_run)?))
+        .await?;
+    assert_eq!(result.is_error, Some(false));
+    let structured = result
+        .structured_content
+        .clone()
+        .expect("structured envelope");
+    let root = &structured["plan"]["workspaceRoots"][0];
+    assert_eq!(root["id"], json!("repo"));
+    assert_eq!(root["rootUri"], json!("file:///client/repo"));
+    assert_eq!(root["source"], json!("mcp_roots"));
+    assert_eq!(root["selectionReason"], json!("matched_by_name"));
+
+    // A path inside the declared fallback but outside the client root is
+    // rejected: client roots outrank the declared workspace.
+    let outside = request(
+        "files read $args.path",
+        json!({ "path": "file:///declared/repo/src/lib.rs" }),
+    )?;
+    let result = client
+        .call_tool(CallToolRequestParams::new("run").with_arguments(json_object(outside)?))
+        .await?;
+    assert_eq!(result.is_error, Some(true));
+    let structured = result
+        .structured_content
+        .clone()
+        .expect("structured envelope");
+    assert_eq!(structured["error"]["code"], json!("workspace_mismatch"));
+    assert_eq!(
+        structured["error"]["details"]["selectedRoot"],
+        json!("file:///client/repo")
+    );
+
+    // A path inside the client root executes, and the handler sees the
+    // resolved root on its plan.
+    let inside = request(
+        "files read $args.path",
+        json!({ "path": "file:///client/repo/src/lib.rs" }),
+    )?;
+    let result = client
+        .call_tool(CallToolRequestParams::new("run").with_arguments(json_object(inside)?))
+        .await?;
+    assert_eq!(result.is_error, Some(false));
+    let structured = result
+        .structured_content
+        .clone()
+        .expect("structured envelope");
+    assert_eq!(
+        structured["output"]["structured"]["planned"][0]["rootUri"],
+        json!("file:///client/repo")
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+// A client without the roots capability falls back to the declared workspace.
+#[tokio::test]
+async fn declared_fallback_governs_when_client_has_no_roots() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(workspace_registry())?;
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let mut dry_run = request(
+        "files read $args.path",
+        json!({ "path": "file:///declared/repo/src/lib.rs" }),
+    )?;
+    dry_run.dry_run = true;
+    let result = client
+        .call_tool(CallToolRequestParams::new("run").with_arguments(json_object(dry_run)?))
+        .await?;
+    assert_eq!(result.is_error, Some(false));
+    let structured = result
+        .structured_content
+        .clone()
+        .expect("structured envelope");
+    let root = &structured["plan"]["workspaceRoots"][0];
+    assert_eq!(root["rootUri"], json!("file:///declared/repo"));
+    assert_eq!(root["source"], json!("declared"));
+    assert_eq!(root["selectionReason"], json!("declared_observation"));
 
     client.cancel().await?;
     Ok(())

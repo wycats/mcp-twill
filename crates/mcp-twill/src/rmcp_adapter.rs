@@ -7,6 +7,9 @@ use std::{
 };
 
 use chrono::Utc;
+use mcp_workspace_resolver::{
+    CodexSandboxObservation, McpRootsObservation, ResolvedWorkspaceSet, resolve_workspaces,
+};
 use rand::{RngCore, rngs::OsRng};
 use rmcp::{
     Peer, RoleServer, ServerHandler,
@@ -205,8 +208,9 @@ impl CliMcpServer {
     ) -> CallToolResult {
         let profile = response_profile(&request);
         let mode = request.effective_mode();
+        let resolved = Self::resolve_workspaces_for_call(&registry, &meta, &client).await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "Parsing command template").await;
-        let plan = match registry.build_plan(&request) {
+        let plan = match registry.build_plan_with_workspaces(&request, &resolved) {
             Ok(plan) => plan,
             Err(error) => {
                 return envelope_result(ResponseEnvelope::framework_error(
@@ -309,11 +313,12 @@ impl CliMcpServer {
 
         Self::notify_progress(&meta, &client, 3.0, 4.0, "Dispatching command handler").await;
         let result = registry
-            .run_in_lane(
+            .run_in_lane_with_workspaces(
                 request.clone(),
                 tool_name,
                 lane,
                 &config.execution_tool_name,
+                &resolved,
             )
             .await;
         match result {
@@ -330,6 +335,34 @@ impl CliMcpServer {
                 Some(plan),
             )),
         }
+    }
+
+    /// Gathers per-call workspace observations and resolves them.
+    ///
+    /// MCP roots are requested only when the client declared the roots
+    /// capability; a failed `roots/list` call degrades to an absent
+    /// observation rather than failing the tool call. Codex sandbox metadata
+    /// is parsed from `codex/sandbox-state-meta` request meta when present.
+    /// Declared workspace roots always participate.
+    async fn resolve_workspaces_for_call(
+        registry: &CommandRegistry,
+        meta: &Meta,
+        client: &Peer<RoleServer>,
+    ) -> ResolvedWorkspaceSet {
+        let mut observations = registry.declared_observations();
+
+        let client_declares_roots = client
+            .peer_info()
+            .is_some_and(|info| info.capabilities.roots.is_some());
+        if client_declares_roots && let Ok(result) = client.list_roots().await {
+            observations = observations.with_mcp_roots(McpRootsObservation::from(result));
+        }
+
+        if let Some(codex) = codex_sandbox_observation(meta) {
+            observations = observations.with_codex_sandbox(codex);
+        }
+
+        resolve_workspaces(&registry.workspace_requirements(), &observations)
     }
 
     fn parse_arguments<T: DeserializeOwned>(
@@ -736,6 +769,25 @@ fn effect_label(effect: &crate::EffectSpec) -> String {
             .collect::<Vec<_>>()
             .join("+"),
     }
+}
+
+/// Parses `codex/sandbox-state-meta` from request meta into a Codex sandbox
+/// observation. Accepts `sandboxCwd` (camelCase) or `sandbox_cwd`.
+fn codex_sandbox_observation(meta: &Meta) -> Option<CodexSandboxObservation> {
+    let state = meta.0.get("codex/sandbox-state-meta")?;
+    let cwd = state
+        .get("sandboxCwd")
+        .or_else(|| state.get("sandbox_cwd"))?
+        .as_str()?;
+    let mut observation = CodexSandboxObservation::new(cwd);
+    if let Some(profile) = state
+        .get("permissionProfile")
+        .or_else(|| state.get("permission_profile"))
+        .and_then(Value::as_str)
+    {
+        observation = observation.with_permission_profile(profile);
+    }
+    Some(observation)
 }
 
 fn response_profile(request: &RunRequest) -> ResponseProfile {

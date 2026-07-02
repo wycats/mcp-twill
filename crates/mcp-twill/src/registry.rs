@@ -6,6 +6,10 @@ use std::{
 };
 
 use async_trait::async_trait;
+use mcp_workspace_resolver::{
+    ResolvedWorkspaceSet, WorkspaceObservationSet, WorkspaceRequirement, normalize_file_uri,
+    path_has_prefix, resolve_workspaces,
+};
 use schemars::schema_for;
 use serde_json::{Value, json};
 
@@ -271,6 +275,47 @@ impl CommandRegistry {
     }
 
     pub fn build_plan(&self, request: &RunRequest) -> Result<InvocationPlan> {
+        self.build_plan_with_workspaces(request, &self.resolve_declared_workspaces())
+    }
+
+    /// Projects every declared workspace into a resolver requirement.
+    pub fn workspace_requirements(&self) -> Vec<WorkspaceRequirement> {
+        self.workspaces
+            .values()
+            .map(WorkspaceDecl::requirement)
+            .collect()
+    }
+
+    /// The server-declared workspace roots as a resolver observation set.
+    /// Runtime observations (MCP roots, Codex sandbox metadata) are layered
+    /// on top of this set by the caller that observed them.
+    pub fn declared_observations(&self) -> WorkspaceObservationSet {
+        let mut observations = WorkspaceObservationSet::new();
+        for decl in self.workspaces.values() {
+            observations = observations.with_declared(decl.declared_root());
+        }
+        observations
+    }
+
+    /// Resolves declared workspaces with no runtime observations. This is the
+    /// resolution `build_plan` uses when the caller has nothing runtime to
+    /// contribute; declared roots resolve through the resolver's
+    /// declared-roots path.
+    pub fn resolve_declared_workspaces(&self) -> ResolvedWorkspaceSet {
+        resolve_workspaces(
+            &self.workspace_requirements(),
+            &self.declared_observations(),
+        )
+    }
+
+    /// Builds an invocation plan against pre-resolved workspace roots.
+    /// Planning stays synchronous; observation gathering happens in the
+    /// adapter and arrives here already resolved.
+    pub fn build_plan_with_workspaces(
+        &self,
+        request: &RunRequest,
+        resolved: &ResolvedWorkspaceSet,
+    ) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
         let registered =
             self.match_command(&template)
@@ -327,6 +372,7 @@ impl CommandRegistry {
         }
 
         let mut bound_args = BTreeMap::new();
+        let mut used_workspaces: BTreeSet<String> = BTreeSet::new();
         for spec in &registered.spec.args {
             let Some(value) = request.args.get(&spec.name) else {
                 if spec.required {
@@ -336,24 +382,59 @@ impl CommandRegistry {
             };
             value_matches_type(&spec.name, value, &spec.value_type)?;
             if let Some(workspace_name) = &spec.workspace {
-                let workspace = self.workspaces.get(workspace_name).ok_or_else(|| {
-                    FrameworkError::WorkspaceMismatch {
+                if !self.workspaces.contains_key(workspace_name) {
+                    return Err(FrameworkError::WorkspaceMismatch {
                         argument: spec.name.clone(),
                         workspace: workspace_name.clone(),
-                    }
-                })?;
+                        selected_root: None,
+                        path: None,
+                        diagnostics: Vec::new(),
+                    });
+                }
                 let value = value.as_str().ok_or_else(|| {
                     FrameworkError::InvalidArgumentType(
                         spec.name.clone(),
                         spec.value_type.expected_name(),
                     )
                 })?;
-                if !workspace.contains_path_value(value) {
+                let workspace_id =
+                    mcp_workspace_resolver::WorkspaceId::from(workspace_name.as_str());
+                let Some(root) = resolved.root(&workspace_id) else {
+                    // Resolution failed for this requirement: surface the
+                    // resolver diagnostics that explain why.
+                    let diagnostics = resolved
+                        .diagnostics
+                        .iter()
+                        .filter(|diagnostic| {
+                            diagnostic
+                                .requirement
+                                .as_ref()
+                                .is_none_or(|id| id == &workspace_id)
+                        })
+                        .cloned()
+                        .collect();
                     return Err(FrameworkError::WorkspaceMismatch {
                         argument: spec.name.clone(),
                         workspace: workspace_name.clone(),
+                        selected_root: None,
+                        path: Some(value.to_string()),
+                        diagnostics,
+                    });
+                };
+                let contained = normalize_file_uri(&root.root_uri)
+                    .ok()
+                    .zip(normalize_file_uri(value).ok())
+                    .is_some_and(|(root, candidate)| path_has_prefix(&candidate, &root));
+                if !contained {
+                    return Err(FrameworkError::WorkspaceMismatch {
+                        argument: spec.name.clone(),
+                        workspace: workspace_name.clone(),
+                        selected_root: Some(root.root_uri.clone()),
+                        path: Some(value.to_string()),
+                        diagnostics: Vec::new(),
                     });
                 }
+                used_workspaces.insert(workspace_name.clone());
             }
             bound_args.insert(
                 spec.name.clone(),
@@ -381,6 +462,12 @@ impl CommandRegistry {
             .collect();
         let output = request.output.clone().unwrap_or_default();
         let workspaces = self.workspaces.values().cloned().collect::<Vec<_>>();
+        let workspace_roots: Vec<crate::PlanWorkspaceRoot> = resolved
+            .roots
+            .iter()
+            .filter(|root| used_workspaces.contains(root.id.as_str()))
+            .map(crate::PlanWorkspaceRoot::from)
+            .collect();
         let stdin_fingerprint = request.stdin.as_ref().map(|stdin| {
             json!({
                 "mimeType": stdin.mime_type,
@@ -400,6 +487,8 @@ impl CommandRegistry {
             "lane": operation.lane(),
             "permissions": &registered.spec.permissions,
             "workspaces": &workspaces,
+            // Selected roots bind approvals to the roots that were previewed.
+            "workspaceRoots": &workspace_roots,
             "output": &output,
         }));
 
@@ -415,12 +504,20 @@ impl CommandRegistry {
             bound_args,
             permissions: registered.spec.permissions.clone(),
             workspaces,
+            workspace_roots,
             output,
         })
     }
 
     pub async fn run(&self, request: RunRequest) -> Result<RunResponse> {
-        self.run_with_lane(request, None, None, None).await
+        self.run_with_lane(
+            request,
+            None,
+            None,
+            None,
+            &self.resolve_declared_workspaces(),
+        )
+        .await
     }
 
     pub async fn run_in_lane(
@@ -435,6 +532,27 @@ impl CommandRegistry {
             Some(current_tool.into()),
             Some(lane),
             Some(primary_tool_name.as_ref().to_string()),
+            &self.resolve_declared_workspaces(),
+        )
+        .await
+    }
+
+    /// Like [`run_in_lane`](Self::run_in_lane), but plans against
+    /// pre-resolved workspace roots gathered by the caller.
+    pub async fn run_in_lane_with_workspaces(
+        &self,
+        request: RunRequest,
+        current_tool: impl Into<String>,
+        lane: EffectLane,
+        primary_tool_name: impl AsRef<str>,
+        resolved: &ResolvedWorkspaceSet,
+    ) -> Result<RunResponse> {
+        self.run_with_lane(
+            request,
+            Some(current_tool.into()),
+            Some(lane),
+            Some(primary_tool_name.as_ref().to_string()),
+            resolved,
         )
         .await
     }
@@ -445,8 +563,9 @@ impl CommandRegistry {
         current_tool: Option<String>,
         current_lane: Option<EffectLane>,
         primary_tool_name: Option<String>,
+        resolved: &ResolvedWorkspaceSet,
     ) -> Result<RunResponse> {
-        let plan = self.build_plan(&request)?;
+        let plan = self.build_plan_with_workspaces(&request, resolved)?;
         if let Some(current_lane) = current_lane {
             if plan.lane != current_lane {
                 let required_tool = self
