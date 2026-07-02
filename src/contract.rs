@@ -37,12 +37,25 @@ pub fn check_discovery(registry: &CommandRegistry) -> Vec<ContractViolation> {
     for operation in registry.operation_specs() {
         let name = operation.name();
         let resource_uri = format!("cli://commands/{}", operation.path.join("/"));
-        if registry.resource_text(&resource_uri).is_none() {
-            violations.push(violation(
-                Some(&operation.id),
-                "resources",
-                format!("`{name}` has no `{resource_uri}` resource"),
-            ));
+        // resource_text returns unknown-command error text rather than None for
+        // a drifted path, so validate the content is this command's usage text.
+        let usage_header = format!("# `{name}`");
+        match registry.resource_text(&resource_uri) {
+            Some(text) if text.contains(&usage_header) => {}
+            Some(_) => {
+                violations.push(violation(
+                    Some(&operation.id),
+                    "resources",
+                    format!("`{resource_uri}` does not render usage text for `{name}`"),
+                ));
+            }
+            None => {
+                violations.push(violation(
+                    Some(&operation.id),
+                    "resources",
+                    format!("`{name}` has no `{resource_uri}` resource"),
+                ));
+            }
         }
         let help = registry.help(HelpRequest {
             command: Some(name.clone()),
@@ -74,7 +87,9 @@ pub fn check_required_arguments(registry: &CommandRegistry) -> Vec<ContractViola
             detail: None,
         });
         for arg in operation.args.iter().filter(|arg| arg.required) {
-            if !help.text.contains(&format!("$args.{}", arg.name)) {
+            // Match the exact rendered token from arguments_text, including the
+            // closing backtick, so `foo` does not match a `foo2` line.
+            if !help.text.contains(&format!("`$args.{}`", arg.name)) {
                 violations.push(violation(
                     Some(&operation.id),
                     "help",

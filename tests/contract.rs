@@ -44,6 +44,51 @@ fn aggregate_coverage_is_clean() {
 }
 
 #[test]
+fn resource_content_drift_is_a_violation() {
+    // A path segment containing a slash produces a resource URI that resolves
+    // to the wrong command, so the resource renders unknown-command text
+    // instead of usage text. Presence-only checking cannot see this.
+    let reg = CommandRegistry::new("contract-test", "Contract test server").register(
+        CommandSpec::new(["issues/create"], "Create issue", "Create issue").with_permission(
+            PermissionSpec::new(PermissionEffect::Write, "issues", "Creates issues"),
+        ),
+        |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
+    );
+    let violations = contract::check_discovery(&reg);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.projection == "resources"
+                && violation.message.contains("does not render usage text")),
+        "{violations:?}"
+    );
+}
+
+#[test]
+fn argument_check_requires_the_exact_token() {
+    // Guard the format assumption behind token-exact matching: `foo` must not
+    // be satisfied by a `foo2` line.
+    let reg = CommandRegistry::new("contract-test", "Contract test server").register(
+        CommandSpec::new(["notes", "add"], "Add note", "Add note")
+            .with_arg(ArgSpec::string("foo2", "Note text"))
+            .with_permission(PermissionSpec::new(
+                PermissionEffect::Write,
+                "notes",
+                "Writes notes",
+            )),
+        |_context| async { Ok(CommandOutput::structured(json!({}))) },
+    );
+    let help = reg.help(mcp_twill::HelpRequest {
+        command: Some("notes add".to_string()),
+        topic: Some(mcp_twill::HelpTopic::Arguments),
+        detail: None,
+    });
+    assert!(help.text.contains("`$args.foo2`"), "{}", help.text);
+    assert!(!help.text.contains("`$args.foo`:"), "{}", help.text);
+    assert!(contract::check_required_arguments(&reg).is_empty());
+}
+
+#[test]
 fn missing_example_for_required_args_is_a_violation() {
     let reg = CommandRegistry::new("contract-test", "Contract test server").register(
         CommandSpec::new(["issues", "create"], "Create issue", "Create issue")
