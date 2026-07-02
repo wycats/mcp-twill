@@ -84,6 +84,27 @@ fn non_file_scheme_is_rejected() {
 }
 
 #[test]
+fn unc_file_uri_preserves_host_semantics() {
+    let unc = normalize_file_uri("file://server/share/repo").expect("unc uri");
+    assert_eq!(unc.host(), Some("server"));
+    // The share path is not a POSIX absolute path on the local machine.
+    let local = normalize_path("/server/share/repo");
+    assert!(!paths_equal(&unc, &local));
+    // UNC paths compare against equivalent UNC paths, case-insensitively.
+    let path_form = normalize_path(r"\\SERVER\Share\repo");
+    assert!(paths_equal(&unc, &path_form));
+    // Different hosts never contain each other.
+    let other_host = normalize_file_uri("file://other/share/repo").expect("unc uri");
+    assert!(!path_has_prefix(&unc, &other_host));
+}
+
+#[test]
+fn localhost_file_uri_is_a_local_path() {
+    let uri = normalize_file_uri("file://localhost/workspace/project").expect("localhost uri");
+    assert!(paths_equal(&uri, &normalize_path("/workspace/project")));
+}
+
+#[test]
 fn dot_segments_resolve_lexically() {
     let a = normalize_path("/workspace/./project/../project/src");
     let b = normalize_path("/workspace/project/src");

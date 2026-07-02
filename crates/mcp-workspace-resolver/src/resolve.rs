@@ -144,7 +144,7 @@ fn resolve_requirement_from_roots(
             match_by_name_or_alias(requirement, file_roots)
         }
         WorkspaceSelection::ExplicitUri { uri } => {
-            match match_by_uri(uri, file_roots) {
+            match match_by_uri(&requirement.id, uri, file_roots) {
                 Ok(matches) => matches,
                 Err(diagnostic) => {
                     set.diagnostics.push(diagnostic);
@@ -236,11 +236,16 @@ fn match_by_name_or_alias<'a>(
 }
 
 fn match_by_uri<'a>(
+    requirement: &crate::WorkspaceId,
     configured_uri: &str,
     file_roots: &'a [FileRoot<'a>],
 ) -> Result<Vec<(&'a FileRoot<'a>, WorkspaceSelectionReason)>, WorkspaceDiagnostic> {
     let configured = normalize_file_uri(configured_uri).map_err(|err| {
-        WorkspaceDiagnostic::unsupported_scheme(None, err.to_string(), configured_uri.to_string())
+        WorkspaceDiagnostic::unsupported_scheme(
+            Some(requirement.clone()),
+            err.to_string(),
+            configured_uri.to_string(),
+        )
     })?;
 
     Ok(file_roots
@@ -281,6 +286,13 @@ fn resolve_from_codex(
                         Some(requirement.id.clone()),
                         err.to_string(),
                         uri.clone(),
+                    ));
+                    set.diagnostics.push(WorkspaceDiagnostic::unresolved(
+                        requirement.id.clone(),
+                        format!(
+                            "workspace requirement `{}` has a non-file configured URI",
+                            requirement.id
+                        ),
                     ));
                     continue;
                 }
@@ -325,6 +337,13 @@ fn resolve_from_declared(
                         err.to_string(),
                         root.uri.clone(),
                     ));
+                    set.diagnostics.push(WorkspaceDiagnostic::unresolved(
+                        requirement.id.clone(),
+                        format!(
+                            "declared workspace root for `{}` has a non-file URI",
+                            requirement.id
+                        ),
+                    ));
                     continue;
                 }
                 set.roots.push(ResolvedWorkspaceRoot {
@@ -342,6 +361,13 @@ fn resolve_from_declared(
                             Some(requirement.id.clone()),
                             err.to_string(),
                             fallback.uri.clone(),
+                        ));
+                        set.diagnostics.push(WorkspaceDiagnostic::unresolved(
+                            requirement.id.clone(),
+                            format!(
+                                "declared fallback for `{}` has a non-file URI",
+                                requirement.id
+                            ),
                         ));
                         continue;
                     }

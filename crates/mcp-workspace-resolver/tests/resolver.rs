@@ -238,6 +238,32 @@ fn non_file_uri_root_produces_unsupported_scheme_diagnostic() {
 }
 
 #[test]
+fn non_file_declared_root_pairs_scheme_and_unresolved_diagnostics() {
+    let requirements = [requirement("repo")];
+    let observations = WorkspaceObservationSet::new()
+        .with_declared(DeclaredWorkspaceRoot::new("repo", "https://example.com/repo"));
+
+    let resolved = resolve_workspaces(&requirements, &observations);
+
+    assert!(resolved.roots.is_empty());
+    let scheme = resolved
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == UNSUPPORTED_ROOT_SCHEME)
+        .expect("scheme diagnostic");
+    assert_eq!(scheme.requirement, Some("repo".into()));
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == UNRESOLVED_WORKSPACE_REQUIREMENT
+                && diagnostic.requirement == Some("repo".into())),
+        "requirement is also unresolved: {:?}",
+        resolved.diagnostics
+    );
+}
+
+#[test]
 fn explicit_uri_selection_matches_equivalent_path() {
     let requirements = [requirement("repo").with_selection(WorkspaceSelection::ExplicitUri {
         uri: "file:///workspace/./project/".into(),

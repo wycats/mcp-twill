@@ -19,10 +19,11 @@ pub struct UnsupportedRootScheme {
 }
 
 /// A lexically normalized path: separators unified, `.`/`..` resolved, with
-/// an optional Windows drive prefix.
+/// an optional Windows drive prefix or UNC host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NormalizedPath {
     drive: Option<char>,
+    host: Option<String>,
     absolute: bool,
     components: Vec<String>,
 }
@@ -31,6 +32,11 @@ impl NormalizedPath {
     /// The Windows drive letter, if the input was a drive-letter path.
     pub fn drive(&self) -> Option<char> {
         self.drive
+    }
+
+    /// The UNC or `file://` authority host, if the input named one.
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
     }
 
     pub fn is_absolute(&self) -> bool {
@@ -42,7 +48,8 @@ impl NormalizedPath {
     }
 
     fn case_insensitive(&self) -> bool {
-        self.drive.is_some()
+        // Drive-letter and UNC network paths are Windows path shapes.
+        self.drive.is_some() || self.host.is_some()
     }
 }
 
@@ -51,6 +58,19 @@ impl NormalizedPath {
 /// touching the filesystem.
 pub fn normalize_path(value: &str) -> NormalizedPath {
     let unified = value.replace('\\', "/");
+
+    // UNC network path: //server/share/... names a host.
+    if let Some(rest) = unified.strip_prefix("//")
+        && !rest.starts_with('/')
+        && let Some((host, share_path)) = rest.split_once('/')
+        && !host.is_empty()
+    {
+        let mut normalized = normalize_relative(share_path);
+        normalized.host = Some(host.to_string());
+        normalized.absolute = true;
+        return normalized;
+    }
+
     let bytes = unified.as_bytes();
 
     let (drive, rest) = if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
@@ -79,7 +99,28 @@ pub fn normalize_path(value: &str) -> NormalizedPath {
 
     NormalizedPath {
         drive,
+        host: None,
         absolute,
+        components,
+    }
+}
+
+/// Normalizes a path fragment with no drive or host context.
+fn normalize_relative(value: &str) -> NormalizedPath {
+    let mut components: Vec<String> = Vec::new();
+    for part in value.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            other => components.push(other.to_string()),
+        }
+    }
+    NormalizedPath {
+        drive: None,
+        host: None,
+        absolute: false,
         components,
     }
 }
@@ -92,21 +133,30 @@ pub fn normalize_file_uri(value: &str) -> Result<NormalizedPath, UnsupportedRoot
     match parse_scheme(value) {
         Some(scheme) if scheme.eq_ignore_ascii_case("file") => {
             let after_scheme = &value[scheme.len() + 1..];
-            let path = after_scheme
-                .strip_prefix("//")
-                .unwrap_or(after_scheme);
-            // `file:///C:/repo` yields `/C:/repo`; drop the slash before the drive.
-            let bytes = path.as_bytes();
-            let path = if bytes.len() >= 3
-                && bytes[0] == b'/'
-                && bytes[1].is_ascii_alphabetic()
-                && bytes[2] == b':'
-            {
-                &path[1..]
-            } else {
-                path
+            let Some(after_slashes) = after_scheme.strip_prefix("//") else {
+                return Ok(normalize_path(after_scheme));
             };
-            Ok(normalize_path(path))
+            // A non-empty authority before the next `/` is a host:
+            // file://server/share is a UNC location, not /server/share.
+            // `localhost` is equivalent to an empty authority (RFC 8089).
+            let (host, path) = match after_slashes.split_once('/') {
+                Some((authority, rest)) if !authority.is_empty() => (authority, rest),
+                _ => ("", after_slashes.trim_start_matches('/')),
+            };
+            if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+                let mut normalized = normalize_relative(path);
+                normalized.host = Some(host.to_string());
+                normalized.absolute = true;
+                return Ok(normalized);
+            }
+            // `file:///C:/repo` yields `C:/repo` after the strip above; a
+            // bare `path` here is the absolute POSIX path without its slash.
+            let bytes = path.as_bytes();
+            if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+                Ok(normalize_path(path))
+            } else {
+                Ok(normalize_path(&format!("/{path}")))
+            }
         }
         Some(scheme) => Err(UnsupportedRootScheme {
             scheme: scheme.to_string(),
@@ -149,6 +199,16 @@ pub fn path_has_prefix(candidate: &NormalizedPath, root: &NormalizedPath) -> boo
     match (candidate.drive, root.drive) {
         (Some(a), Some(b)) => {
             if !a.eq_ignore_ascii_case(&b) {
+                return false;
+            }
+        }
+        (None, None) => {}
+        _ => return false,
+    }
+
+    match (&candidate.host, &root.host) {
+        (Some(a), Some(b)) => {
+            if !a.eq_ignore_ascii_case(b) {
                 return false;
             }
         }
