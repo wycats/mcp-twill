@@ -188,6 +188,9 @@ fn builder_registry() -> CommandRegistry {
     .unwrap()
 }
 
+// The example-server catalog shape must satisfy the generated contract rules.
+mcp_twill::contract_tests!(builder_registry);
+
 #[test]
 fn builder_catalog_matches_equivalent_explicit_specs() {
     assert_eq!(
