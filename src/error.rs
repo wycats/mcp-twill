@@ -27,6 +27,8 @@ pub enum FrameworkError {
     InvalidArgumentType(String, &'static str),
     #[error("path argument `{argument}` is outside declared workspace `{workspace}`")]
     WorkspaceMismatch { argument: String, workspace: String },
+    #[error("stdin mismatch: {0}")]
+    StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]
     PermissionDenied { effect: String, scope: String },
     #[error("approval invalid: {0}")]

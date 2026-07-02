@@ -576,6 +576,102 @@ fn external_shell_guidance_is_excluded_from_command_validation() {
 }
 
 #[test]
+fn run_command_guidance_must_include_required_arguments() {
+    let error = registry()
+        .declare_guidance(mcp_twill::CommandGuidance::run_command(
+            "missing-body",
+            "getting-started",
+            "issues create --title $args.title",
+        ))
+        .validate_guidance()
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("omits required argument `body`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn stdin_is_rejected_for_commands_without_a_contract() {
+    let error = registry()
+        .build_plan(&RunRequest {
+            stdin: Some(mcp_twill::StdinSpec {
+                text: "hello".to_string(),
+                mime_type: None,
+            }),
+            ..request(
+                "issues create --title $args.title --body $args.body",
+                json!({ "title": "x", "body": "y" }),
+            )
+        })
+        .unwrap_err();
+    assert!(
+        matches!(error, FrameworkError::StdinMismatch(_)),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn stdin_mime_type_must_match_the_declared_contract() {
+    let spec = create_issue_spec().with_stdin(mcp_twill::StdinContract {
+        mime_type: "text/markdown".to_string(),
+        summary: "Issue body as markdown".to_string(),
+    });
+    let reg = CommandRegistry::new("test", "test server").register(spec, |_context| async {
+        Ok(CommandOutput::structured(json!({ "id": 1 })))
+    });
+    let base = request(
+        "issues create --title $args.title --body $args.body",
+        json!({ "title": "x", "body": "y" }),
+    );
+
+    let error = reg
+        .build_plan(&RunRequest {
+            stdin: Some(mcp_twill::StdinSpec {
+                text: "hello".to_string(),
+                mime_type: Some("application/json".to_string()),
+            }),
+            ..base.clone()
+        })
+        .unwrap_err();
+    assert!(
+        matches!(error, FrameworkError::StdinMismatch(_)),
+        "{error:?}"
+    );
+
+    reg.build_plan(&RunRequest {
+        stdin: Some(mcp_twill::StdinSpec {
+            text: "hello".to_string(),
+            mime_type: Some("text/markdown".to_string()),
+        }),
+        ..base.clone()
+    })
+    .unwrap();
+
+    reg.build_plan(&RunRequest {
+        stdin: Some(mcp_twill::StdinSpec {
+            text: "hello".to_string(),
+            mime_type: None,
+        }),
+        ..base
+    })
+    .unwrap();
+}
+
+#[test]
+fn help_for_unknown_commands_surfaces_nearest_alternatives() {
+    let help = registry().help(HelpRequest {
+        command: Some("issues creat".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(help.text.contains("Did you mean:"), "{}", help.text);
+    assert!(help.text.contains("`issues create`"), "{}", help.text);
+    assert_eq!(help.structured["nearest"], json!(["issues create"]));
+}
+
+#[test]
 fn guidance_appears_in_server_help_and_catalog_identity() {
     let reg = registry()
         .declare_guidance(mcp_twill::CommandGuidance::run_command(

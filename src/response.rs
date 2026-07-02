@@ -33,6 +33,7 @@ pub enum ErrorCode {
     MissingArgument,
     InvalidArgumentType,
     WorkspaceMismatch,
+    StdinMismatch,
     WrongEffectLane,
     PermissionRequired,
     PermissionDenied,
@@ -54,6 +55,7 @@ impl ErrorCode {
             FrameworkError::MissingArgument(_) => Self::MissingArgument,
             FrameworkError::InvalidArgumentType(_, _) => Self::InvalidArgumentType,
             FrameworkError::WorkspaceMismatch { .. } => Self::WorkspaceMismatch,
+            FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
             FrameworkError::WrongEffectLane { .. } => Self::WrongEffectLane,
@@ -379,6 +381,7 @@ fn error_details(error: &FrameworkError) -> Value {
             argument,
             workspace,
         } => json!({ "argument": argument, "workspace": workspace }),
+        FrameworkError::StdinMismatch(reason) => json!({ "reason": reason }),
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
         }

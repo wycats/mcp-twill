@@ -143,6 +143,33 @@ impl ClientHandler for TestClient {
 }
 
 #[tokio::test]
+async fn getting_started_prompt_includes_declared_guidance() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(registry().declare_guidance(
+        mcp_twill::CommandGuidance::run_command(
+            "quickstart",
+            "getting-started",
+            "issues list",
+        ),
+    ))?;
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClient::new().serve(client_transport).await?;
+    let prompt = client
+        .get_prompt(GetPromptRequestParams::new("getting_started"))
+        .await?;
+    let text = serde_json::to_string(&prompt)?;
+    assert!(text.contains("Guidance:"), "{text}");
+    assert!(text.contains("issues list"), "{text}");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_exposes_two_tools_and_resources_prompts() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
     let server = CliMcpServer::new(registry())?;

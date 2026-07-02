@@ -255,6 +255,17 @@ impl CommandRegistry {
                     )));
                 }
             }
+            let placeholders: BTreeSet<_> = template.placeholders().into_iter().collect();
+            for arg in &registered.spec.args {
+                if arg.required && !placeholders.contains(arg.name.as_str()) {
+                    return Err(FrameworkError::Build(format!(
+                        "guidance `{}` omits required argument `{}` of `{}`; the guidance would fail planning",
+                        guidance.id,
+                        arg.name,
+                        registered.spec.name()
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -269,6 +280,27 @@ impl CommandRegistry {
                 })?;
         let operation = OperationSpec::from_command_spec(&registered.spec);
         let identity = self.catalog_identity();
+
+        match (&registered.spec.stdin, &request.stdin) {
+            (None, Some(_)) => {
+                return Err(FrameworkError::StdinMismatch(format!(
+                    "`{}` does not accept stdin",
+                    registered.spec.name()
+                )));
+            }
+            (Some(contract), Some(stdin)) => {
+                if let Some(mime_type) = &stdin.mime_type
+                    && mime_type != &contract.mime_type
+                {
+                    return Err(FrameworkError::StdinMismatch(format!(
+                        "`{}` accepts {} stdin, got {mime_type}",
+                        registered.spec.name(),
+                        contract.mime_type
+                    )));
+                }
+            }
+            _ => {}
+        }
 
         let referenced: BTreeSet<_> = template
             .placeholders()
@@ -601,10 +633,25 @@ impl CommandRegistry {
                 command: command.to_string(),
                 nearest: self.nearest_commands(&tokens),
             };
+            let mut text = error.to_string();
+            if let FrameworkError::UnknownCommand { nearest, .. } = &error
+                && !nearest.is_empty()
+            {
+                text.push_str("\n\nDid you mean:\n");
+                for candidate in nearest {
+                    text.push_str(&format!("- `{candidate}`\n"));
+                }
+            }
+            let mut structured = structured_error(&error);
+            if let FrameworkError::UnknownCommand { nearest, .. } = &error
+                && let Some(map) = structured.as_object_mut()
+            {
+                map.insert("nearest".to_string(), json!(nearest));
+            }
             return HelpResult {
                 title: "Unknown command".to_string(),
-                text: error.to_string(),
-                structured: structured_error(&error),
+                text,
+                structured,
             };
         };
 
