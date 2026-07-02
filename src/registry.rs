@@ -261,12 +261,12 @@ impl CommandRegistry {
 
     pub fn build_plan(&self, request: &RunRequest) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
-        let registered = self.match_command(&template).ok_or_else(|| {
-            FrameworkError::UnknownCommand {
-                command: request.command.clone(),
-                nearest: self.nearest_commands(&template.literal_prefix()),
-            }
-        })?;
+        let registered =
+            self.match_command(&template)
+                .ok_or_else(|| FrameworkError::UnknownCommand {
+                    command: request.command.clone(),
+                    nearest: self.nearest_commands(&template.literal_prefix()),
+                })?;
         let operation = OperationSpec::from_command_spec(&registered.spec);
         let identity = self.catalog_identity();
 
@@ -435,13 +435,12 @@ impl CommandRegistry {
         }
 
         self.policy.check(&plan.permissions)?;
-        let registered = self
-            .commands
-            .get(&plan.command_path)
-            .ok_or_else(|| FrameworkError::UnknownCommand {
+        let registered = self.commands.get(&plan.command_path).ok_or_else(|| {
+            FrameworkError::UnknownCommand {
                 command: plan.command_path.join(" "),
                 nearest: Vec::new(),
-            })?;
+            }
+        })?;
 
         let output = registered
             .handler
@@ -519,11 +518,14 @@ impl CommandRegistry {
         }
 
         if scored.is_empty() {
-            let namespace = requested[0].as_ref();
+            let namespace = requested[0].as_ref().to_lowercase();
             scored.extend(
                 self.commands
                     .keys()
-                    .filter(|path| path.first().is_some_and(|first| first == namespace))
+                    .filter(|path| {
+                        path.first()
+                            .is_some_and(|first| first.to_lowercase() == namespace)
+                    })
                     .map(|path| (0, path.join(" "))),
             );
         }

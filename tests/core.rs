@@ -510,6 +510,17 @@ fn unknown_commands_fall_back_to_namespace_alternatives() {
 }
 
 #[test]
+fn namespace_fallback_is_case_insensitive() {
+    let error = registry()
+        .build_plan(&request("Issues synchronize-everything", json!({})))
+        .unwrap_err();
+    let FrameworkError::UnknownCommand { nearest, .. } = &error else {
+        panic!("expected unknown command, got {error:?}");
+    };
+    assert_eq!(nearest, &vec!["issues create".to_string()]);
+}
+
+#[test]
 fn unknown_commands_without_candidates_have_no_alternatives() {
     let error = registry()
         .build_plan(&request("zap blorp", json!({})))
