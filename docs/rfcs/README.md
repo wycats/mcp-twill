@@ -44,7 +44,7 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 - [RFC 0004: Runtime Maturity, Workspace Identity, Events, And Contract Tests](stage-1/0004-runtime-workspace-contracts.md)
 - [RFC 0005: Effect-Lane Tool Surface](stage-4/0005-effect-lane-tool-surface.md)
 - [RFC 0006: Author Ergonomics](stage-4/0006-author-ergonomics.md)
-- [RFC 0007: Workspace Resolution Crate](stage-1/0007-workspace-resolution-crate.md)
+- [RFC 0007: Workspace Resolution Crate](stage-4/0007-workspace-resolution-crate.md)
 
 ## Suggested Implementation Order
 
