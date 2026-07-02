@@ -171,6 +171,10 @@ pub struct PermissionPreview {
     pub lane: crate::EffectLane,
     pub permissions: Vec<PermissionSpec>,
     pub workspaces: Vec<WorkspaceDecl>,
+    /// The workspace roots this invocation actually planned against — the
+    /// roots the approval token binds to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<crate::PlanWorkspaceRoot>,
     pub output: OutputSpec,
     pub confirmation_policy: ConfirmationPolicy,
     pub requires_confirmation: bool,
@@ -456,6 +460,7 @@ fn permission_preview(plan: &InvocationPlan, requires_confirmation: bool) -> Per
         lane: plan.lane,
         permissions: plan.permissions.clone(),
         workspaces: plan.workspaces.clone(),
+        workspace_roots: plan.workspace_roots.clone(),
         output: plan.output.clone(),
         confirmation_policy: ConfirmationPolicy::EffectDefault,
         requires_confirmation,

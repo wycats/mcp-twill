@@ -196,11 +196,18 @@ impl WorkspaceDecl {
 
     /// Projects this declaration into a resolver workspace requirement: the
     /// requirement id is the declared name and the declared URI becomes the
-    /// fallback root. Single-root clients satisfy the requirement even when
-    /// their root name does not match.
-    pub fn requirement(&self) -> WorkspaceRequirement {
+    /// fallback root. `sole_workspace` grants the single-root convenience
+    /// (a lone client root satisfies the requirement without a name match);
+    /// it must be true only when this is the server's only declared
+    /// workspace, otherwise one client root would satisfy every requirement.
+    pub fn requirement(&self, sole_workspace: bool) -> WorkspaceRequirement {
+        let selection = if sole_workspace {
+            WorkspaceSelection::PrimaryWhenSingleRoot
+        } else {
+            WorkspaceSelection::ByNameOrAlias
+        };
         WorkspaceRequirement::new(self.name.clone())
-            .with_selection(WorkspaceSelection::PrimaryWhenSingleRoot)
+            .with_selection(selection)
             .with_fallback(self.declared_root())
     }
 }

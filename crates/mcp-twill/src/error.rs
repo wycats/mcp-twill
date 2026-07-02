@@ -25,7 +25,7 @@ pub enum FrameworkError {
     MissingArgument(String),
     #[error("argument `{0}` must be {1}")]
     InvalidArgumentType(String, &'static str),
-    #[error("path argument `{argument}` is outside declared workspace `{workspace}`")]
+    #[error("{}", workspace_mismatch_message(argument, workspace, selected_root, diagnostics))]
     WorkspaceMismatch {
         argument: String,
         workspace: String,
@@ -53,4 +53,30 @@ pub enum FrameworkError {
     Build(String),
     #[error("command handler failed: {0}")]
     Handler(String),
+}
+
+/// A boundary failure and a resolution failure are different causes and get
+/// different top-level messages; the structured diagnostics carry the detail.
+fn workspace_mismatch_message(
+    argument: &str,
+    workspace: &str,
+    selected_root: &Option<String>,
+    diagnostics: &[mcp_workspace_resolver::WorkspaceDiagnostic],
+) -> String {
+    match selected_root {
+        Some(root) => {
+            format!("path argument `{argument}` is outside workspace `{workspace}` root `{root}`")
+        }
+        None if !diagnostics.is_empty() => format!(
+            "workspace `{workspace}` for path argument `{argument}` could not be resolved: {}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+        None => format!(
+            "workspace `{workspace}` for path argument `{argument}` could not be resolved"
+        ),
+    }
 }

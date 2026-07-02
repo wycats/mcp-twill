@@ -354,8 +354,15 @@ impl CliMcpServer {
         let client_declares_roots = client
             .peer_info()
             .is_some_and(|info| info.capabilities.roots.is_some());
-        if client_declares_roots && let Ok(result) = client.list_roots().await {
-            observations = observations.with_mcp_roots(McpRootsObservation::from(result));
+        if client_declares_roots {
+            // The client's roots are the access boundary. If listing them
+            // fails, treat the observation as present-and-empty: requirements
+            // stay unresolved rather than widening to declared roots.
+            let roots = match client.list_roots().await {
+                Ok(result) => McpRootsObservation::from(result),
+                Err(_) => McpRootsObservation::new(Vec::new()),
+            };
+            observations = observations.with_mcp_roots(roots);
         }
 
         if let Some(codex) = codex_sandbox_observation(meta) {

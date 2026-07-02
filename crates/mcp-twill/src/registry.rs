@@ -278,11 +278,15 @@ impl CommandRegistry {
         self.build_plan_with_workspaces(request, &self.resolve_declared_workspaces())
     }
 
-    /// Projects every declared workspace into a resolver requirement.
+    /// Projects every declared workspace into a resolver requirement. The
+    /// single-root convenience selection applies only when exactly one
+    /// workspace is declared; with several, each must match by name so one
+    /// client root cannot satisfy unrelated requirements.
     pub fn workspace_requirements(&self) -> Vec<WorkspaceRequirement> {
+        let sole = self.workspaces.len() == 1;
         self.workspaces
             .values()
-            .map(WorkspaceDecl::requirement)
+            .map(|decl| decl.requirement(sole))
             .collect()
     }
 
@@ -421,10 +425,28 @@ impl CommandRegistry {
                         diagnostics,
                     });
                 };
-                let contained = normalize_file_uri(&root.root_uri)
-                    .ok()
-                    .zip(normalize_file_uri(value).ok())
-                    .is_some_and(|(root, candidate)| path_has_prefix(&candidate, &root));
+                let contained = match (normalize_file_uri(&root.root_uri), normalize_file_uri(value))
+                {
+                    (Ok(root_path), Ok(candidate)) => path_has_prefix(&candidate, &root_path),
+                    (_, Err(err)) => {
+                        // The path argument itself has a non-file scheme:
+                        // surface the resolver's actionable code.
+                        return Err(FrameworkError::WorkspaceMismatch {
+                            argument: spec.name.clone(),
+                            workspace: workspace_name.clone(),
+                            selected_root: Some(root.root_uri.clone()),
+                            path: Some(value.to_string()),
+                            diagnostics: vec![
+                                mcp_workspace_resolver::WorkspaceDiagnostic::unsupported_scheme(
+                                    Some(workspace_id.clone()),
+                                    err.to_string(),
+                                    value.to_string(),
+                                ),
+                            ],
+                        });
+                    }
+                    (Err(_), _) => false,
+                };
                 if !contained {
                     return Err(FrameworkError::WorkspaceMismatch {
                         argument: spec.name.clone(),

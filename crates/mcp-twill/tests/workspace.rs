@@ -19,7 +19,7 @@ use serde_json::json;
 fn request(command: &str, args: serde_json::Value) -> RunRequest {
     RunRequest {
         command: command.to_string(),
-        args: serde_json::from_value(args).unwrap_or_else(|_| BTreeMap::new()),
+        args: serde_json::from_value(args).expect("test args must be a JSON object of values"),
         stdin: None,
         output: None,
         mode: mcp_twill::RunMode::Execute,
@@ -226,5 +226,103 @@ fn fingerprint_changes_when_selected_root_changes() {
     assert_ne!(
         declared_plan.invocation_fingerprint,
         client_plan.invocation_fingerprint
+    );
+}
+
+// A single client root must not satisfy unrelated workspace requirements
+// when several workspaces are declared.
+#[test]
+fn single_client_root_does_not_satisfy_unrelated_workspaces() {
+    let registry = CommandRegistry::new("multi-workspace", "Multi-workspace server")
+        .declare_workspace(WorkspaceDecl::file("repo", "file:///workspace/repo"))
+        .declare_workspace(WorkspaceDecl::file("secrets", "file:///workspace/secrets"))
+        .register(
+            CommandSpec::new(["secrets", "read"], "Read secret", "Reads a secret file.")
+                .with_arg(ArgSpec::path("path", "Secret to read", "secrets"))
+                .with_permission(PermissionSpec::read("secrets", "Reads secrets")),
+            |_context| async { Ok(CommandOutput::structured(json!({}))) },
+        );
+
+    let observations = registry
+        .declared_observations()
+        .with_mcp_roots(McpRootsObservation::new(vec![
+            McpRoot::new("file:///workspace/repo").with_name("repo"),
+        ]));
+    let resolved = resolve_workspaces(&registry.workspace_requirements(), &observations);
+
+    // The lone `repo` client root must not resolve `secrets`, and the secrets
+    // path must not be accepted under the repo root.
+    let error = registry
+        .build_plan_with_workspaces(
+            &request(
+                "secrets read $args.path",
+                json!({"path": "file:///workspace/repo/leaked"}),
+            ),
+            &resolved,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, FrameworkError::WorkspaceMismatch { .. }),
+        "{error:?}"
+    );
+}
+
+// Roots capability + failed roots/list must not widen access to declared roots.
+// The adapter maps a failed list to an empty (authoritative) observation;
+// planning with an empty roots observation must leave requirements unresolved.
+#[test]
+fn empty_roots_observation_blocks_declared_fallback() {
+    let registry = registry();
+    let observations = registry
+        .declared_observations()
+        .with_mcp_roots(McpRootsObservation::new(Vec::new()));
+    let resolved = resolve_workspaces(&registry.workspace_requirements(), &observations);
+
+    let error = registry
+        .build_plan_with_workspaces(
+            &request(
+                "files read $args.path",
+                json!({"path": "file:///workspace/repo/src/lib.rs"}),
+            ),
+            &resolved,
+        )
+        .unwrap_err();
+    let FrameworkError::WorkspaceMismatch {
+        selected_root,
+        diagnostics,
+        ..
+    } = &error
+    else {
+        panic!("expected workspace mismatch, got {error:?}");
+    };
+    assert!(selected_root.is_none());
+    assert!(
+        !diagnostics.is_empty(),
+        "resolver diagnostics explain the unresolved requirement"
+    );
+    assert!(
+        error.to_string().contains("could not be resolved"),
+        "resolution failure has its own message: {error}"
+    );
+}
+
+// A non-file path argument surfaces the resolver's unsupported-scheme code.
+#[test]
+fn non_file_path_argument_gets_unsupported_scheme_diagnostic() {
+    let registry = registry();
+    let error = registry
+        .build_plan(&request(
+            "files read $args.path",
+            json!({"path": "s3://bucket/object"}),
+        ))
+        .unwrap_err();
+    let FrameworkError::WorkspaceMismatch { diagnostics, .. } = &error else {
+        panic!("expected workspace mismatch, got {error:?}");
+    };
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "unsupported_root_scheme"),
+        "{diagnostics:?}"
     );
 }
