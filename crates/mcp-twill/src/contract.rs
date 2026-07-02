@@ -353,6 +353,68 @@ pub fn check_server_projection(server: &CliMcpServer) -> Vec<ContractViolation> 
 }
 
 /// Run every contract rule and aggregate the violations.
+/// Every declared workspace projects into exactly one resolver requirement
+/// whose id matches the declared name and whose fallback carries the declared
+/// URI. Guards the WorkspaceDecl -> WorkspaceRequirement projection against
+/// drift.
+pub fn check_workspace_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    let requirements = registry.workspace_requirements();
+    for decl in registry.workspaces() {
+        let matching: Vec<_> = requirements
+            .iter()
+            .filter(|requirement| requirement.id == decl.name.as_str())
+            .collect();
+        match matching.len() {
+            1 => {
+                let requirement = matching[0];
+                match &requirement.fallback {
+                    Some(fallback) if fallback.uri == decl.uri => {}
+                    Some(fallback) => {
+                        violations.push(violation(
+                            None,
+                            "workspaces",
+                            format!(
+                                "workspace `{}` fallback URI `{}` does not match declared URI `{}`",
+                                decl.name, fallback.uri, decl.uri
+                            ),
+                        ));
+                    }
+                    None => {
+                        violations.push(violation(
+                            None,
+                            "workspaces",
+                            format!(
+                                "workspace `{}` projects a requirement without a declared fallback",
+                                decl.name
+                            ),
+                        ));
+                    }
+                }
+            }
+            0 => {
+                violations.push(violation(
+                    None,
+                    "workspaces",
+                    format!("workspace `{}` projects no resolver requirement", decl.name),
+                ));
+            }
+            _ => {
+                violations.push(violation(
+                    None,
+                    "workspaces",
+                    format!(
+                        "workspace `{}` projects {} resolver requirements; expected exactly one",
+                        decl.name,
+                        matching.len()
+                    ),
+                ));
+            }
+        }
+    }
+    violations
+}
+
 pub fn verify_catalog_coverage(
     registry: &CommandRegistry,
     primary_tool_name: &str,
@@ -363,6 +425,7 @@ pub fn verify_catalog_coverage(
     violations.extend(check_examples_and_plans(registry));
     violations.extend(check_effect_metadata(registry));
     violations.extend(check_effect_lanes(registry, primary_tool_name));
+    violations.extend(check_workspace_projection(registry));
     violations
 }
 
@@ -432,6 +495,13 @@ macro_rules! contract_tests {
             $crate::contract::assert_no_violations($crate::contract::check_effect_lanes(
                 &$registry(),
                 $primary,
+            ));
+        }
+
+        #[test]
+        fn contract_workspace_projection() {
+            $crate::contract::assert_no_violations($crate::contract::check_workspace_projection(
+                &$registry(),
             ));
         }
 

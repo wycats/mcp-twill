@@ -1,5 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use mcp_workspace_resolver::{
+    DeclaredWorkspaceRoot, ResolvedWorkspaceRoot, WorkspaceRequirement, WorkspaceSelection,
+    normalize_file_uri, path_has_prefix,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -166,62 +170,72 @@ impl WorkspaceDecl {
         self
     }
 
+    /// Reports whether `value` is the workspace root or lies inside it.
+    ///
+    /// Boundary checks use `mcp-workspace-resolver` path rules: drive-letter
+    /// paths compare case-insensitively, POSIX paths case-sensitively, and
+    /// non-`file:` URIs never match.
     pub fn contains_path_value(&self, value: &str) -> bool {
-        if self.uri.starts_with("file://") || value.starts_with("file://") {
-            let root = normalize_file_uri(&self.uri);
-            let candidate = normalize_file_uri(value);
-            return path_has_prefix(&candidate, &root);
-        }
+        let Ok(root) = normalize_file_uri(&self.uri) else {
+            return false;
+        };
+        let Ok(candidate) = normalize_file_uri(value) else {
+            return false;
+        };
+        path_has_prefix(&candidate, &root)
+    }
 
-        path_has_prefix(&normalize_path(value), &normalize_path(&self.uri))
+    /// Projects this declaration into the resolver's declared-root vocabulary.
+    pub fn declared_root(&self) -> DeclaredWorkspaceRoot {
+        let mut root = DeclaredWorkspaceRoot::new(self.name.clone(), self.uri.clone());
+        if let Some(description) = &self.description {
+            root = root.with_display_name(description.clone());
+        }
+        root
+    }
+
+    /// Projects this declaration into a resolver workspace requirement: the
+    /// requirement id is the declared name and the declared URI becomes the
+    /// fallback root. `sole_workspace` grants the single-root convenience
+    /// (a lone client root satisfies the requirement without a name match);
+    /// it must be true only when this is the server's only declared
+    /// workspace, otherwise one client root would satisfy every requirement.
+    pub fn requirement(&self, sole_workspace: bool) -> WorkspaceRequirement {
+        let selection = if sole_workspace {
+            WorkspaceSelection::PrimaryWhenSingleRoot
+        } else {
+            WorkspaceSelection::ByNameOrAlias
+        };
+        WorkspaceRequirement::new(self.name.clone())
+            .with_selection(selection)
+            .with_fallback(self.declared_root())
     }
 }
 
-fn normalize_file_uri(value: &str) -> String {
-    let stripped = value
-        .strip_prefix("file:///")
-        .or_else(|| value.strip_prefix("file://"));
-    match stripped {
-        Some(path) => normalize_path(path),
-        None => normalize_path(value),
-    }
+/// A workspace root selected for an invocation plan: which root a path
+/// argument was planned against, where it came from, and why it was chosen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanWorkspaceRoot {
+    pub id: String,
+    pub root_uri: String,
+    pub source: String,
+    pub selection_reason: Value,
 }
 
-fn normalize_path(value: &str) -> String {
-    let replaced = value.replace('\\', "/");
-    let absolute = replaced.starts_with('/');
-    let (prefix, rest) = if replaced.len() >= 2 && replaced.as_bytes()[1] == b':' {
-        (replaced[..2].to_string(), &replaced[2..])
-    } else {
-        (String::new(), replaced.as_str())
-    };
-
-    let mut parts = Vec::new();
-    for part in rest.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            value => parts.push(value),
+impl From<&ResolvedWorkspaceRoot> for PlanWorkspaceRoot {
+    fn from(root: &ResolvedWorkspaceRoot) -> Self {
+        let source = serde_json::to_value(root.source)
+            .ok()
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+            .unwrap_or_else(|| format!("{:?}", root.source));
+        Self {
+            id: root.id.as_str().to_string(),
+            root_uri: root.root_uri.clone(),
+            source,
+            selection_reason: serde_json::to_value(&root.selection_reason).unwrap_or(Value::Null),
         }
     }
-
-    let mut normalized = String::new();
-    if !prefix.is_empty() {
-        normalized.push_str(&prefix);
-        if !parts.is_empty() {
-            normalized.push('/');
-        }
-    } else if absolute {
-        normalized.push('/');
-    }
-    normalized.push_str(&parts.join("/"));
-    normalized.trim_end_matches('/').to_ascii_lowercase()
-}
-
-fn path_has_prefix(candidate: &str, root: &str) -> bool {
-    candidate == root || candidate.starts_with(&format!("{root}/"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -456,6 +470,9 @@ pub struct InvocationPlan {
     pub bound_args: BTreeMap<String, BoundArg>,
     pub permissions: Vec<PermissionSpec>,
     pub workspaces: Vec<WorkspaceDecl>,
+    /// The resolved roots for the workspaces this plan's path arguments use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<PlanWorkspaceRoot>,
     pub output: OutputSpec,
 }
 

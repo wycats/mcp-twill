@@ -33,6 +33,12 @@ pub enum ErrorCode {
     MissingArgument,
     InvalidArgumentType,
     WorkspaceMismatch,
+    /// Resolver diagnostic: no root matched a workspace requirement.
+    UnresolvedWorkspaceRequirement,
+    /// Resolver diagnostic: multiple roots matched a workspace requirement.
+    AmbiguousWorkspaceRoot,
+    /// Resolver diagnostic: a root URI used a scheme other than `file:`.
+    UnsupportedRootScheme,
     StdinMismatch,
     WrongEffectLane,
     PermissionRequired,
@@ -165,6 +171,10 @@ pub struct PermissionPreview {
     pub lane: crate::EffectLane,
     pub permissions: Vec<PermissionSpec>,
     pub workspaces: Vec<WorkspaceDecl>,
+    /// The workspace roots this invocation actually planned against — the
+    /// roots the approval token binds to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_roots: Vec<crate::PlanWorkspaceRoot>,
     pub output: OutputSpec,
     pub confirmation_policy: ConfirmationPolicy,
     pub requires_confirmation: bool,
@@ -320,6 +330,8 @@ impl ResponseEnvelope {
         let details = error_details(&error);
         let diagnostic = diagnostic_for_error(&error, &code);
         let steering = steering_for_error(&error, retry.as_ref());
+        let mut diagnostics = vec![diagnostic];
+        diagnostics.extend(workspace_diagnostics(&error));
 
         Self {
             status,
@@ -330,7 +342,7 @@ impl ResponseEnvelope {
                 message: message.clone(),
                 details,
             }),
-            diagnostics: vec![diagnostic],
+            diagnostics,
             steering,
             display: Some(DisplayHint {
                 title: "Command failed".to_string(),
@@ -364,6 +376,38 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
     }
 }
 
+/// Projects resolver workspace diagnostics carried by a workspace mismatch
+/// into envelope diagnostics with the resolver's stable codes.
+fn workspace_diagnostics(error: &FrameworkError) -> Vec<Diagnostic> {
+    let FrameworkError::WorkspaceMismatch { diagnostics, .. } = error else {
+        return Vec::new();
+    };
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let code = match diagnostic.code.as_str() {
+                mcp_workspace_resolver::AMBIGUOUS_WORKSPACE_ROOT => {
+                    ErrorCode::AmbiguousWorkspaceRoot
+                }
+                mcp_workspace_resolver::UNSUPPORTED_ROOT_SCHEME => ErrorCode::UnsupportedRootScheme,
+                _ => ErrorCode::UnresolvedWorkspaceRequirement,
+            };
+            Diagnostic {
+                code,
+                message: diagnostic.message.clone(),
+                location: diagnostic.requirement.as_ref().map(|requirement| {
+                    DiagnosticLocation::Workspace {
+                        name: requirement.as_str().to_string(),
+                    }
+                }),
+                expected: None,
+                actual: (!diagnostic.roots.is_empty()).then(|| json!(diagnostic.roots)),
+                suggestions: Vec::new(),
+            }
+        })
+        .collect()
+}
+
 fn error_details(error: &FrameworkError) -> Value {
     match error {
         FrameworkError::ShellSyntax(value) => json!({ "syntax": value }),
@@ -380,7 +424,16 @@ fn error_details(error: &FrameworkError) -> Value {
         FrameworkError::WorkspaceMismatch {
             argument,
             workspace,
-        } => json!({ "argument": argument, "workspace": workspace }),
+            selected_root,
+            path,
+            diagnostics,
+        } => json!({
+            "argument": argument,
+            "workspace": workspace,
+            "selectedRoot": selected_root,
+            "path": path,
+            "workspaceDiagnostics": diagnostics,
+        }),
         FrameworkError::StdinMismatch(reason) => json!({ "reason": reason }),
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
@@ -407,6 +460,7 @@ fn permission_preview(plan: &InvocationPlan, requires_confirmation: bool) -> Per
         lane: plan.lane,
         permissions: plan.permissions.clone(),
         workspaces: plan.workspaces.clone(),
+        workspace_roots: plan.workspace_roots.clone(),
         output: plan.output.clone(),
         confirmation_policy: ConfirmationPolicy::EffectDefault,
         requires_confirmation,

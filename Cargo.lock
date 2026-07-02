@@ -385,6 +385,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "mcp-workspace-resolver",
  "rand",
  "rmcp",
  "schemars",
