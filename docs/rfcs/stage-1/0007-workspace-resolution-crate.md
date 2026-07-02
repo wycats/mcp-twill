@@ -176,7 +176,15 @@ pub enum WorkspaceSource {
 
 The default resolution policy processes observations in authority order. MCP roots are client-declared workspace boundaries. Codex sandbox metadata is a runtime execution context. Declared workspace roots are server-authored defaults. A higher-authority observation that resolves a requirement supplies the root for that requirement. A higher-authority observation that is present but ambiguous produces a diagnostic rather than allowing an accidental lower-authority expansion for the same requirement.
 
-The crate should expose an `rmcp` feature that converts `rmcp` roots into `McpRootsObservation` and a Codex feature or module that parses `codex/sandbox-state-meta` from MCP request metadata. The core resolver should remain usable with plain Rust structs so non-`rmcp` tests and other MCP SDKs can exercise the same behavior.
+Presence blocks fall-through. When an MCP roots observation is present but no root matches a requirement, the resolver emits `unresolved_workspace_requirement` and leaves the requirement unresolved rather than falling through to a lower-authority source. An empty roots list is still an authoritative observation: the client declared that no roots exist, so every requirement is unresolved and nothing falls through. Falling through would let server configuration widen filesystem access beyond the boundaries the client declared, which RFC 0004 forbids. Lower-authority sources participate only when the higher-authority observation is absent.
+
+Name and alias matching between requirement ids and MCP root names is case-sensitive on every platform; names are protocol identifiers, not paths. Path boundary comparison is platform-appropriate: case-sensitive for POSIX-style paths and case-insensitive for Windows drive-letter paths. The standard library's lexical path methods compare components case-sensitively apart from the drive letter, so the Windows behavior requires explicit case-insensitive component comparison in the resolver's normalization (or a platform-semantics crate); implementations must not assume `Path::starts_with` alone satisfies this contract. This deliberately tightens the first implementation's unconditionally case-insensitive comparison, which widened boundaries on case-sensitive filesystems.
+
+File roots are compared lexically in the first implementation: normalization resolves `.`/`..` segments and separators without touching the filesystem, so symlinks are not resolved during boundary checks. The exception is Codex root derivation, which already walks the filesystem and may canonicalize `sandboxCwd`. Only `file:` URIs participate in boundary checks; a root or path with any other scheme produces an `unsupported_root_scheme` diagnostic rather than a silent skip.
+
+The crate should expose an `rmcp` feature that converts `rmcp` roots into `McpRootsObservation` and a Codex feature or module that parses `codex/sandbox-state-meta` from MCP request metadata. The core resolver should remain usable with plain Rust structs so non-`rmcp` tests and other MCP SDKs can exercise the same behavior. `WorkspaceObservationSet` must keep its fields private and be constructed only through methods (`Default` plus `with_*` builders or setters), so later observation sources, such as a Codex global-state observation for plugin launch contexts, can be added without breaking construction. Public fields would leave struct-literal construction available to downstream code, which any added field would break.
+
+`WorkspaceDecl` remains a Twill-owned type that projects into a resolver `WorkspaceRequirement` with a `DeclaredWorkspaceRoot` fallback. The resolver stays free of Twill's schema derives, and Twill's catalog JSON schema stays decoupled from resolver versioning. The projection is the single conversion point, and Twill's generated contract coverage should verify that every declared workspace projects into exactly one requirement so the two vocabularies cannot drift silently.
 
 ### Required Invariants
 
@@ -186,7 +194,8 @@ The crate should expose an `rmcp` feature that converts `rmcp` roots into `McpRo
 - Multiple MCP roots require name, alias, or URI selection.
 - Codex sandbox metadata resolves through the configured root derivation policy.
 - The default Codex derivation policy produces a project root from `sandboxCwd` when a boundary marker is visible.
-- Declared workspace roots are used when runtime observations do not resolve the requirement.
+- The default derivation policy prefers version-control boundaries (`.git`, `.jj`, `.hg`) and falls back to the configured project markers, which default to `Cargo.toml`, `package.json`, `pyproject.toml`, and `go.mod`.
+- Declared workspace roots are used when no higher-authority observation is present; a present-but-unmatched higher-authority observation blocks fall-through and produces a diagnostic.
 - Ambiguous roots produce structured diagnostics.
 - Resolved roots include their source and selection reason.
 - Path normalization and boundary checks happen before command dispatch.
@@ -212,6 +221,8 @@ The crate should expose an `rmcp` feature that converts `rmcp` roots into `McpRo
 - Codex sandbox metadata resolves to a configured project marker when no version-control marker is visible.
 - Codex sandbox metadata resolves to `sandboxCwd` when no marker is visible.
 - Server-declared workspaces resolve requirements when no runtime workspace observation is available.
+- A present but unmatched MCP roots observation produces `unresolved_workspace_requirement` without falling through to declared roots.
+- A present but empty MCP roots list leaves every requirement unresolved without falling through.
 - A declared workspace fallback is visible in diagnostics and dry-run output.
 - Path traversal outside the selected root is rejected before dispatch.
 - Twill help and resources show the workspace requirement for path arguments.
@@ -248,12 +259,8 @@ Codex's `codex/sandbox-state-meta` mechanism provides a practical current-direct
 
 ## Unresolved Questions
 
-- Which project markers should be enabled in the default Codex root derivation policy?
-- Should MCP root name matching be case-sensitive on all platforms or follow filesystem conventions for file roots?
-- Should the resolver canonicalize file roots eagerly, lazily, or only during path planning?
-- Should URI schemes other than `file:` participate in path boundary checks in the first implementation?
-- Should `WorkspaceDecl` remain in Twill as a re-exported resolver type or as a Twill-specific builder wrapper?
-- Should the crate include a Codex global-state observation for plugin launch contexts where request metadata is unavailable?
+- Should the resolver canonicalize file roots (resolving symlinks) in a later version, and if so, how do plans and replay records account for the boundary change?
+- When should the Codex global-state observation for plugin launch contexts be added, and what does it observe when request metadata is unavailable?
 
 ## Future Possibilities
 
