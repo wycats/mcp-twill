@@ -1,12 +1,9 @@
 //! RFC 0007 integration acceptance tests: workspace resolution wired into
 //! Twill planning, help, resources, dry-run output, and diagnostics.
 
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use mcp_twill::{
