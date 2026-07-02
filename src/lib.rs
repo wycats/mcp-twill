@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod catalog;
+pub mod contract;
 pub mod error;
 pub mod help;
 pub mod model;
@@ -10,6 +11,7 @@ pub mod template;
 
 pub use builder::*;
 pub use catalog::*;
+pub use contract::{ContractViolation, verify_catalog_coverage};
 pub use error::{FrameworkError, Result};
 pub use help::{HelpDetail, HelpRequest, HelpResult, HelpTopic};
 pub use model::*;
