@@ -148,6 +148,67 @@ fn nonpure_operation_without_permissions_is_a_violation() {
 }
 
 #[test]
+fn example_planning_a_different_operation_is_a_violation() {
+    // `issues create` carrying an `issues list` example plans successfully,
+    // but not against its owning operation.
+    let reg = CommandRegistry::new("contract-test", "Contract test server")
+        .register(
+            CommandSpec::new(["issues", "create"], "Create issue", "Create issue")
+                .with_arg(ArgSpec::string("title", "Issue title"))
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Write,
+                    "issues",
+                    "Creates issues",
+                ))
+                .with_example(CommandExample::new("issues list", "Wrong example")),
+            |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
+        )
+        .register(
+            CommandSpec::new(["issues", "list"], "List issues", "List issues").with_permission(
+                PermissionSpec::new(PermissionEffect::Read, "issues", "Reads issues"),
+            ),
+            |_context| async { Ok(CommandOutput::structured(json!([]))) },
+        );
+    let violations = contract::check_examples_and_plans(&reg);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.operation.as_deref() == Some("issues.create")
+                && violation.message.contains("plans `issues.list`")),
+        "{violations:?}"
+    );
+}
+
+#[test]
+fn custom_effects_are_a_contract_violation() {
+    let reg = CommandRegistry::new("contract-test", "Contract test server").register(
+        CommandSpec::new(["issues", "sync"], "Sync issues", "Sync issues").with_permission(
+            PermissionSpec::new(
+                PermissionEffect::Custom("sync".to_string()),
+                "issues",
+                "Syncs issues",
+            ),
+        ),
+        |_context| async { Ok(CommandOutput::structured(json!({}))) },
+    );
+    let violations = contract::check_effect_metadata(&reg);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.projection == "permissions"
+                && violation.message.contains("custom effect")),
+        "{violations:?}"
+    );
+}
+
+#[test]
+fn server_projection_advertises_resources_and_truthful_annotations() {
+    let server = mcp_twill::CliMcpServer::new(registry()).unwrap();
+    let violations = contract::check_server_projection(&server);
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+#[test]
 fn violations_render_with_operation_and_projection() {
     let violation = contract::ContractViolation {
         operation: Some("issues.create".to_string()),

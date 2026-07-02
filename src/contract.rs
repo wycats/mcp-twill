@@ -1,4 +1,4 @@
-use crate::{CommandRegistry, EffectLane, HelpRequest, HelpTopic, RunRequest};
+use crate::{CliMcpServer, CommandRegistry, EffectLane, HelpRequest, HelpTopic, RunRequest};
 
 /// One failed framework promise, named precisely enough to repair the drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,12 +73,16 @@ pub fn check_discovery(registry: &CommandRegistry) -> Vec<ContractViolation> {
     violations
 }
 
-/// Every required argument appears in generated help and schema projections.
+/// Every required argument appears in generated help and the serialized
+/// catalog projection agents read from `cli://catalog`.
 pub fn check_required_arguments(registry: &CommandRegistry) -> Vec<ContractViolation> {
     let mut violations = Vec::new();
-    let run_schema = serde_json::to_value(schemars::schema_for!(RunRequest))
+    let catalog_json: serde_json::Value = registry
+        .resource_text("cli://catalog")
+        .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or(serde_json::Value::Null);
-    let schema_text = run_schema.to_string();
+    let empty = Vec::new();
+    let projected_operations = catalog_json["operations"].as_array().unwrap_or(&empty);
     for operation in registry.operation_specs() {
         let name = operation.name();
         let help = registry.help(HelpRequest {
@@ -86,6 +90,9 @@ pub fn check_required_arguments(registry: &CommandRegistry) -> Vec<ContractViola
             topic: Some(HelpTopic::Arguments),
             detail: None,
         });
+        let projected = projected_operations
+            .iter()
+            .find(|candidate| candidate["id"] == operation.id.as_str());
         for arg in operation.args.iter().filter(|arg| arg.required) {
             // Match the exact rendered token from arguments_text, including the
             // closing backtick, so `foo` does not match a `foo2` line.
@@ -96,15 +103,36 @@ pub fn check_required_arguments(registry: &CommandRegistry) -> Vec<ContractViola
                     format!("required argument `{}` missing from arguments help", arg.name),
                 ));
             }
+            let projected_arg = projected.and_then(|operation| {
+                operation["args"]
+                    .as_array()?
+                    .iter()
+                    .find(|candidate| candidate["name"] == arg.name.as_str())
+            });
+            match projected_arg {
+                Some(projection) if projection["required"] == serde_json::json!(true) => {}
+                Some(_) => {
+                    violations.push(violation(
+                        Some(&operation.id),
+                        "catalog",
+                        format!(
+                            "required argument `{}` is not marked required in the catalog projection",
+                            arg.name
+                        ),
+                    ));
+                }
+                None => {
+                    violations.push(violation(
+                        Some(&operation.id),
+                        "catalog",
+                        format!(
+                            "required argument `{}` missing from the catalog projection",
+                            arg.name
+                        ),
+                    ));
+                }
+            }
         }
-    }
-    // The run schema is shared; it must at least describe the args map.
-    if !schema_text.contains("args") {
-        violations.push(violation(
-            None,
-            "schema",
-            "run request schema does not describe the `args` map",
-        ));
     }
     violations
 }
@@ -124,12 +152,25 @@ pub fn check_examples_and_plans(registry: &CommandRegistry) -> Vec<ContractViola
                 approval: None,
                 dry_run: true,
             };
-            if let Err(error) = registry.build_plan(&request) {
-                violations.push(violation(
-                    Some(&operation.id),
-                    "examples",
-                    format!("example `{}` fails planning: {error}", example.command),
-                ));
+            match registry.build_plan(&request) {
+                Err(error) => {
+                    violations.push(violation(
+                        Some(&operation.id),
+                        "examples",
+                        format!("example `{}` fails planning: {error}", example.command),
+                    ));
+                }
+                Ok(plan) if plan.operation_id != operation.id => {
+                    violations.push(violation(
+                        Some(&operation.id),
+                        "examples",
+                        format!(
+                            "example `{}` plans `{}`, not this operation",
+                            example.command, plan.operation_id
+                        ),
+                    ));
+                }
+                Ok(_) => {}
             }
         }
         if operation.examples.is_empty() {
@@ -164,9 +205,13 @@ pub fn check_examples_and_plans(registry: &CommandRegistry) -> Vec<ContractViola
     violations
 }
 
-/// Every operation has an effect classification and permission metadata.
+/// Every operation has an effect classification and permission metadata the
+/// MCP adapter can actually serve.
 pub fn check_effect_metadata(registry: &CommandRegistry) -> Vec<ContractViolation> {
     let mut violations = Vec::new();
+    if let Err(error) = registry.validate_effects() {
+        violations.push(violation(None, "permissions", error.to_string()));
+    }
     for operation in registry.operation_specs() {
         if operation.permissions.is_empty()
             && operation.effect != crate::EffectSpec::Pure
@@ -233,6 +278,73 @@ pub fn check_effect_lanes(
                     lane.lane,
                     lane.tool_name,
                     lane.lane.tool_name(primary_tool_name)
+                ),
+            ));
+        }
+    }
+    violations
+}
+
+/// The MCP server advertises every per-command resource and annotates each
+/// lane tool with worst-case truthful hints. Registry-level checks validate
+/// what URIs render; this validates what the server actually advertises.
+pub fn check_server_projection(server: &CliMcpServer) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+
+    let advertised: std::collections::BTreeSet<String> =
+        server.resource_uris().into_iter().collect();
+    for operation in server.registry().operation_specs() {
+        let expected = format!("cli://commands/{}", operation.path.join("/"));
+        if !advertised.contains(&expected) {
+            violations.push(violation(
+                Some(&operation.id),
+                "resources",
+                format!("`{expected}` is not advertised through list_resources"),
+            ));
+        }
+    }
+
+    let primary = &server.config().execution_tool_name;
+    let tools = server.generated_tools();
+    for lane_spec in server.registry().lane_specs(primary) {
+        let Some(tool) = tools.iter().find(|tool| tool.name == lane_spec.tool_name) else {
+            violations.push(violation(
+                None,
+                "lanes",
+                format!("lane tool `{}` is not advertised through list_tools", lane_spec.tool_name),
+            ));
+            continue;
+        };
+        let Some(annotations) = tool.annotations.as_ref() else {
+            violations.push(violation(
+                None,
+                "lanes",
+                format!("lane tool `{}` has no annotations", lane_spec.tool_name),
+            ));
+            continue;
+        };
+        let (read_only, destructive, open_world) = match lane_spec.lane {
+            EffectLane::Primary => (Some(true), Some(false), Some(false)),
+            EffectLane::Write => (Some(false), Some(false), Some(false)),
+            EffectLane::Delete => (Some(false), Some(true), Some(false)),
+            EffectLane::Exec => (Some(false), Some(true), Some(true)),
+            EffectLane::Network => (Some(false), Some(false), Some(true)),
+        };
+        let actual = (
+            annotations.read_only_hint,
+            annotations.destructive_hint,
+            annotations.open_world_hint,
+        );
+        if actual != (read_only, destructive, open_world) {
+            violations.push(violation(
+                None,
+                "lanes",
+                format!(
+                    "lane tool `{}` annotations {:?} do not match worst-case truthful {:?} for {:?}",
+                    lane_spec.tool_name,
+                    actual,
+                    (read_only, destructive, open_world),
+                    lane_spec.lane
                 ),
             ));
         }
@@ -320,6 +432,18 @@ macro_rules! contract_tests {
             $crate::contract::assert_no_violations($crate::contract::check_effect_lanes(
                 &$registry(),
                 $primary,
+            ));
+        }
+
+        #[test]
+        fn contract_server_projection() {
+            let server = $crate::CliMcpServer::with_config(
+                $registry(),
+                $crate::CliMcpServerConfig::default().with_execution_tool_name($primary),
+            )
+            .expect("registry must be servable through the MCP adapter");
+            $crate::contract::assert_no_violations($crate::contract::check_server_projection(
+                &server,
             ));
         }
     };
