@@ -368,4 +368,36 @@ mod codex {
         assert_eq!(root.source, WorkspaceSource::CodexSandboxMeta);
         assert_ne!(root.root_uri, "file:///declared/repo");
     }
+
+    #[test]
+    fn explicit_uri_mismatch_diagnostic_carries_the_derived_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nested = temp.path().join("project");
+        fs::create_dir_all(&nested).expect("create dirs");
+        fs::create_dir(nested.join(".git")).expect("create .git");
+
+        let requirements =
+            [
+                requirement("repo").with_selection(WorkspaceSelection::ExplicitUri {
+                    uri: "file:///somewhere/else".into(),
+                }),
+            ];
+        let observations =
+            WorkspaceObservationSet::new().with_codex_sandbox(CodexSandboxObservation::new(&nested));
+
+        let resolved = resolve_workspaces(&requirements, &observations);
+
+        assert!(resolved.root(&"repo".into()).is_none());
+        let diagnostic = resolved
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.requirement.as_ref() == Some(&"repo".into()))
+            .expect("mismatch diagnostic");
+        let canonical = nested.canonicalize().expect("canonicalize");
+        assert_eq!(
+            diagnostic.roots,
+            vec![format!("file://{}", canonical.display())],
+            "diagnostic carries the derived candidate for tooling"
+        );
+    }
 }

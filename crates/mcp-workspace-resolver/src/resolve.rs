@@ -263,14 +263,17 @@ fn resolve_from_codex(
             match normalize_file_uri(uri) {
                 Ok(configured) if paths_equal(&configured, &derived_path) => {}
                 Ok(_) => {
-                    set.diagnostics.push(WorkspaceDiagnostic::unresolved(
-                        requirement.id.clone(),
-                        format!(
-                            "Codex-derived root `{root_uri}` does not match the configured URI \
-                             for workspace requirement `{}`",
-                            requirement.id
-                        ),
-                    ));
+                    set.diagnostics.push(
+                        WorkspaceDiagnostic::unresolved(
+                            requirement.id.clone(),
+                            format!(
+                                "Codex-derived root `{root_uri}` does not match the configured URI \
+                                 for workspace requirement `{}`",
+                                requirement.id
+                            ),
+                        )
+                        .with_roots(vec![root_uri.clone()]),
+                    );
                     continue;
                 }
                 Err(err) => {
@@ -382,9 +385,46 @@ fn resolve_from_declared(
 /// `file:///C:/...` shape.
 fn file_uri_for_path(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
+    // Windows canonicalization produces verbatim and UNC prefixes that must
+    // not leak into file: URIs.
+    if let Some(unc) = text.strip_prefix("//?/UNC/") {
+        return format!("file://{unc}");
+    }
+    if let Some(verbatim) = text.strip_prefix("//?/") {
+        return format!("file:///{verbatim}");
+    }
+    if let Some(network) = text.strip_prefix("//") {
+        return format!("file://{network}");
+    }
     if text.starts_with('/') {
         format!("file://{text}")
     } else {
         format!("file:///{text}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_uri_for_path;
+    use std::path::Path;
+
+    #[test]
+    fn file_uri_formats_windows_network_and_verbatim_paths() {
+        assert_eq!(
+            file_uri_for_path(Path::new(r"\\server\share\repo")),
+            "file://server/share/repo"
+        );
+        assert_eq!(
+            file_uri_for_path(Path::new(r"\\?\UNC\server\share\repo")),
+            "file://server/share/repo"
+        );
+        assert_eq!(
+            file_uri_for_path(Path::new(r"\\?\C:\repo")),
+            "file:///C:/repo"
+        );
+        assert_eq!(
+            file_uri_for_path(Path::new("/workspace/repo")),
+            "file:///workspace/repo"
+        );
     }
 }

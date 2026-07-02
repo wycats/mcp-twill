@@ -36,6 +36,11 @@ impl WorkspaceDiagnostic {
         }
     }
 
+    pub fn with_roots(mut self, roots: Vec<String>) -> Self {
+        self.roots = roots;
+        self
+    }
+
     pub fn ambiguous(
         requirement: WorkspaceId,
         message: impl Into<String>,
