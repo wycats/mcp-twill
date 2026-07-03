@@ -52,7 +52,8 @@ pub struct RuntimeIdentity {
     pub executable_hash: Option<String>,
     pub process_id: Option<u32>,
     pub started_at: Option<Timestamp>,
-    pub replacement: Option<ReplacementStatus>,
+    // replacement status arrives with the runtime host crate, which is the
+    // first component able to populate it
 }
 ```
 

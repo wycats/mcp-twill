@@ -33,7 +33,7 @@ use crate::{
     ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, EventSink,
     FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InvocationPlan, NoopEventSink,
     PermissionAuthorizer, PermissionDecision, PlanFacts, ReplayRecord, ResponseEnvelope,
-    ResponseProfile, RunMode, RunRequest, RunResponse, ToolLaneSpec,
+    ResponseProfile, RunMode, RunRequest, RunResponse, RuntimeIdentity, ToolLaneSpec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +141,15 @@ impl CliMcpServer {
 
     pub fn config(&self) -> &CliMcpServerConfig {
         &self.config
+    }
+
+    /// The running server's identity: name, crate version, and catalog and
+    /// schema hashes. Process facts (pid, start time, executable hash) are
+    /// `None` here; a runtime host fills those in.
+    pub fn runtime_identity(&self) -> RuntimeIdentity {
+        self.registry
+            .runtime_identity()
+            .with_server_version(env!("CARGO_PKG_VERSION"))
     }
 
     /// URIs of every resource the server advertises through MCP list_resources.

@@ -8,6 +8,7 @@ pub mod model;
 pub mod registry;
 pub mod response;
 pub mod rmcp_adapter;
+pub mod runtime;
 pub mod template;
 
 pub use builder::*;
@@ -20,4 +21,5 @@ pub use model::*;
 pub use registry::{CommandHandler, CommandRegistry, HandlerFuture};
 pub use response::*;
 pub use rmcp_adapter::{CliMcpServer, CliMcpServerConfig};
+pub use runtime::RuntimeIdentity;
 pub use template::{CommandTemplate, TemplateToken};

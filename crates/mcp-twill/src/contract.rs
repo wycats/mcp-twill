@@ -352,6 +352,64 @@ pub fn check_server_projection(server: &CliMcpServer) -> Vec<ContractViolation> 
     violations
 }
 
+/// The served `cli://catalog` resource projects the registry's identity
+/// hashes faithfully. Both sides compute hashes through the same function,
+/// so this cannot catch hash-computation drift; it guards the serialization
+/// projection: the `identity` field staying present, its serde names, and
+/// the resource route continuing to serve the catalog.
+pub fn check_runtime_identity(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    let identity = registry.runtime_identity();
+    let Some(catalog_text) = registry.resource_text("cli://catalog") else {
+        violations.push(violation(
+            None,
+            "runtime_identity",
+            "`cli://catalog` resource is not served",
+        ));
+        return violations;
+    };
+    let catalog_json: serde_json::Value = match serde_json::from_str(&catalog_text) {
+        Ok(value) => value,
+        Err(error) => {
+            violations.push(violation(
+                None,
+                "runtime_identity",
+                format!("`cli://catalog` resource is not valid JSON: {error}"),
+            ));
+            return violations;
+        }
+    };
+    let served = &catalog_json["identity"];
+
+    let checks = [
+        ("catalogHash", &identity.catalog_hash),
+        ("runSchemaHash", &identity.run_schema_hash),
+        ("helpSchemaHash", &identity.help_schema_hash),
+    ];
+    for (field, expected) in checks {
+        match served[field].as_str() {
+            Some(actual) if actual == expected => {}
+            Some(actual) => {
+                violations.push(violation(
+                    None,
+                    "runtime_identity",
+                    format!(
+                        "runtime identity `{field}` is `{expected}` but the served catalog reports `{actual}`"
+                    ),
+                ));
+            }
+            None => {
+                violations.push(violation(
+                    None,
+                    "runtime_identity",
+                    format!("served catalog has no `identity.{field}`"),
+                ));
+            }
+        }
+    }
+    violations
+}
+
 /// Run every contract rule and aggregate the violations.
 /// Every declared workspace projects into exactly one resolver requirement
 /// whose id matches the declared name and whose fallback carries the declared
@@ -426,6 +484,7 @@ pub fn verify_catalog_coverage(
     violations.extend(check_effect_metadata(registry));
     violations.extend(check_effect_lanes(registry, primary_tool_name));
     violations.extend(check_workspace_projection(registry));
+    violations.extend(check_runtime_identity(registry));
     violations
 }
 
@@ -501,6 +560,13 @@ macro_rules! contract_tests {
         #[test]
         fn contract_workspace_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_workspace_projection(
+                &$registry(),
+            ));
+        }
+
+        #[test]
+        fn contract_runtime_identity() {
+            $crate::contract::assert_no_violations($crate::contract::check_runtime_identity(
                 &$registry(),
             ));
         }
