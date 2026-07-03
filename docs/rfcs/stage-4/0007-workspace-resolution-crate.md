@@ -2,7 +2,7 @@
 
 # RFC 0007: Workspace Resolution Crate
 
-- Status: Draft
+- Status: Implemented
 - Area: workspace resolution, path arguments, rmcp interoperability
 - Target milestone: v0.5
 - Depends on: RFC 0001, RFC 0002, RFC 0004, RFC 0006
