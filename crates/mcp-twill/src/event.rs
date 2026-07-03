@@ -27,12 +27,10 @@ pub struct FrameworkEvent {
 
 impl FrameworkEvent {
     /// Builds the terminal event for a call from the response envelope and
-    /// the invocation plan, when planning got far enough to produce one.
-    pub fn from_envelope(envelope: &ResponseEnvelope, plan: Option<&InvocationPlan>) -> Self {
-        let mut id_bytes = [0u8; 8];
-        OsRng.fill_bytes(&mut id_bytes);
+    /// the plan facts, when planning got far enough to produce them.
+    pub fn from_envelope(envelope: &ResponseEnvelope, plan: Option<&PlanFacts>) -> Self {
         Self {
-            id: format!("event-{}", hex(&id_bytes)),
+            id: new_event_id(),
             timestamp_unix_ms: Utc::now().timestamp_millis(),
             operation_id: plan.map(|plan| plan.operation_id.clone()),
             command: envelope
@@ -44,16 +42,70 @@ impl FrameworkEvent {
             diagnostics: envelope.diagnostics.clone(),
         }
     }
+
+    /// Builds the event for a call whose arguments never parsed as a run
+    /// request, so no plan or envelope exists.
+    pub fn parse_failure(message: impl Into<String>) -> Self {
+        Self {
+            id: new_event_id(),
+            timestamp_unix_ms: Utc::now().timestamp_millis(),
+            operation_id: None,
+            command: None,
+            status: ResponseStatus::InvalidInput,
+            effects: Vec::new(),
+            diagnostics: vec![Diagnostic {
+                code: crate::ErrorCode::InvalidArgumentType,
+                message: message.into(),
+                location: None,
+                expected: None,
+                actual: None,
+                suggestions: Vec::new(),
+            }],
+        }
+    }
+}
+
+/// The slice of an invocation plan that events need, extracted so the flow
+/// does not clone the full plan per call.
+#[derive(Debug, Clone)]
+pub struct PlanFacts {
+    pub operation_id: String,
+    pub command_path: Vec<String>,
+    pub effect: EffectSpec,
+}
+
+impl From<&InvocationPlan> for PlanFacts {
+    fn from(plan: &InvocationPlan) -> Self {
+        Self {
+            operation_id: plan.operation_id.clone(),
+            command_path: plan.command_path.clone(),
+            effect: plan.effect.clone(),
+        }
+    }
+}
+
+fn new_event_id() -> String {
+    let mut id_bytes = [0u8; 8];
+    OsRng.fill_bytes(&mut id_bytes);
+    format!("event-{}", hex(&id_bytes))
 }
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Receives framework events. Implementations must be cheap and non-blocking;
-/// the adapter records events inline on the request path.
+/// Receives framework events. The adapter records events inline on the
+/// request path, so implementations should return quickly and avoid
+/// long-blocking work; brief locking (as in [`InMemoryEventSink`]) is fine.
 pub trait EventSink: Send + Sync {
     fn record(&self, event: FrameworkEvent);
+
+    /// Whether this sink wants events at all. The adapter skips event
+    /// construction entirely when this returns false, so disabled sinks
+    /// cost nothing per call.
+    fn enabled(&self) -> bool {
+        true
+    }
 }
 
 /// The default sink: discards every event.
@@ -62,6 +114,10 @@ pub struct NoopEventSink;
 
 impl EventSink for NoopEventSink {
     fn record(&self, _event: FrameworkEvent) {}
+
+    fn enabled(&self) -> bool {
+        false
+    }
 }
 
 /// Buffers events in memory for tests and development inspection.

@@ -166,8 +166,32 @@ async fn permission_required_records_an_event() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn each_call_records_its_own_event() -> anyhow::Result<()> {
+async fn unparseable_run_request_records_an_invalid_input_event() -> anyhow::Result<()> {
     let (client, sink) = serve_with_sink(registry()).await?;
+
+    // `command` must be a string; a number fails RunRequest deserialization
+    // before planning starts.
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("run")
+                .with_arguments(json_object(json!({ "command": 42 }))?),
+        )
+        .await;
+    assert!(result.is_err(), "parse failure surfaces as a protocol error");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.status, ResponseStatus::InvalidInput);
+    assert_eq!(event.operation_id, None);
+    assert!(!event.diagnostics.is_empty(), "carries the parse message");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn each_call_records_its_own_event() -> anyhow::Result<()> {    let (client, sink) = serve_with_sink(registry()).await?;
 
     for _ in 0..2 {
         client

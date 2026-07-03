@@ -14,7 +14,7 @@ pub use builder::*;
 pub use catalog::*;
 pub use contract::{ContractViolation, verify_catalog_coverage};
 pub use error::{FrameworkError, Result};
-pub use event::{EventSink, FrameworkEvent, InMemoryEventSink, NoopEventSink};
+pub use event::{EventSink, FrameworkEvent, InMemoryEventSink, NoopEventSink, PlanFacts};
 pub use help::{HelpDetail, HelpRequest, HelpResult, HelpTopic};
 pub use model::*;
 pub use registry::{CommandHandler, CommandRegistry, HandlerFuture};

@@ -32,8 +32,8 @@ use tokio::sync::Mutex;
 use crate::{
     ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, EventSink,
     FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InvocationPlan, NoopEventSink,
-    PermissionAuthorizer, PermissionDecision, ReplayRecord, ResponseEnvelope, ResponseProfile,
-    RunMode, RunRequest, RunResponse, ToolLaneSpec,
+    PermissionAuthorizer, PermissionDecision, PlanFacts, ReplayRecord, ResponseEnvelope,
+    ResponseProfile, RunMode, RunRequest, RunResponse, ToolLaneSpec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,17 +80,17 @@ struct TaskRecord {
     payload: Option<Value>,
 }
 
-/// How one run-tool call ended: the envelope to return, the plan (when
+/// How one run-tool call ended: the envelope to return, the plan facts (when
 /// planning succeeded) for event enrichment, and whether the envelope
 /// renders through the output profile.
 struct RunOutcome {
     envelope: ResponseEnvelope,
-    plan: Option<InvocationPlan>,
+    plan: Option<PlanFacts>,
     rendered_output: bool,
 }
 
 impl RunOutcome {
-    fn envelope(envelope: ResponseEnvelope, plan: Option<InvocationPlan>) -> Self {
+    fn envelope(envelope: ResponseEnvelope, plan: Option<PlanFacts>) -> Self {
         Self {
             envelope,
             plan,
@@ -98,7 +98,7 @@ impl RunOutcome {
         }
     }
 
-    fn output(envelope: ResponseEnvelope, plan: Option<InvocationPlan>) -> Self {
+    fn output(envelope: ResponseEnvelope, plan: Option<PlanFacts>) -> Self {
         Self {
             envelope,
             plan,
@@ -240,10 +240,12 @@ impl CliMcpServer {
     ) -> CallToolResult {
         let profile = response_profile(&request);
         let outcome = self.run_tool_flow(tool_name, meta, client, request).await;
-        self.events.record(FrameworkEvent::from_envelope(
-            &outcome.envelope,
-            outcome.plan.as_ref(),
-        ));
+        if self.events.enabled() {
+            self.events.record(FrameworkEvent::from_envelope(
+                &outcome.envelope,
+                outcome.plan.as_ref(),
+            ));
+        }
         if outcome.rendered_output {
             success_result(outcome.envelope, profile)
         } else {
@@ -275,7 +277,7 @@ impl CliMcpServer {
                 );
             }
         };
-        let plan_for_event = plan.clone();
+        let plan_for_event = PlanFacts::from(&plan);
 
         Self::notify_progress(&meta, &client, 2.0, 4.0, "Invocation plan ready").await;
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
@@ -455,6 +457,21 @@ impl CliMcpServer {
         serde_json::from_value(Value::Object(arguments.unwrap_or_default()))
             .map_err(|error| rmcp::ErrorData::invalid_params(error.to_string(), None))
     }
+
+    /// Parses run-tool arguments, recording an invalid-input event when the
+    /// request never deserializes. Parse failures are part of the call
+    /// lifecycle the event stream captures.
+    fn parse_run_request(
+        &self,
+        arguments: Option<serde_json::Map<String, Value>>,
+    ) -> std::result::Result<RunRequest, rmcp::ErrorData> {
+        Self::parse_arguments::<RunRequest>(arguments).inspect_err(|error| {
+            if self.events.enabled() {
+                self.events
+                    .record(FrameworkEvent::parse_failure(error.message.clone()));
+            }
+        })
+    }
 }
 
 impl ServerHandler for CliMcpServer {
@@ -512,7 +529,7 @@ impl ServerHandler for CliMcpServer {
             ));
         }
 
-        let run_request = Self::parse_arguments::<RunRequest>(request.arguments)?;
+        let run_request = self.parse_run_request(request.arguments)?;
         Ok(self
             .clone()
             .execute_run_tool(
@@ -623,7 +640,7 @@ impl ServerHandler for CliMcpServer {
                 None,
             ));
         }
-        let run_request = Self::parse_arguments::<RunRequest>(request.arguments)?;
+        let run_request = self.parse_run_request(request.arguments)?;
 
         let task_id = format!(
             "{}-{}",
