@@ -25,7 +25,10 @@ pub enum FrameworkError {
     MissingArgument(String),
     #[error("argument `{0}` must be {1}")]
     InvalidArgumentType(String, &'static str),
-    #[error("{}", workspace_mismatch_message(argument, workspace, selected_root, diagnostics))]
+    #[error(
+        "{}",
+        workspace_mismatch_message(argument, workspace, selected_root, diagnostics)
+    )]
     WorkspaceMismatch {
         argument: String,
         workspace: String,
@@ -75,8 +78,8 @@ fn workspace_mismatch_message(
                 .collect::<Vec<_>>()
                 .join("; ")
         ),
-        None => format!(
-            "workspace `{workspace}` for path argument `{argument}` could not be resolved"
-        ),
+        None => {
+            format!("workspace `{workspace}` for path argument `{argument}` could not be resolved")
+        }
     }
 }
