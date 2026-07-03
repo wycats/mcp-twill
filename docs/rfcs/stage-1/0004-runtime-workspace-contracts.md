@@ -5,7 +5,8 @@
 - Status: Draft
 - Area: runtime identity, workspace model, event sinks, generated tests
 - Target milestone: v0.4
-- Depends on: RFC 0001, RFC 0002, RFC 0005, RFC 0007
+- Depends on: RFC 0001, RFC 0002, RFC 0005
+- Workspace identity implemented by: RFC 0007
 
 ## Summary
 
@@ -57,7 +58,7 @@ pub struct RuntimeIdentity {
 
 Runtime identity should be available to diagnostics, resources, and generated tests. It may also be used by runtime hosts to decide whether a pure or idempotent call can be retried after replacement. Retry policy must remain effect-aware: writes, deletes, process execution, and network calls are not retried after ambiguous failure unless the handler declares an idempotency key.
 
-Workspace identity is provided by RFC 0007. The `ResolvedWorkspaceSet` produced by `mcp-workspace-resolver` carries provenance (which observation source satisfied each requirement) and structured diagnostics, and Twill's planner, adapter, and permission preview already consume it. This RFC originally proposed a separate `WorkspaceIdentity` struct with `source`, `capabilities`, and `diagnostics` fields; the resolver's requirement/observation/resolution vocabulary superseded that design. Workspace capabilities (for example read-only roots) remain a future extension of the resolver rather than a parallel identity type.
+Workspace identity is provided by RFC 0007. The `ResolvedWorkspaceSet` produced by `mcp-workspace-resolver` carries provenance (which observation source satisfied each requirement) and structured diagnostics, and Twill's planner, adapter, and permission preview already consume it. This RFC originally proposed a separate `WorkspaceIdentity` struct with `source`, `capabilities`, and `diagnostics` fields; the resolver's requirement/observation/resolution vocabulary superseded that design. The resolver already models workspace capabilities (`WorkspaceCapabilities` with read-only and read-write states, carried on declared and resolved roots); the remaining work is enforcement at dispatch time and exposure in Twill's authoring surface, not a new capability type.
 
 The resolver already enforces the access rule this RFC required: when a client observation source is present, server-declared workspaces must not silently widen filesystem access. Presence blocks fall-through, including when the client reports an empty root set.
 
@@ -80,7 +81,7 @@ pub trait EventSink {
 }
 ```
 
-The default sink is no-op. The core crate also ships an in-memory sink, which tests and development inspection need regardless of storage choices. Persistent sinks (JSONL, SQLite, or another backend) remain server-owned; their storage format is outside the core contract.
+The default sink is no-op. The core crate must also provide an in-memory sink, which tests and development inspection need regardless of storage choices. Persistent sinks (JSONL, SQLite, or another backend) remain server-owned; their storage format is outside the core contract.
 
 Generated contract tests accept a catalog and a test server or fixture harness. They should verify discovery, planning, examples, resources, prompts, effect-lane metadata, and output projection. The tests should fail with catalog operation ids and projection names so authors can repair the source of drift.
 
@@ -103,7 +104,7 @@ The first implementation ships this as per-rule check functions plus a `contract
 
 1. Add catalog-level generated contract test helpers. *(Shipped: the `contract` module and `contract_tests!` macro.)*
 2. Workspace identity with provenance and diagnostics. *(Shipped via RFC 0007: the `mcp-workspace-resolver` crate and its Twill integration.)*
-3. Workspace diagnostics on planning failures and workspace resources. *(Shipped via RFC 0007: `WorkspaceMismatch` carries resolver diagnostics, and previews show selected roots.)*
+3. Add workspace diagnostics to planning failures and workspace resources. *(Diagnostics shipped via RFC 0007: `WorkspaceMismatch` carries resolver diagnostics, and previews show selected roots. A dedicated workspace resource is not yet implemented; only invocation plans and previews expose selected roots today.)*
 4. Add `FrameworkEvent` and `EventSink` with a no-op default and an in-memory sink.
 5. Add runtime identity types without requiring a runtime host.
 6. Add a runtime host as a sibling crate after the core contracts stabilize. The first slice covers identity construction (process id, start time) and effect-aware retry policy; hot-replacement detection is an explicit follow-up.
@@ -148,7 +149,7 @@ All previously unresolved questions have been settled:
 
 - The runtime host lives in a sibling crate, not behind a crate feature. A feature flag would make the core crate's dependency tree and compile surface vary by configuration; a sibling crate keeps the simple path visibly simple and lets the host evolve on its own release cadence.
 - The core framework ships the `EventSink` trait, the no-op default, and an in-memory sink. Persistent sinks are server-owned.
-- Workspace identity does not include VCS metadata. RFC 0007's Codex derivation already reads VCS markers (`.git`, `.jj`, `.hg`) to locate workspace roots without storing them on the resolved workspace; servers that need richer VCS facts own that themselves.
+- Workspace identity does not include structured VCS metadata fields. RFC 0007's Codex derivation reads VCS markers (`.git`, `.jj`, `.hg`) to locate workspace roots, and the marker name can appear in a resolved root's human-readable selection reason, but no VCS facts are modeled as identity fields; servers that need richer VCS data own that themselves.
 
 ## Future Possibilities
 
