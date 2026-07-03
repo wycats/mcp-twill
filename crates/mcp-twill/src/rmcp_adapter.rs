@@ -30,10 +30,10 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::{
-    ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, FrameworkError,
-    HelpRequest, HelpResult, InvocationPlan, PermissionAuthorizer, PermissionDecision,
-    ReplayRecord, ResponseEnvelope, ResponseProfile, RunMode, RunRequest, RunResponse,
-    ToolLaneSpec,
+    ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, EventSink,
+    FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InvocationPlan, NoopEventSink,
+    PermissionAuthorizer, PermissionDecision, ReplayRecord, ResponseEnvelope, ResponseProfile,
+    RunMode, RunRequest, RunResponse, ToolLaneSpec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,12 +71,40 @@ pub struct CliMcpServer {
     task_counter: Arc<AtomicU64>,
     replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
     authorizer: Arc<dyn PermissionAuthorizer>,
+    events: Arc<dyn EventSink>,
 }
 
 #[derive(Clone)]
 struct TaskRecord {
     task: Task,
     payload: Option<Value>,
+}
+
+/// How one run-tool call ended: the envelope to return, the plan (when
+/// planning succeeded) for event enrichment, and whether the envelope
+/// renders through the output profile.
+struct RunOutcome {
+    envelope: ResponseEnvelope,
+    plan: Option<InvocationPlan>,
+    rendered_output: bool,
+}
+
+impl RunOutcome {
+    fn envelope(envelope: ResponseEnvelope, plan: Option<InvocationPlan>) -> Self {
+        Self {
+            envelope,
+            plan,
+            rendered_output: false,
+        }
+    }
+
+    fn output(envelope: ResponseEnvelope, plan: Option<InvocationPlan>) -> Self {
+        Self {
+            envelope,
+            plan,
+            rendered_output: true,
+        }
+    }
 }
 
 impl CliMcpServer {
@@ -97,7 +125,14 @@ impl CliMcpServer {
             task_counter: Arc::new(AtomicU64::new(1)),
             replay: Arc::new(Mutex::new(BTreeMap::new())),
             authorizer: Arc::new(DefaultPermissionAuthorizer),
+            events: Arc::new(NoopEventSink),
         })
+    }
+
+    /// Replaces the event sink. The default sink discards events.
+    pub fn with_event_sink(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.events = events;
+        self
     }
 
     pub fn registry(&self) -> &CommandRegistry {
@@ -197,52 +232,79 @@ impl CliMcpServer {
     }
 
     async fn execute_run_tool(
-        registry: Arc<CommandRegistry>,
-        config: CliMcpServerConfig,
-        replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
-        authorizer: Arc<dyn PermissionAuthorizer>,
+        self,
         tool_name: String,
         meta: Meta,
         client: Peer<RoleServer>,
         request: RunRequest,
     ) -> CallToolResult {
         let profile = response_profile(&request);
+        let outcome = self.run_tool_flow(tool_name, meta, client, request).await;
+        self.events.record(FrameworkEvent::from_envelope(
+            &outcome.envelope,
+            outcome.plan.as_ref(),
+        ));
+        if outcome.rendered_output {
+            success_result(outcome.envelope, profile)
+        } else {
+            envelope_result(outcome.envelope)
+        }
+    }
+
+    async fn run_tool_flow(
+        &self,
+        tool_name: String,
+        meta: Meta,
+        client: Peer<RoleServer>,
+        request: RunRequest,
+    ) -> RunOutcome {
+        let registry = &self.registry;
+        let config = &self.config;
+        let replay = &self.replay;
+        let authorizer = &self.authorizer;
+        let profile = response_profile(&request);
         let mode = request.effective_mode();
-        let resolved = Self::resolve_workspaces_for_call(&registry, &meta, &client).await;
+        let resolved = Self::resolve_workspaces_for_call(registry, &meta, &client).await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "Parsing command template").await;
         let plan = match registry.build_plan_with_workspaces(&request, &resolved) {
             Ok(plan) => plan,
             Err(error) => {
-                return envelope_result(ResponseEnvelope::framework_error(
-                    error,
-                    Some(request),
+                return RunOutcome::envelope(
+                    ResponseEnvelope::framework_error(error, Some(request), None),
                     None,
-                ));
+                );
             }
         };
+        let plan_for_event = plan.clone();
 
         Self::notify_progress(&meta, &client, 2.0, 4.0, "Invocation plan ready").await;
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
-            return envelope_result(ResponseEnvelope::framework_error(
-                FrameworkError::UnknownCommand {
-                    command: tool_name,
-                    nearest: Vec::new(),
-                },
-                Some(request),
-                Some(plan),
-            ));
+            return RunOutcome::envelope(
+                ResponseEnvelope::framework_error(
+                    FrameworkError::UnknownCommand {
+                        command: tool_name,
+                        nearest: Vec::new(),
+                    },
+                    Some(request),
+                    Some(plan),
+                ),
+                Some(plan_for_event),
+            );
         };
 
         if plan.lane != lane {
             let required_tool = registry.required_tool_name(&config.execution_tool_name, plan.lane);
-            return envelope_result(ResponseEnvelope::framework_error(
-                FrameworkError::WrongEffectLane {
-                    current_tool: tool_name,
-                    required_tool,
-                },
-                Some(request),
-                Some(plan),
-            ));
+            return RunOutcome::envelope(
+                ResponseEnvelope::framework_error(
+                    FrameworkError::WrongEffectLane {
+                        current_tool: tool_name,
+                        required_tool,
+                    },
+                    Some(request),
+                    Some(plan),
+                ),
+                Some(plan_for_event),
+            );
         }
 
         if matches!(mode, RunMode::Preview) {
@@ -250,29 +312,38 @@ impl CliMcpServer {
                 PermissionDecision::Allow => false,
                 PermissionDecision::RequireConfirmation => true,
                 PermissionDecision::Deny { reason } => {
-                    return envelope_result(ResponseEnvelope::framework_error(
-                        FrameworkError::PermissionDenied {
-                            effect: effect_label(&plan.effect),
-                            scope: reason,
-                        },
-                        Some(request),
-                        Some(plan),
-                    ));
+                    return RunOutcome::envelope(
+                        ResponseEnvelope::framework_error(
+                            FrameworkError::PermissionDenied {
+                                effect: effect_label(&plan.effect),
+                                scope: reason,
+                            },
+                            Some(request),
+                            Some(plan),
+                        ),
+                        Some(plan_for_event),
+                    );
                 }
             };
             Self::notify_progress(&meta, &client, 4.0, 4.0, "Preview ready").await;
-            return envelope_result(ResponseEnvelope::preview(plan, requires_confirmation));
+            return RunOutcome::envelope(
+                ResponseEnvelope::preview(plan, requires_confirmation),
+                Some(plan_for_event),
+            );
         }
 
         if matches!(mode, RunMode::DryRun) {
-            return envelope_result(ResponseEnvelope::success(
-                RunResponse {
-                    plan,
-                    output: None,
-                    dry_run: true,
-                },
-                ResponseProfile::Debug,
-            ));
+            return RunOutcome::envelope(
+                ResponseEnvelope::success(
+                    RunResponse {
+                        plan,
+                        output: None,
+                        dry_run: true,
+                    },
+                    ResponseProfile::Debug,
+                ),
+                Some(plan_for_event),
+            );
         }
 
         match authorizer.decide(&plan) {
@@ -280,34 +351,41 @@ impl CliMcpServer {
             PermissionDecision::RequireConfirmation => {
                 if let Some(approval) = &request.approval {
                     if let Err(message) =
-                        validate_replay(&replay, approval, &plan, Utc::now().timestamp_millis())
+                        validate_replay(replay, approval, &plan, Utc::now().timestamp_millis())
                             .await
                     {
-                        return envelope_result(ResponseEnvelope::framework_error(
-                            FrameworkError::ApprovalInvalid(message),
-                            Some(request),
-                            Some(plan),
-                        ));
+                        return RunOutcome::envelope(
+                            ResponseEnvelope::framework_error(
+                                FrameworkError::ApprovalInvalid(message),
+                                Some(request),
+                                Some(plan),
+                            ),
+                            Some(plan_for_event),
+                        );
                     }
                 } else {
                     let record =
-                        issue_replay_record(&config, &replay, &plan, Utc::now().timestamp_millis())
+                        issue_replay_record(config, replay, &plan, Utc::now().timestamp_millis())
                             .await;
                     Self::notify_progress(&meta, &client, 4.0, 4.0, "Confirmation required").await;
-                    return envelope_result(ResponseEnvelope::permission_required(
-                        plan, record, request, tool_name,
-                    ));
+                    return RunOutcome::envelope(
+                        ResponseEnvelope::permission_required(plan, record, request, tool_name),
+                        Some(plan_for_event),
+                    );
                 }
             }
             PermissionDecision::Deny { reason } => {
-                return envelope_result(ResponseEnvelope::framework_error(
-                    FrameworkError::PermissionDenied {
-                        effect: effect_label(&plan.effect),
-                        scope: reason,
-                    },
-                    Some(request),
-                    Some(plan),
-                ));
+                return RunOutcome::envelope(
+                    ResponseEnvelope::framework_error(
+                        FrameworkError::PermissionDenied {
+                            effect: effect_label(&plan.effect),
+                            scope: reason,
+                        },
+                        Some(request),
+                        Some(plan),
+                    ),
+                    Some(plan_for_event),
+                );
             }
         }
 
@@ -324,16 +402,15 @@ impl CliMcpServer {
         match result {
             Ok(response) => {
                 Self::notify_progress(&meta, &client, 4.0, 4.0, "Command complete").await;
-                success_result(
-                    ResponseEnvelope::success(response, profile.clone()),
-                    profile,
+                RunOutcome::output(
+                    ResponseEnvelope::success(response, profile),
+                    Some(plan_for_event),
                 )
             }
-            Err(error) => envelope_result(ResponseEnvelope::framework_error(
-                error,
-                Some(request),
-                Some(plan),
-            )),
+            Err(error) => RunOutcome::envelope(
+                ResponseEnvelope::framework_error(error, Some(request), Some(plan)),
+                Some(plan_for_event),
+            ),
         }
     }
 
@@ -436,17 +513,15 @@ impl ServerHandler for CliMcpServer {
         }
 
         let run_request = Self::parse_arguments::<RunRequest>(request.arguments)?;
-        Ok(Self::execute_run_tool(
-            self.registry.clone(),
-            self.config.clone(),
-            self.replay.clone(),
-            self.authorizer.clone(),
-            tool_name,
-            context.meta.clone(),
-            context.peer.clone(),
-            run_request,
-        )
-        .await)
+        Ok(self
+            .clone()
+            .execute_run_tool(
+                tool_name,
+                context.meta.clone(),
+                context.peer.clone(),
+                run_request,
+            )
+            .await)
     }
 
     async fn list_resources(
@@ -574,24 +649,13 @@ impl ServerHandler for CliMcpServer {
         );
 
         let tasks = self.tasks.clone();
-        let registry = self.registry.clone();
-        let config = self.config.clone();
-        let replay = self.replay.clone();
-        let authorizer = self.authorizer.clone();
+        let server = self.clone();
         let meta = context.meta.clone();
         let client = context.peer.clone();
         tokio::spawn(async move {
-            let result = CliMcpServer::execute_run_tool(
-                registry,
-                config,
-                replay,
-                authorizer,
-                tool_name,
-                meta,
-                client,
-                run_request,
-            )
-            .await;
+            let result = server
+                .execute_run_tool(tool_name, meta, client, run_request)
+                .await;
             let is_error = result.is_error.unwrap_or(false);
             let mut tasks = tasks.lock().await;
             if let Some(record) = tasks.get_mut(&task_id) {
