@@ -282,6 +282,47 @@ fn catalog_identity_is_stable_across_registration_order() {
 }
 
 #[test]
+fn runtime_identity_reports_the_registry_and_no_process_facts() {
+    let identity = registry().runtime_identity();
+
+    assert_eq!(identity.server_name, registry().server_name());
+    assert_eq!(identity.server_version, None);
+    assert_eq!(identity.catalog_hash, registry().catalog_identity().catalog_hash);
+    assert_eq!(
+        identity.run_schema_hash,
+        registry().catalog_identity().run_schema_hash
+    );
+    assert_eq!(
+        identity.help_schema_hash,
+        registry().catalog_identity().help_schema_hash
+    );
+    assert_eq!(identity.executable_hash, None);
+    assert_eq!(identity.process_id, None);
+    assert_eq!(identity.started_at_unix_ms, None);
+}
+
+#[test]
+fn runtime_identity_reflects_catalog_changes() {
+    let changed = registry().register(
+        CommandSpec::new(["issues", "close"], "Close issue", "Close issue"),
+        |_context| async { Ok(CommandOutput::structured(json!({ "ok": true }))) },
+    );
+    assert_ne!(
+        registry().runtime_identity().catalog_hash,
+        changed.runtime_identity().catalog_hash
+    );
+}
+
+#[test]
+fn server_overview_resource_reports_the_catalog_hash() {
+    let identity = registry().catalog_identity();
+    let overview = registry().resource_text("cli://server/overview").unwrap();
+    assert!(overview.contains(&identity.catalog_hash));
+    assert!(overview.contains(&identity.run_schema_hash));
+    assert!(overview.contains(&identity.help_schema_hash));
+}
+
+#[test]
 fn invocation_fingerprint_is_stable_for_equivalent_plans() {
     let request = request(
         "issues create --title $args.title --body $args.body",

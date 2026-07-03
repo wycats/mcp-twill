@@ -239,6 +239,20 @@ async fn mcp_exposes_two_tools_and_resources_prompts() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn server_runtime_identity_includes_the_crate_version() -> anyhow::Result<()> {
+    let server = CliMcpServer::new(registry())?;
+    let identity = server.runtime_identity();
+
+    assert_eq!(identity.server_name, server.registry().server_name());
+    assert_eq!(identity.server_version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        identity.catalog_hash,
+        server.registry().catalog_identity().catalog_hash
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn mcp_run_emits_progress_and_returns_structured_content() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);

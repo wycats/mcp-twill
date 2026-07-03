@@ -145,6 +145,12 @@ impl CommandRegistry {
         self.catalog_identity_for(&operations)
     }
 
+    /// The identity a bare registry can report: name and the catalog and
+    /// schema hashes. Process facts stay unset without a runtime host.
+    pub fn runtime_identity(&self) -> crate::RuntimeIdentity {
+        crate::RuntimeIdentity::for_registry(self)
+    }
+
     fn catalog_identity_for(&self, operations: &[OperationSpec]) -> CatalogIdentity {
         let catalog_value = json!({
             "server": ServerSpec::new(&self.server_name, &self.server_description),
@@ -711,12 +717,18 @@ impl CommandRegistry {
     }
 
     fn server_help(&self) -> HelpResult {
+        let identity = self.catalog_identity();
         let mut lines = vec![
             format!("# {}", self.server_name),
             self.server_description.clone(),
             String::new(),
             "Start with the primary execution tool. Use lane tools only when the framework returns structured retry data.".to_string(),
             "Command strings are typed templates, not shell programs.".to_string(),
+            String::new(),
+            "Runtime identity:".to_string(),
+            format!("- Catalog hash: `{}`", identity.catalog_hash),
+            format!("- Run schema hash: `{}`", identity.run_schema_hash),
+            format!("- Help schema hash: `{}`", identity.help_schema_hash),
             String::new(),
             "Commands:".to_string(),
         ];
