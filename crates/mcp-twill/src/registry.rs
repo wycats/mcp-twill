@@ -425,8 +425,10 @@ impl CommandRegistry {
                         diagnostics,
                     });
                 };
-                let contained = match (normalize_file_uri(&root.root_uri), normalize_file_uri(value))
-                {
+                let contained = match (
+                    normalize_file_uri(&root.root_uri),
+                    normalize_file_uri(value),
+                ) {
                     (Ok(root_path), Ok(candidate)) => path_has_prefix(&candidate, &root_path),
                     (_, Err(err)) => {
                         // The path argument itself has a non-file scheme:
