@@ -352,17 +352,33 @@ pub fn check_server_projection(server: &CliMcpServer) -> Vec<ContractViolation> 
     violations
 }
 
-/// The registry's `RuntimeIdentity` hashes agree with what the served
-/// `cli://catalog` resource actually projects. Guards the two independent
-/// computations (`CommandRegistry::runtime_identity` and the catalog
-/// resource) against drift.
+/// The served `cli://catalog` resource projects the registry's identity
+/// hashes faithfully. Both sides compute hashes through the same function,
+/// so this cannot catch hash-computation drift; it guards the serialization
+/// projection: the `identity` field staying present, its serde names, and
+/// the resource route continuing to serve the catalog.
 pub fn check_runtime_identity(registry: &CommandRegistry) -> Vec<ContractViolation> {
     let mut violations = Vec::new();
     let identity = registry.runtime_identity();
-    let catalog_json: serde_json::Value = registry
-        .resource_text("cli://catalog")
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(serde_json::Value::Null);
+    let Some(catalog_text) = registry.resource_text("cli://catalog") else {
+        violations.push(violation(
+            None,
+            "runtime_identity",
+            "`cli://catalog` resource is not served",
+        ));
+        return violations;
+    };
+    let catalog_json: serde_json::Value = match serde_json::from_str(&catalog_text) {
+        Ok(value) => value,
+        Err(error) => {
+            violations.push(violation(
+                None,
+                "runtime_identity",
+                format!("`cli://catalog` resource is not valid JSON: {error}"),
+            ));
+            return violations;
+        }
+    };
     let served = &catalog_json["identity"];
 
     let checks = [

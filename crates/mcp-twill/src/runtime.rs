@@ -7,10 +7,17 @@ use crate::CommandRegistry;
 /// currently serving. Fields a bare `CommandRegistry` cannot know (process
 /// id, start time, executable hash) stay `None` until a runtime host fills
 /// them in; the framework must not require a host to construct one.
+///
+/// Replacement status is deliberately absent: nothing can populate it
+/// without a runtime host, so the field arrives with the host crate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeIdentity {
     pub server_name: String,
+    /// The version of the serving crate. When set through
+    /// [`CliMcpServer::runtime_identity`](crate::CliMcpServer::runtime_identity)
+    /// this is mcp-twill's own version, not the downstream server's; servers
+    /// that version their own contract should set this themselves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_version: Option<String>,
     pub catalog_hash: String,

@@ -152,6 +152,10 @@ impl CommandRegistry {
     }
 
     fn catalog_identity_for(&self, operations: &[OperationSpec]) -> CatalogIdentity {
+        // The hash preimage is this hand-built value, not the serialized
+        // `CommandCatalog` served at cli://catalog (which skips empty fields
+        // and embeds the identity itself). The hash is an opaque change
+        // detector; clients cannot recompute it from the resource bytes.
         let catalog_value = json!({
             "server": ServerSpec::new(&self.server_name, &self.server_description),
             "namespaces": group_namespaces(operations),
