@@ -6,7 +6,10 @@ license = "Apache-2.0"
 description = "Runtime host for mcp-twill servers: process-level identity and effect-aware retry policy."
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4", default-features = false, features = [
+  "clock",
+  "std",
+] }
 mcp-twill = { path = "../mcp-twill" }
 
 [dev-dependencies]

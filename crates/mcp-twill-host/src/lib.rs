@@ -11,7 +11,7 @@
 //! populates an executable hash or replacement status yet.
 
 use chrono::Utc;
-use mcp_twill::{CliMcpServer, EffectSpec, RuntimeIdentity};
+use mcp_twill::{CliMcpServer, EffectSpec, InvocationPlan, RuntimeIdentity};
 
 /// Wraps a server with the identity facts a process-level host can observe.
 ///
@@ -36,11 +36,12 @@ impl RuntimeHost {
         &self.identity
     }
 
-    /// Whether a call with this effect may be retried after an ambiguous
-    /// failure (connection dropped mid-call, server replaced, timeout with
-    /// unknown outcome).
-    pub fn retry_decision(&self, effect: &EffectSpec, idempotency: Idempotency) -> RetryDecision {
-        retry_decision(effect, idempotency)
+    /// Whether the planned call may be re-issued after an ambiguous failure
+    /// (connection dropped mid-call, server replaced, timeout with unknown
+    /// outcome). Reads the effect and the idempotency declaration from the
+    /// plan — the catalog is authoritative, not the supervisor's judgment.
+    pub fn retry_decision(&self, plan: &InvocationPlan) -> RetryDecision {
+        retry_decision(plan)
     }
 }
 
@@ -51,25 +52,16 @@ fn attach_process_facts(identity: RuntimeIdentity) -> RuntimeIdentity {
     identity
 }
 
-/// Whether the handler declared an idempotency key for this invocation.
-/// Retry policy trusts the declaration; verifying that a handler actually
-/// deduplicates on the key is the handler author's contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Idempotency {
-    /// The handler declared an idempotency key for this call.
-    Keyed,
-    /// No idempotency declaration.
-    None,
-}
-
 /// The host's answer to "may this call be re-issued after an ambiguous
 /// failure?".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryDecision {
     /// Safe to retry: the effect observes but does not change anything.
     Retry,
-    /// Safe to retry only because the handler declared an idempotency key.
-    RetryWithKey,
+    /// Safe to retry only because the command declared itself idempotent
+    /// in the catalog; the handler deduplicates re-issued invocations
+    /// (the plan's invocation fingerprint is the natural key).
+    RetryAsIdempotent,
     /// Not safe to retry; re-issuing could repeat the side effect.
     NoRetry {
         /// The effect that blocks the retry, for diagnostics.
@@ -83,19 +75,29 @@ impl RetryDecision {
     }
 }
 
-/// Effect-aware retry policy. Pure and read effects are always retryable.
+/// Effect-aware retry policy, reading both the effect and the idempotency
+/// declaration from the plan. Pure and read effects are always retryable.
 /// Writes, deletes, process execution, and network calls are retryable only
-/// when the handler declared an idempotency key; composites take the most
-/// restrictive answer among their parts.
-pub fn retry_decision(effect: &EffectSpec, idempotency: Idempotency) -> RetryDecision {
+/// when the command declared itself idempotent in the catalog; composites
+/// take the most restrictive answer among their parts.
+///
+/// The declaration is trusted, like every other catalog fact; verifying
+/// that a handler actually deduplicates is the handler author's contract.
+pub fn retry_decision(plan: &InvocationPlan) -> RetryDecision {
+    effect_retry(&plan.effect, plan.idempotent)
+}
+
+fn effect_retry(effect: &EffectSpec, idempotent: bool) -> RetryDecision {
     match effect {
         EffectSpec::Pure | EffectSpec::Read => RetryDecision::Retry,
         EffectSpec::Composite(effects) => {
             let mut decision = RetryDecision::Retry;
             for part in effects {
-                match retry_decision(part, idempotency) {
+                match effect_retry(part, idempotent) {
                     blocked @ RetryDecision::NoRetry { .. } => return blocked,
-                    RetryDecision::RetryWithKey => decision = RetryDecision::RetryWithKey,
+                    RetryDecision::RetryAsIdempotent => {
+                        decision = RetryDecision::RetryAsIdempotent;
+                    }
                     RetryDecision::Retry => {}
                 }
             }
@@ -104,12 +106,15 @@ pub fn retry_decision(effect: &EffectSpec, idempotency: Idempotency) -> RetryDec
         // Write, Delete, Exec, Network, and Custom effects all change
         // something outside the framework; ambiguous failure means the
         // change may already have happened.
-        effect => match idempotency {
-            Idempotency::Keyed => RetryDecision::RetryWithKey,
-            Idempotency::None => RetryDecision::NoRetry {
-                effect: effect.clone(),
-            },
-        },
+        effect => {
+            if idempotent {
+                RetryDecision::RetryAsIdempotent
+            } else {
+                RetryDecision::NoRetry {
+                    effect: effect.clone(),
+                }
+            }
+        }
     }
 }
 
@@ -118,19 +123,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pure_and_read_effects_retry_without_a_key() {
-        assert_eq!(
-            retry_decision(&EffectSpec::Pure, Idempotency::None),
-            RetryDecision::Retry
-        );
-        assert_eq!(
-            retry_decision(&EffectSpec::Read, Idempotency::None),
-            RetryDecision::Retry
-        );
+    fn pure_and_read_effects_retry_without_a_declaration() {
+        assert_eq!(effect_retry(&EffectSpec::Pure, false), RetryDecision::Retry);
+        assert_eq!(effect_retry(&EffectSpec::Read, false), RetryDecision::Retry);
     }
 
     #[test]
-    fn side_effects_do_not_retry_without_a_key() {
+    fn side_effects_do_not_retry_without_a_declaration() {
         for effect in [
             EffectSpec::Write,
             EffectSpec::Delete,
@@ -138,18 +137,18 @@ mod tests {
             EffectSpec::Network,
             EffectSpec::Custom("sync".to_string()),
         ] {
-            let decision = retry_decision(&effect, Idempotency::None);
+            let decision = effect_retry(&effect, false);
             assert!(!decision.is_retryable(), "{effect:?} must not retry");
             assert_eq!(decision, RetryDecision::NoRetry { effect });
         }
     }
 
     #[test]
-    fn side_effects_retry_only_with_a_declared_key() {
+    fn side_effects_retry_only_when_declared_idempotent() {
         for effect in [EffectSpec::Write, EffectSpec::Delete, EffectSpec::Network] {
             assert_eq!(
-                retry_decision(&effect, Idempotency::Keyed),
-                RetryDecision::RetryWithKey
+                effect_retry(&effect, true),
+                RetryDecision::RetryAsIdempotent
             );
         }
     }
@@ -158,20 +157,17 @@ mod tests {
     fn composites_take_the_most_restrictive_answer() {
         let read_write = EffectSpec::Composite(vec![EffectSpec::Read, EffectSpec::Write]);
         assert_eq!(
-            retry_decision(&read_write, Idempotency::None),
+            effect_retry(&read_write, false),
             RetryDecision::NoRetry {
                 effect: EffectSpec::Write
             }
         );
         assert_eq!(
-            retry_decision(&read_write, Idempotency::Keyed),
-            RetryDecision::RetryWithKey
+            effect_retry(&read_write, true),
+            RetryDecision::RetryAsIdempotent
         );
 
         let read_only = EffectSpec::Composite(vec![EffectSpec::Read, EffectSpec::Pure]);
-        assert_eq!(
-            retry_decision(&read_only, Idempotency::None),
-            RetryDecision::Retry
-        );
+        assert_eq!(effect_retry(&read_only, false), RetryDecision::Retry);
     }
 }

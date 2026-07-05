@@ -37,27 +37,62 @@ fn host_layers_process_facts_onto_the_server_identity() -> anyhow::Result<()> {
 }
 
 #[test]
-fn retry_decisions_flow_from_the_plan_effect() -> anyhow::Result<()> {
+fn retry_decisions_flow_from_the_plan() -> anyhow::Result<()> {
     use mcp_twill::{RunMode, RunRequest};
-    use mcp_twill_host::{Idempotency, RetryDecision};
+    use mcp_twill_host::RetryDecision;
 
-    let server = CliMcpServer::new(registry())?;
+    let registry = registry()
+        .register(
+            CommandSpec::new(["issues", "close"], "Close an issue", "Close an issue")
+                .with_arg(mcp_twill::ArgSpec::string("id", "Issue id"))
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Write,
+                    "issues",
+                    "Closes issues",
+                ))
+                .idempotent(),
+            |_context| async { Ok(CommandOutput::structured(json!({ "closed": true }))) },
+        )
+        .register(
+            CommandSpec::new(["issues", "create"], "Create an issue", "Create an issue")
+                .with_arg(mcp_twill::ArgSpec::string("title", "Issue title"))
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Write,
+                    "issues",
+                    "Creates issues",
+                )),
+            |_context| async { Ok(CommandOutput::structured(json!({ "id": 2 }))) },
+        );
+    let server = CliMcpServer::new(registry)?;
     let host = RuntimeHost::new(&server);
 
-    let plan = server.registry().build_plan(&RunRequest {
-        command: "issues list".to_string(),
-        args: Default::default(),
-        stdin: None,
-        output: None,
-        mode: RunMode::DryRun,
-        approval: None,
-        dry_run: true,
-    })?;
+    let plan_for = |command: &str, args: serde_json::Value| {
+        server.registry().build_plan(&RunRequest {
+            command: command.to_string(),
+            args: serde_json::from_value(args).expect("args must deserialize"),
+            stdin: None,
+            output: None,
+            mode: RunMode::DryRun,
+            approval: None,
+            dry_run: true,
+        })
+    };
 
-    // A read-lane plan retries with no idempotency declaration.
+    // A read-lane plan retries freely.
+    let read = plan_for("issues list", json!({}))?;
+    assert_eq!(host.retry_decision(&read), RetryDecision::Retry);
+
+    // A write command that declared itself idempotent retries as such.
+    let close = plan_for("issues close $args.id", json!({ "id": "42" }))?;
+    assert!(close.idempotent, "declaration must project into the plan");
     assert_eq!(
-        host.retry_decision(&plan.effect, Idempotency::None),
-        RetryDecision::Retry
+        host.retry_decision(&close),
+        RetryDecision::RetryAsIdempotent
     );
+
+    // An undeclared write does not retry, and the decision names the effect.
+    let create = plan_for("issues create $args.title", json!({ "title": "boom" }))?;
+    assert!(!create.idempotent);
+    assert!(!host.retry_decision(&create).is_retryable());
     Ok(())
 }

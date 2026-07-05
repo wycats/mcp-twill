@@ -275,6 +275,11 @@ pub struct CommandSpec {
     pub examples: Vec<CommandExample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub progress: Vec<crate::ProgressPhaseSpec>,
+    /// The handler deduplicates re-issued invocations (keyed on the plan's
+    /// invocation fingerprint), so an ambiguous failure may be retried.
+    /// A declaration the framework trusts, like every other catalog fact.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent: bool,
 }
 
 impl CommandSpec {
@@ -293,6 +298,7 @@ impl CommandSpec {
             permissions: Vec::new(),
             examples: Vec::new(),
             progress: Vec::new(),
+            idempotent: false,
         }
     }
 
@@ -322,6 +328,14 @@ impl CommandSpec {
 
     pub fn with_permission(mut self, permission: PermissionSpec) -> Self {
         self.permissions.push(permission);
+        self
+    }
+
+    /// Declares that the handler deduplicates re-issued invocations, making
+    /// the command safe to retry after an ambiguous failure. The natural
+    /// deduplication key is the plan's `invocation_fingerprint`.
+    pub fn idempotent(mut self) -> Self {
+        self.idempotent = true;
         self
     }
 
@@ -473,6 +487,10 @@ pub struct InvocationPlan {
     /// The resolved roots for the workspaces this plan's path arguments use.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_roots: Vec<PlanWorkspaceRoot>,
+    /// Whether the command declared itself idempotent; retry policy reads
+    /// this from the plan instead of trusting a supervisor's judgment.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent: bool,
     pub output: OutputSpec,
 }
 
