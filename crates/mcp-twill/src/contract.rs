@@ -173,6 +173,16 @@ pub fn check_examples_and_plans(registry: &CommandRegistry) -> Vec<ContractViola
                         ),
                     ));
                 }
+                Ok(plan) if plan.idempotent != operation.idempotent => {
+                    violations.push(violation(
+                        Some(&operation.id),
+                        "plan",
+                        format!(
+                            "example `{}` plans with idempotent={}, but the operation declares {}",
+                            example.command, plan.idempotent, operation.idempotent
+                        ),
+                    ));
+                }
                 Ok(_) => {}
             }
         }
