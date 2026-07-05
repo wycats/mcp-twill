@@ -28,7 +28,7 @@ Runtime identity tells a client or diagnostic log which server instance is answe
 
 Workspace identity gives path-typed arguments a meaningful context. RFC 0007's `mcp-workspace-resolver` crate now owns this model: workspace requirements, observations from MCP roots and sandbox metadata, authority-order resolution, and structured diagnostics. The resolver preserves where a workspace came from, what it permits, and why it cannot be used. That lets diagnostics say more than "path denied"; they can say which workspace was expected, which root was active, and which policy failed.
 
-Framework events record what the framework observed across a call's lifecycle: parsing, planning, authorizing, dispatching, and shaping output. Each call produces exactly one terminal event summarizing how it ended, whatever the exit path — planning failure, permission gate, denial, dry run, dispatch success or failure, even arguments that never parsed as a run request. The default event sink is no-op and costs nothing per call; servers that need inspection can record events in memory, JSONL, SQLite, or another backend. The event contract gives servers shared event structure while leaving storage choices to each server.
+Framework events record what the framework observed across a call's lifecycle: parsing, planning, authorizing, dispatching, and shaping output. Each execution-lane call produces exactly one terminal event summarizing how it ended, whatever the exit path — planning failure, permission gate, denial, dry run, dispatch success or failure, even arguments that never parsed as a run request. Help-lane calls and protocol-level errors (an unknown tool name) do not record events; the audit surface is command execution, not discovery. The default event sink is no-op and costs nothing per call; servers that need inspection can record events in memory, JSONL, SQLite, or another backend. The event contract gives servers shared event structure while leaving storage choices to each server.
 
 Generated contract tests turn the catalog into executable coverage. A server should be able to ask the framework for tests that prove every catalog operation appears in discovery, every example plans, every effect-lane tool has truthful metadata, and every declared command can reach a dry-run plan. These tests are maturity infrastructure: they are how a growing command surface stays coherent.
 
@@ -63,7 +63,7 @@ The three hashes are opaque change detectors. Clients compare them across connec
 
 Runtime identity is available at three layers, each adding what it can know. `CommandRegistry::runtime_identity()` fills the name and hashes. `CliMcpServer::runtime_identity()` adds the serving crate's version, matching what `get_info()` reports. `RuntimeHost::new(&server)` (in the sibling `mcp-twill-host` crate) captures the process id and start time at construction. A bare stdio server never touches the host and still reports a truthful, hash-complete identity; the optional fields simply stay `None`.
 
-The identity surfaces in the `cli://server/overview` resource, in the `identity` field of the `cli://catalog` JSON projection, and on every recorded framework event, so a supervisor can compare identities across restarts and an event log can name the contract that produced each entry.
+The identity surfaces at two granularities. The resources expose the contract hashes: `cli://server/overview` prints the three hashes in its text, and the `identity` field of the `cli://catalog` JSON projection carries them structurally. The full shape — version and process facts included — travels on every recorded framework event and is available programmatically from `CliMcpServer::runtime_identity()` and the host; a supervisor that wants process facts asks the identity API, not the resources.
 
 ### Idempotency And Retry Policy
 
@@ -106,30 +106,37 @@ pub trait EventSink: Send + Sync {
 }
 ```
 
-The adapter records exactly one terminal event per call, at a single choke point after the run flow produces its outcome and before rendering. Concentrating recording at one site is what makes the "every exit path is covered" claim checkable: a new exit path cannot forget to record, because it must flow through the choke point to render at all. The one lifecycle stage the choke point cannot see — arguments that never deserialize into a run request — records its own invalid-input event at the parse boundary, so failures are inspectable from the earliest stage.
+The adapter records exactly one terminal event per execution-lane call, at a single choke point after the run flow produces its outcome and before rendering. Concentrating recording at one site is what makes the "every exit path is covered" claim checkable: a new exit path cannot forget to record, because it must flow through the choke point to render at all. The one lifecycle stage the choke point cannot see — arguments that never deserialize into a run request — records its own invalid-input event at the parse boundary, so failures are inspectable from the earliest stage.
 
 Optional fields describe how far the call got. A failure that never produced a plan — a parse failure or a planning failure — has no operation id and no command path; its diagnostics carry what is known about the attempt. A dispatched call has both, plus the plan's effects. The `runtime` field carries the serving `RuntimeIdentity`, computed once at server construction — an event log can name the contract that produced each entry without per-event hashing.
 
 The default sink is no-op and reports itself disabled, so servers that never opt in pay no event-construction cost per call — this is what keeps the maturity layer honest about being optional. The core crate must also provide an in-memory sink, which tests and development inspection need regardless of storage choices. Sinks are called inline on the request path and should return quickly; brief locking is fine. Persistent sinks (JSONL, SQLite, or another backend) remain server-owned; their storage format is outside the core contract.
 
-Generated contract tests accept a catalog and a test server or fixture harness. They should verify discovery, planning, examples, resources, prompts, effect-lane metadata, and output projection. The tests should fail with catalog operation ids and projection names so authors can repair the source of drift.
+Generated contract tests accept a catalog and a test server or fixture harness. They verify discovery, planning, examples, resources, effect-lane metadata, and the identity and idempotency projections; coverage of prompts, output projection, and response-profile rules is future work, listed below. The tests should fail with catalog operation ids and projection names so authors can repair the source of drift.
 
 The first implementation ships this as per-rule check functions plus a `contract_tests!` declarative macro. Each check returns `ContractViolation` values naming the operation id and drifted projection; the macro expands to one `#[test]` per rule over a registry constructor, so each contract rule reports as an individual test result. The check functions remain public so authors who want custom aggregation can call them directly.
 
 ### Required Contract Coverage
 
+Shipped in the generated checks:
+
 - Every catalog operation appears in command resources and command help.
-- Every required argument appears in generated help and schema projections.
-- Every example parses, binds, and plans.
+- Every required argument appears in generated usage and the catalog projection.
+- Every example parses, binds, and plans against its owning operation.
 - Every operation can produce a dry-run plan.
 - Every operation has an effect classification and permission metadata.
 - Every required effect lane from RFC 0005 appears as an MCP tool.
 - No unused effect-lane tool is generated.
 - Tool annotations match the worst-case truthful behavior of each lane.
+- The catalog projection's `identity` field agrees with a freshly computed runtime identity. (This guards serialization and resource-routing drift; it cannot catch hash-computation drift, because both sides share one computation.)
+- A command declared idempotent surfaces `idempotent: true` in the served catalog projection, and its examples plan with `idempotent` set — the declaration cannot silently stop reaching the plan the host reads.
+
+Not yet generated (future coverage; authors need their own tests for these today):
+
 - Response profiles obey structured-content rules from RFC 0002.
 - Task support declarations match negotiated MCP capabilities.
-- The catalog projection's `identity` field agrees with a freshly computed runtime identity. (This guards serialization and resource-routing drift; it cannot catch hash-computation drift, because both sides share one computation.)
-- A command declared idempotent surfaces `idempotent: true` in the served catalog projection.
+- Required arguments appear in generated JSON schemas.
+- Prompt and output projections stay synchronized with the catalog.
 
 ### Implementation Phases
 
