@@ -119,6 +119,46 @@ async fn successful_dispatch_records_an_event() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn events_carry_the_runtime_identity() -> anyhow::Result<()> {
+    let registry = registry();
+    let expected = registry.runtime_identity();
+    let (client, sink) = serve_with_sink(registry).await?;
+
+    client
+        .call_tool(
+            CallToolRequestParams::new("run")
+                .with_arguments(json_object(request("issues list", json!({}))?)?),
+        )
+        .await?;
+    // A failing call carries the same identity: the recording site is shared.
+    client
+        .call_tool(
+            CallToolRequestParams::new("run")
+                .with_arguments(json_object(request("issues nonexistent", json!({}))?)?),
+        )
+        .await?;
+
+    let events = sink.events();
+    assert_eq!(events.len(), 2);
+    for event in &events {
+        let runtime = event
+            .runtime
+            .as_ref()
+            .expect("events record the serving runtime identity");
+        assert_eq!(runtime.catalog_hash, expected.catalog_hash);
+        assert_eq!(runtime.run_schema_hash, expected.run_schema_hash);
+        assert_eq!(runtime.help_schema_hash, expected.help_schema_hash);
+        assert!(
+            runtime.server_version.is_some(),
+            "the adapter layers the crate version onto the registry identity"
+        );
+    }
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn planning_failure_records_an_event_with_diagnostics() -> anyhow::Result<()> {
     let (client, sink) = serve_with_sink(registry()).await?;
 

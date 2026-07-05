@@ -29,3 +29,4 @@ path = "src/lib.rs"
 [[example]]
 name = "issues_server"
 path = "examples/issues_server.rs"
+test = true
