@@ -100,7 +100,10 @@ pub fn check_required_arguments(registry: &CommandRegistry) -> Vec<ContractViola
                 violations.push(violation(
                     Some(&operation.id),
                     "help",
-                    format!("required argument `{}` missing from arguments help", arg.name),
+                    format!(
+                        "required argument `{}` missing from arguments help",
+                        arg.name
+                    ),
                 ));
             }
             let projected_arg = projected.and_then(|operation| {
@@ -206,16 +209,21 @@ pub fn check_examples_and_plans(registry: &CommandRegistry) -> Vec<ContractViola
 }
 
 /// Every operation has an effect classification and permission metadata the
-/// MCP adapter can actually serve.
+/// MCP adapter can actually serve, and idempotency declarations project into
+/// the catalog agents read.
 pub fn check_effect_metadata(registry: &CommandRegistry) -> Vec<ContractViolation> {
     let mut violations = Vec::new();
     if let Err(error) = registry.validate_effects() {
         violations.push(violation(None, "permissions", error.to_string()));
     }
+    let catalog_json: serde_json::Value = registry
+        .resource_text("cli://catalog")
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let empty = Vec::new();
+    let projected_operations = catalog_json["operations"].as_array().unwrap_or(&empty);
     for operation in registry.operation_specs() {
-        if operation.permissions.is_empty()
-            && operation.effect != crate::EffectSpec::Pure
-        {
+        if operation.permissions.is_empty() && operation.effect != crate::EffectSpec::Pure {
             violations.push(violation(
                 Some(&operation.id),
                 "permissions",
@@ -228,6 +236,20 @@ pub fn check_effect_metadata(registry: &CommandRegistry) -> Vec<ContractViolatio
                     Some(&operation.id),
                     "permissions",
                     format!("permission on `{}` has no description", permission.scope),
+                ));
+            }
+        }
+        // An idempotency declaration only helps a supervisor if it survives
+        // into the projection agents actually read.
+        if operation.idempotent {
+            let projected = projected_operations
+                .iter()
+                .find(|candidate| candidate["id"] == operation.id.as_str());
+            if projected.map(|op| &op["idempotent"]) != Some(&serde_json::json!(true)) {
+                violations.push(violation(
+                    Some(&operation.id),
+                    "catalog",
+                    "idempotent declaration missing from the catalog projection",
                 ));
             }
         }
@@ -244,8 +266,7 @@ pub fn check_effect_lanes(
     let mut violations = Vec::new();
     let lanes = registry.lane_specs(primary_tool_name);
 
-    let mut required: std::collections::BTreeSet<EffectLane> =
-        std::collections::BTreeSet::new();
+    let mut required: std::collections::BTreeSet<EffectLane> = std::collections::BTreeSet::new();
     required.insert(EffectLane::Primary);
     for operation in registry.operation_specs() {
         required.insert(operation.lane());
@@ -311,7 +332,10 @@ pub fn check_server_projection(server: &CliMcpServer) -> Vec<ContractViolation> 
             violations.push(violation(
                 None,
                 "lanes",
-                format!("lane tool `{}` is not advertised through list_tools", lane_spec.tool_name),
+                format!(
+                    "lane tool `{}` is not advertised through list_tools",
+                    lane_spec.tool_name
+                ),
             ));
             continue;
         };
@@ -523,9 +547,7 @@ macro_rules! contract_tests {
     ($registry:path, $primary:expr) => {
         #[test]
         fn contract_discovery() {
-            $crate::contract::assert_no_violations($crate::contract::check_discovery(
-                &$registry(),
-            ));
+            $crate::contract::assert_no_violations($crate::contract::check_discovery(&$registry()));
         }
 
         #[test]

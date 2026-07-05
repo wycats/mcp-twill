@@ -226,6 +226,9 @@ pub struct OperationSpec {
     pub examples: Vec<CommandExample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub progress: Vec<ProgressPhaseSpec>,
+    /// The command declared its handler deduplicates re-issued invocations.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent: bool,
     pub task_support: TaskSupportSpec,
     pub stability: Stability,
 }
@@ -244,6 +247,7 @@ impl OperationSpec {
             permissions: spec.permissions.clone(),
             examples: spec.examples.clone(),
             progress: spec.progress.clone(),
+            idempotent: spec.idempotent,
             task_support: TaskSupportSpec::Optional,
             stability: Stability::Draft,
         }

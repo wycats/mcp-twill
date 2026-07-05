@@ -523,6 +523,7 @@ impl CommandRegistry {
             "workspaces": &workspaces,
             // Selected roots bind approvals to the roots that were previewed.
             "workspaceRoots": &workspace_roots,
+            "idempotent": operation.idempotent,
             "output": &output,
         }));
 
@@ -539,6 +540,7 @@ impl CommandRegistry {
             permissions: registered.spec.permissions.clone(),
             workspaces,
             workspace_roots,
+            idempotent: operation.idempotent,
             output,
         })
     }
