@@ -8,7 +8,7 @@
 //!
 //! Hot-replacement detection (noticing the server binary was swapped under
 //! a live connection) is planned follow-up work in this crate; nothing here
-//! populates an executable hash or replacement status yet.
+//! populates `executable_hash` yet.
 
 use chrono::Utc;
 use mcp_twill::{CliMcpServer, EffectSpec, InvocationPlan, RuntimeIdentity};
@@ -145,10 +145,17 @@ mod tests {
 
     #[test]
     fn side_effects_retry_only_when_declared_idempotent() {
-        for effect in [EffectSpec::Write, EffectSpec::Delete, EffectSpec::Network] {
+        for effect in [
+            EffectSpec::Write,
+            EffectSpec::Delete,
+            EffectSpec::Exec,
+            EffectSpec::Network,
+            EffectSpec::Custom("sync".to_string()),
+        ] {
             assert_eq!(
                 effect_retry(&effect, true),
-                RetryDecision::RetryAsIdempotent
+                RetryDecision::RetryAsIdempotent,
+                "{effect:?} must retry when declared idempotent"
             );
         }
     }
