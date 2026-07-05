@@ -4,7 +4,9 @@ use chrono::Utc;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 
-use crate::{Diagnostic, EffectSpec, InvocationPlan, ResponseEnvelope, ResponseStatus};
+use crate::{
+    Diagnostic, EffectSpec, InvocationPlan, ResponseEnvelope, ResponseStatus, RuntimeIdentity,
+};
 
 /// The framework's account of one tool call: what was planned, how
 /// authorization went, and how dispatch ended. Events are not a substitute
@@ -14,6 +16,10 @@ use crate::{Diagnostic, EffectSpec, InvocationPlan, ResponseEnvelope, ResponseSt
 pub struct FrameworkEvent {
     pub id: String,
     pub timestamp_unix_ms: i64,
+    /// The identity of the server instance that recorded this event, when
+    /// the adapter knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -32,6 +38,7 @@ impl FrameworkEvent {
         Self {
             id: new_event_id(),
             timestamp_unix_ms: Utc::now().timestamp_millis(),
+            runtime: None,
             operation_id: plan.map(|plan| plan.operation_id.clone()),
             command: envelope
                 .command
@@ -49,6 +56,7 @@ impl FrameworkEvent {
         Self {
             id: new_event_id(),
             timestamp_unix_ms: Utc::now().timestamp_millis(),
+            runtime: None,
             operation_id: None,
             command: None,
             status: ResponseStatus::InvalidInput,
@@ -62,6 +70,12 @@ impl FrameworkEvent {
                 suggestions: Vec::new(),
             }],
         }
+    }
+
+    /// Attaches the identity of the server instance recording the event.
+    pub fn with_runtime(mut self, runtime: RuntimeIdentity) -> Self {
+        self.runtime = Some(runtime);
+        self
     }
 }
 

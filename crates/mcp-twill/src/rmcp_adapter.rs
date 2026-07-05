@@ -72,6 +72,7 @@ pub struct CliMcpServer {
     replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
     authorizer: Arc<dyn PermissionAuthorizer>,
     events: Arc<dyn EventSink>,
+    identity: Arc<RuntimeIdentity>,
 }
 
 #[derive(Clone)]
@@ -118,6 +119,9 @@ impl CliMcpServer {
     ) -> crate::Result<Self> {
         registry.validate_effects()?;
         registry.validate_guidance()?;
+        let identity = registry
+            .runtime_identity()
+            .with_server_version(env!("CARGO_PKG_VERSION"));
         Ok(Self {
             registry: Arc::new(registry),
             config,
@@ -126,6 +130,7 @@ impl CliMcpServer {
             replay: Arc::new(Mutex::new(BTreeMap::new())),
             authorizer: Arc::new(DefaultPermissionAuthorizer),
             events: Arc::new(NoopEventSink),
+            identity: Arc::new(identity),
         })
     }
 
@@ -145,11 +150,10 @@ impl CliMcpServer {
 
     /// The running server's identity: name, crate version, and catalog and
     /// schema hashes. Process facts (pid, start time, executable hash) are
-    /// `None` here; a runtime host fills those in.
+    /// `None` here; a runtime host fills those in. Computed once at
+    /// construction; recorded events carry this same identity.
     pub fn runtime_identity(&self) -> RuntimeIdentity {
-        self.registry
-            .runtime_identity()
-            .with_server_version(env!("CARGO_PKG_VERSION"))
+        (*self.identity).clone()
     }
 
     /// URIs of every resource the server advertises through MCP list_resources.
@@ -250,10 +254,10 @@ impl CliMcpServer {
         let profile = response_profile(&request);
         let outcome = self.run_tool_flow(tool_name, meta, client, request).await;
         if self.events.enabled() {
-            self.events.record(FrameworkEvent::from_envelope(
-                &outcome.envelope,
-                outcome.plan.as_ref(),
-            ));
+            self.events.record(
+                FrameworkEvent::from_envelope(&outcome.envelope, outcome.plan.as_ref())
+                    .with_runtime((*self.identity).clone()),
+            );
         }
         if outcome.rendered_output {
             success_result(outcome.envelope, profile)
@@ -476,8 +480,10 @@ impl CliMcpServer {
     ) -> std::result::Result<RunRequest, rmcp::ErrorData> {
         Self::parse_arguments::<RunRequest>(arguments).inspect_err(|error| {
             if self.events.enabled() {
-                self.events
-                    .record(FrameworkEvent::parse_failure(error.message.clone()));
+                self.events.record(
+                    FrameworkEvent::parse_failure(error.message.clone())
+                        .with_runtime((*self.identity).clone()),
+                );
             }
         })
     }

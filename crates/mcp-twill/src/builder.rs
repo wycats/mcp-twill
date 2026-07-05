@@ -156,6 +156,7 @@ pub struct CommandBuilder {
     output: Option<OutputContract>,
     stdin: Option<StdinContract>,
     progress: Vec<ProgressPhaseSpec>,
+    idempotent: bool,
     handler: Option<SharedCommandHandler>,
     errors: Vec<FrameworkError>,
 }
@@ -172,6 +173,7 @@ impl CommandBuilder {
             output: None,
             stdin: None,
             progress: Vec::new(),
+            idempotent: false,
             handler: None,
             errors: Vec::new(),
         }
@@ -201,6 +203,15 @@ impl CommandBuilder {
     pub fn write(&mut self, scope: impl Into<String>, description: impl Into<String>) -> &mut Self {
         self.permissions
             .push(PermissionSpec::write(scope, description));
+        self
+    }
+
+    /// Declares that re-issuing this command with identical arguments is
+    /// safe. Projects into the catalog and the invocation plan, where a
+    /// runtime host's retry policy reads it. The framework cannot verify the
+    /// handler actually deduplicates; the declaration is the author's promise.
+    pub fn idempotent(&mut self) -> &mut Self {
+        self.idempotent = true;
         self
     }
 
@@ -355,6 +366,9 @@ impl CommandBuilder {
         }
         for example in self.examples {
             spec = spec.with_example(example);
+        }
+        if self.idempotent {
+            spec = spec.idempotent();
         }
 
         Ok(BuiltCommand { spec, handler })
