@@ -1,6 +1,6 @@
 <!-- exo:8 ulid:01kwtevarxm732m5m2frnv7gt7 -->
 
-# RFC 8: Named Argument Types And Unions
+# RFC 0008: Named Argument Types And Unions
 
 - Status: Draft
 - Area: catalog model, argument binding, schema projection, help generation
@@ -11,7 +11,7 @@
 
 This RFC gives the catalog a vocabulary for declaring named argument types: unions of record variants whose fields are scalars, constant discriminators, or references to other named types. Commands reference these types by name from `ArgSpec`, the framework matches incoming values against variants at planning time, and every projection surface — the `cli://catalog` resource, generated JSON schemas, help text, diagnostics, and the invocation fingerprint — renders the same declaration.
 
-Today an argument is one of five scalar types, and anything structured must be declared as `Json`, which the framework cannot validate, document, or diagnose. After this RFC, a catalog can declare a type like `element_target` once — "either an accessibility `ref`, or a `css` selector with an optional `frame_ref`" — and reference it from fifteen commands. The framework validates values against the union, records which variant matched on the plan, explains mismatches variant by variant, and emits shared `$defs` entries in generated schemas instead of fifteen copies.
+Today an argument is one of five scalar types, and anything structured must be declared as `Json`, which the framework cannot validate, document, or diagnose. After this RFC, a catalog can declare a type like `element_target` once — "either an accessibility `ref`, or a `css` selector with an optional `frame_ref`" — and reference it from fifteen commands. The framework validates values against the union, records which variant matched on the plan, explains mismatches variant by variant, and projects one authoritative declaration through the catalog's `types` section while inlining the union at each argument site in model-facing schemas.
 
 The design deliberately supports two matching styles with one mechanism: structural variants (distinguished by which required fields are present) and discriminated variants (distinguished by a constant field). Ambiguous unions are rejected when the catalog is built, not discovered at dispatch time.
 
@@ -78,7 +78,7 @@ TypeDecl::union("wait_condition", "A condition to wait for")
     .variant(
         Variant::new("delay", "Wait a fixed duration")
             .field(Field::constant("kind", "delay"))
-            .field(Field::number("duration_ms", "How long to wait")),
+            .field(Field::integer("duration_ms", "How long to wait")),
     )
     .variant(
         Variant::new("text", "Wait for text to appear or disappear")
@@ -140,11 +140,17 @@ pub enum FieldShape {
     String,
     Bool,
     Number,
+    Integer,                   // JSON number with no fractional part
     Constant(String),          // matches exactly this string value
     Enumerated(Vec<String>),   // matches one of these string values
     Reference(String),         // named type, matched recursively
     Repeated(Box<FieldShape>), // array of the inner shape
 }
+```
+
+`Integer` exists because the motivating surface distinguishes integral shapes (millisecond durations, pixel dimensions) from general numbers; without it, the framework would accept fractional values the real surface rejects, pushing validation back into handlers — the failure mode this RFC exists to remove.
+
+```rust
 ```
 
 `ArgSpec` gains a new value type variant referencing a declaration:
@@ -163,9 +169,10 @@ A single-variant `TypeDecl` is permitted and useful: it declares a named record 
 Catalog construction fails with a `FrameworkError` when:
 
 - two type declarations share a name, or a declared type is never referenced by any command argument or reachable field (dead types are drift);
+- a type declares zero variants, two variants of one type share a name, or two fields of one variant share a name — every name that diagnostics, previews, fingerprints, and schema `properties` maps rely on must be unique at its level, and an empty union is impossible to call;
 - an `ArgType::Named` or `FieldShape::Reference` names a type that is not declared;
 - a reference cycle exists among type declarations (`form_field` → `element_target` is fine; any path from a type back to itself is not);
-- two variants of one type are indistinguishable: neither has a constant field that the other lacks or contradicts, and each variant's required field names are a subset of the other's. Distinguishability is decidable at registration because shapes are closed; the framework must reject ambiguity at build time rather than resolve it by variant order at dispatch time.
+- two variants of one type are **ambiguous**: no shared field has contradictory constants, every required field of the first is accepted by the second (declared required *or optional*), and every required field of the second is accepted by the first. Under closed matching this is exactly the condition for one value to match both variants. Optional fields count: a variant requiring `a` with optional `b` and a variant requiring `a` and `b` are ambiguous, because `{a, b}` matches both. The rule conservatively ignores scalar-shape differences on shared fields (a `String`/`Number` split could disambiguate in principle, but the check trades that generality for a rule authors can predict). Ambiguity is decidable at registration because shapes are closed; the framework must reject it at build time rather than resolve it by variant order at dispatch time.
 
 The existing template placeholder check extends to named types: a placeholder whose `ArgSpec` is `Named` binds the matched value as a single token (its JSON serialization) — in practice named-type arguments are for structured handlers, not command-line interpolation, and authors who need interpolation should keep using scalars.
 
@@ -180,7 +187,7 @@ Given a value and a union, the planner tests variants in declaration order and s
 
 Because registration rejected ambiguity, at most one variant can match; "first" is a proof obligation discharged at build time, not a semantic.
 
-On success the binding records the variant:
+On success the binding records the matched variant — per element when the argument is repeated, since different elements of a `form_field` array legitimately match different variants:
 
 ```rust
 pub struct BoundArg {
@@ -188,35 +195,43 @@ pub struct BoundArg {
     pub value_type: ArgType,
     pub value: Value,
     pub workspace: Option<String>,
-    pub variant: Option<String>,   // Some(name) when value_type is Named
+    pub variants: Option<ArgVariants>, // Some when value_type is Named
+}
+
+pub enum ArgVariants {
+    Single(String),          // non-repeated argument: the matched variant
+    PerElement(Vec<String>), // repeated argument: one entry per element, in order
 }
 ```
 
-`variant` participates in the invocation fingerprint through `bound_args` exactly as other binding facts do: two calls that match different variants are different invocations even if their raw JSON is coincidentally similar.
+Handlers dispatch on the recorded variants instead of re-inspecting JSON, for scalars and array elements alike. Variant names of types matched *inside* a variant's reference fields are not recorded on the binding — nested unions in the motivating surface are constant-tagged, so handlers that descend into them read the tag; if a future surface needs recorded nested variants, extending `ArgVariants` with paths is compatible.
+
+`variants` participates in the invocation fingerprint through `bound_args` exactly as other binding facts do: two calls that match different variants are different invocations even if their raw JSON is coincidentally similar.
 
 On failure the planner produces a mismatch error listing, for each variant in declaration order, the first blocking problem: a missing required field, a field with the wrong shape, a constant that did not match, or an unknown field. Nested reference failures report the path (`fields[2].target`).
 
 ### Projection
 
-- **Catalog resource**: `cli://catalog` gains a top-level `types` array (name, summary, variants with fields and shapes). `args` entries with `Named` types carry the type name. The catalog hash covers the `types` section; a type change is a contract change.
-- **JSON schema**: generated schemas emit each named type as a `$defs` entry containing a property-level `oneOf` of the variant object schemas (each variant: `type: object`, its properties, its `required` list, `additionalProperties: false`; constants become `const`). Argument sites emit `$ref`. Unions never appear at the top level of a tool's input schema — composition stays at the property level, the shape that survives model-facing schema pipelines.
+- **Catalog resource**: `cli://catalog` gains a top-level `types` array (name, summary, variants with fields and shapes). `args` entries with `Named` types carry the type name. The catalog hash covers the `types` section; a type change is a contract change. The catalog is where the declare-once economy lives: one authoritative declaration regardless of how many commands reference it.
+- **JSON schema**: model-facing schemas **inline** each named type at the argument property site as a property-level `oneOf` of the variant object schemas (each variant: `type: object`, its properties, its `required` list, `additionalProperties: false`; constants become `const`; enumerations become `enum`; `Integer` becomes `"type": "integer"`). A repeated argument emits `"type": "array"` with `items` containing the inlined union. Inlining is fully dereferenced and guaranteed to terminate because reference cycles are rejected at registration. `$ref`/`$defs` indirection is deliberately absent from model-facing schemas: the pipeline failure in the motivation was caused by layers that type arguments from the property schema they can see, and a bare `$ref` at a property site recreates exactly that blindness. The duplication cost is accepted and confined to the schema projection — the catalog and help surfaces render each type once. Unions never appear at the top level of a tool's input schema — composition stays at the property level, the shape that survives model-facing schema pipelines.
 - **Help text**: arguments with named types render the type summary plus one indented line per variant (variant name, summary, field list with required/optional markers). A type referenced multiple times in one command renders fully once.
 - **Preview**: the permission preview includes the matched variant name alongside the argument name.
 
 ### Required Invariants
 
 - Every `Named` reference (from `ArgSpec` or `FieldShape::Reference`) resolves to a declared type; the catalog cannot be built otherwise.
-- Variant distinguishability is verified at registration; dispatch never depends on declaration order for correctness.
-- The matched variant name appears on the bound argument and in the invocation fingerprint.
+- Names are unique at every level (types in a catalog, variants in a type, fields in a variant), and every type has at least one variant.
+- Variant ambiguity — including ambiguity through optional fields — is rejected at registration; dispatch never depends on declaration order for correctness.
+- The matched variant appears on the bound argument (per element for repeated arguments) and in the invocation fingerprint.
 - Union mismatch diagnostics name every variant and its first blocking problem; nested failures carry a path.
-- Generated schemas express named types as `$defs` + property-level `oneOf`; no top-level `oneOf` in any tool input schema.
+- Model-facing schemas inline unions at argument property sites (array-wrapped when repeated); no top-level `oneOf` and no `$ref` indirection in any tool input schema.
 - The `types` projection in `cli://catalog` round-trips the declarations the planner enforces (one source of truth).
 
 ### Implementation Phases
 
-1. Type declaration model (`TypeDecl`, `Variant`, `Field`, `FieldShape`), catalog storage, and registration-time validation (uniqueness, resolution, cycles, distinguishability, dead types).
-2. Planner matching: variant selection, `BoundArg::variant`, fingerprint participation, per-variant mismatch diagnostics with paths.
-3. Projections: catalog resource `types` section, `$defs` schema generation, help rendering, preview variant display.
+1. Type declaration model (`TypeDecl`, `Variant`, `Field`, `FieldShape`), catalog storage, and registration-time validation (name uniqueness at every level, non-empty variants, resolution, cycles, ambiguity including optional-field overlap, dead types).
+2. Planner matching: variant selection, `BoundArg::variants` (single and per-element), fingerprint participation, per-variant mismatch diagnostics with paths.
+3. Projections: catalog resource `types` section, inlined schema generation (property-level `oneOf`, array wrapping for repeated), help rendering, preview variant display.
 4. Builder DSL surface (`declare_type`, `ArgSpec::named`, `Field` constructors) and example coverage in `issues_server` or a dedicated example.
 5. Contract coverage: referenced-types-exist and no-dead-types rules; schema projection rule (named types appear in `$defs`, never top-level `oneOf`).
 
@@ -224,12 +239,12 @@ On failure the planner produces a mismatch error listing, for each variant in de
 
 - A structural union (`element_target` shape) matches both variants, records the right `variant` on the plan, and rejects a value matching neither with a per-variant diagnostic naming both blocking fields.
 - A discriminated union (five-variant condition shape) selects by constant field and reports a wrong-constant mismatch naming the expected constants.
-- A repeated named-type argument whose variants reference another named type (the form-field shape) matches end to end and reports a nested failure with an indexed path.
-- Catalog construction fails for: dangling reference, reference cycle, two indistinguishable variants, dead type.
-- The generated schema for a command using a named type contains a `$defs` entry and a `$ref`, and no top-level `oneOf`.
+- A repeated named-type argument whose variants reference another named type (the form-field shape) matches end to end, records one variant per element in order, and reports a nested failure with an indexed path.
+- Catalog construction fails for: dangling reference, reference cycle, dead type, empty variant list, duplicate variant name, duplicate field name, two variants ambiguous through required-field overlap, and two variants ambiguous through optional-field overlap (required `a` + optional `b` versus required `a` and `b`).
+- The generated schema for a command using a named type inlines a property-level `oneOf` at the argument site (wrapped in `array`/`items` when repeated), with no top-level `oneOf` and no `$ref`.
 - Generated help for such a command renders every variant with its fields.
 - Contract tests fail when a declared type loses its last reference.
-- Two calls matching different variants of the same type produce different invocation fingerprints.
+- Two calls matching different variants of the same type produce different invocation fingerprints, and two arrays whose elements match different variant sequences do as well.
 
 ## Drawbacks
 
@@ -241,7 +256,7 @@ The restriction to non-recursive types means genuinely recursive shapes (a tree 
 
 ## Rationale And Alternatives
 
-**Named declarations versus inline unions.** An inline union attached directly to one `ArgSpec` would be less ceremony for a one-off type. But the motivating shape is the opposite: `element_target` is referenced by roughly fifteen commands. Inline unions would mean fifteen copies in the catalog projection, fifteen expansions in generated schemas with no `$defs` sharing, and no stable name for diagnostics to teach. Naming is what makes every downstream surface — schemas, help, errors, the VS Code extension generation this adoption arc is building toward — coherent. The one-off cost is a single-variant `TypeDecl`, which is cheap.
+**Named declarations versus inline unions.** An inline union attached directly to one `ArgSpec` would be less ceremony for a one-off type. But the motivating shape is the opposite: `element_target` is referenced by roughly fifteen commands. Inline unions would mean fifteen copies in the catalog projection and no stable name for diagnostics to teach or for generated client bindings to import. Naming is what makes every downstream surface — the catalog's `types` section, help, errors, the VS Code extension generation this adoption arc is building toward — coherent. (Model-facing schemas inline the union at each site regardless, for pipeline-compatibility reasons; the declare-once economy lives in the catalog and help projections, not in schema bytes.) The one-off cost is a single-variant `TypeDecl`, which is cheap.
 
 **One mechanism for structural and discriminated unions.** A design with separate `Tagged` and `Untagged` union kinds (serde's split) would make the discriminated case marginally more declarative. It would also double the vocabulary and leave the framework unable to check what actually matters: that variants are distinguishable. Distinguishability subsumes both styles — a constant field is simply one way to be distinguishable — so the framework checks the property directly and lets authors mix styles.
 
@@ -254,7 +269,7 @@ The restriction to non-recursive types means genuinely recursive shapes (a tree 
 ## Prior Art
 
 - **serde's tagged/untagged enums** are the closest Rust precedent for the two matching styles. This design differs by checking distinguishability eagerly instead of trusting variant order, because a catalog is a public contract rather than a private deserialization detail.
-- **JSON Schema `oneOf` + `$defs`** is the projection target. The design deliberately generates a disciplined subset (object variants, closed properties, property-level composition) rather than admitting full schema expressiveness, trading generality for the ability to match, diagnose, and teach.
+- **JSON Schema `oneOf`** is the projection vocabulary. The design deliberately generates a disciplined subset (object variants, closed properties, property-level composition, fully inlined) rather than admitting full schema expressiveness or `$ref` indirection, trading generality and compactness for the ability to match, diagnose, teach, and survive model-facing pipelines.
 - **visible-browser-lab's agent-surface-contract** is both the motivating consumer and prior art: its hand-built `element_target()` helper, compact-domain flattening comment, and per-operation required-field enforcement are the artifacts this RFC turns into framework features.
 - **Ember and Rust RFC practice** shape the document itself: the merged text records the rejected alternatives (top-level unions, escape hatches) with their reasons, so future contributors inherit the constraint knowledge, not just the API.
 

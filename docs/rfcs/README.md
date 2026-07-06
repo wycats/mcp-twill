@@ -45,7 +45,7 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 - [RFC 0005: Effect-Lane Tool Surface](stage-4/0005-effect-lane-tool-surface.md)
 - [RFC 0006: Author Ergonomics](stage-4/0006-author-ergonomics.md)
 - [RFC 0007: Workspace Resolution Crate](stage-4/0007-workspace-resolution-crate.md)
-- [RFC 0008: Named Argument Types And Unions](stage-0/00008-named-argument-types-and-unions.md)
+- [RFC 0008: Named Argument Types And Unions](stage-0/0008-named-argument-types-and-unions.md)
 
 ## Suggested Implementation Order
 
