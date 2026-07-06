@@ -122,6 +122,30 @@ pub fn registry() -> Result<CommandRegistry> {
                         ])))
                     });
             });
+
+            server.command("issues export", |command| {
+                command
+                    .summary("Export issues to the repository")
+                    .description(
+                        "Writes an issue export under the repository root. The root is \
+                         resolved by the server from the workspace declaration; it is \
+                         never a command argument.",
+                    )
+                    .uses_workspace("repo")
+                    .write("issues", "Writes an export file under the repository root")
+                    .idempotent()
+                    .example("issues export", "Export issues under the resolved repo root")
+                    .handle(|context: CommandContext| async move {
+                        let root = context
+                            .workspace_root("repo")
+                            .expect("declared workspace is resolved at plan time");
+                        let path = root.path()?;
+                        Ok(CommandOutput::structured(json!({
+                            "exported_to": path.join("issues-export.json"),
+                            "root_source": root.source,
+                        })))
+                    });
+            });
         },
     )
 }

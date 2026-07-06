@@ -247,6 +247,28 @@ pub struct PlanWorkspaceRoot {
     pub selection_reason: Value,
 }
 
+impl PlanWorkspaceRoot {
+    /// The root as a filesystem path. Errors when the root URI is not a
+    /// `file:` URI, using the resolver's normalization rules.
+    pub fn path(&self) -> Result<std::path::PathBuf> {
+        let normalized = mcp_workspace_resolver::normalize_file_uri(&self.root_uri)
+            .map_err(|err| FrameworkError::Handler(err.to_string()))?;
+        let mut path = String::new();
+        if let Some(drive) = normalized.drive() {
+            path.push(drive);
+            path.push(':');
+        }
+        for component in normalized.components() {
+            path.push('/');
+            path.push_str(component);
+        }
+        if path.is_empty() {
+            path.push('/');
+        }
+        Ok(std::path::PathBuf::from(path))
+    }
+}
+
 impl From<&ResolvedWorkspaceRoot> for PlanWorkspaceRoot {
     fn from(root: &ResolvedWorkspaceRoot) -> Self {
         let source = serde_json::to_value(root.source)
@@ -304,6 +326,12 @@ pub struct CommandSpec {
     /// A declaration the framework trusts, like every other catalog fact.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent: bool,
+    /// Workspaces this command requires resolved, beyond those referenced
+    /// by path arguments. Names must match server-declared workspaces. The
+    /// resolved root is delivered to the handler through the plan; it is
+    /// never caller-supplied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<String>,
 }
 
 impl CommandSpec {
@@ -323,6 +351,7 @@ impl CommandSpec {
             examples: Vec::new(),
             progress: Vec::new(),
             idempotent: false,
+            workspaces: Vec::new(),
         }
     }
 
@@ -365,6 +394,14 @@ impl CommandSpec {
 
     pub fn with_example(mut self, example: CommandExample) -> Self {
         self.examples.push(example);
+        self
+    }
+
+    /// Declares that this command requires the named workspace resolved,
+    /// without a path argument. Planning fails when the workspace does not
+    /// resolve; the handler observes the root through the plan.
+    pub fn uses_workspace(mut self, name: impl Into<String>) -> Self {
+        self.workspaces.push(name.into());
         self
     }
 
@@ -741,6 +778,19 @@ pub struct RunResponse {
 pub struct CommandContext {
     pub plan: InvocationPlan,
     pub stdin: Option<StdinSpec>,
+}
+
+impl CommandContext {
+    /// The resolved root for a workspace this command declared or one of
+    /// its path arguments referenced. Planning guarantees presence for
+    /// declared workspaces; path-argument workspaces are present when a
+    /// bound argument referenced them.
+    pub fn workspace_root(&self, id: &str) -> Option<&PlanWorkspaceRoot> {
+        self.plan
+            .workspace_roots
+            .iter()
+            .find(|root| root.id == id)
+    }
 }
 
 #[derive(Debug, Clone)]

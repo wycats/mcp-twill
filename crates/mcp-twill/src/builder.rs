@@ -157,6 +157,7 @@ impl ServerBuilder {
             registry = registry.register(command.spec, command.handler);
         }
         registry.validate_types()?;
+        registry.validate_workspaces()?;
         registry.validate_examples()?;
         registry.validate_guidance()?;
         Ok(registry)
@@ -174,6 +175,7 @@ pub struct CommandBuilder {
     stdin: Option<StdinContract>,
     progress: Vec<ProgressPhaseSpec>,
     idempotent: bool,
+    workspaces: Vec<String>,
     handler: Option<SharedCommandHandler>,
     errors: Vec<FrameworkError>,
 }
@@ -191,6 +193,7 @@ impl CommandBuilder {
             stdin: None,
             progress: Vec::new(),
             idempotent: false,
+            workspaces: Vec::new(),
             handler: None,
             errors: Vec::new(),
         }
@@ -229,6 +232,15 @@ impl CommandBuilder {
     /// handler actually deduplicates; the declaration is the author's promise.
     pub fn idempotent(&mut self) -> &mut Self {
         self.idempotent = true;
+        self
+    }
+
+    /// Declares that this command requires the named workspace resolved,
+    /// without taking a path argument. The resolved root reaches the handler
+    /// through the plan (`CommandContext::workspace_root`); it is never
+    /// caller-supplied. Planning fails when the workspace does not resolve.
+    pub fn uses_workspace(&mut self, name: impl Into<String>) -> &mut Self {
+        self.workspaces.push(name.into());
         self
     }
 
@@ -365,6 +377,20 @@ impl CommandBuilder {
             }
         }
 
+        let mut declared_workspaces = BTreeSet::new();
+        for workspace in &self.workspaces {
+            if !workspace_names.contains(workspace.as_str()) {
+                return Err(FrameworkError::Build(format!(
+                    "command `{command_name}` uses workspace `{workspace}`, which is not declared on the server"
+                )));
+            }
+            if !declared_workspaces.insert(workspace.as_str()) {
+                return Err(FrameworkError::Build(format!(
+                    "command `{command_name}` declares workspace `{workspace}` more than once"
+                )));
+            }
+        }
+
         let mut spec = CommandSpec::new(self.path, summary, description);
         if let Some(output) = self.output {
             spec = spec.with_output(output);
@@ -386,6 +412,9 @@ impl CommandBuilder {
         }
         if self.idempotent {
             spec = spec.idempotent();
+        }
+        for workspace in self.workspaces {
+            spec = spec.uses_workspace(workspace);
         }
 
         Ok(BuiltCommand { spec, handler })
