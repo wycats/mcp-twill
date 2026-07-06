@@ -1,6 +1,6 @@
 <!-- exo:9 ulid:01kwwnx9ftgxwcmkhde200ceax -->
 
-# RFC 9: Handler-Visible Workspace Roots
+# RFC 0009: Handler-Visible Workspace Roots
 
 - Status: Draft
 - Area: command model, planning, handler context, projection surfaces
@@ -11,7 +11,7 @@
 
 This RFC lets a command declare that it operates within a named workspace without binding a path argument to it. The framework resolves the workspace at planning time, records the selected root on the invocation plan, and hands it to the handler through `CommandContext`. Help, the catalog resource, the permission preview, and the invocation fingerprint all project the requirement from the same declaration.
 
-RFC 0007 built the resolution machinery — requirements, observations, policy, diagnostics — and RFC 0004 wired resolved roots into planning. But the only way a resolved root reaches a handler today is through a path-typed argument: the plan keeps a root only when a bound argument names its workspace. A command whose relationship to the workspace is ambient — it writes artifacts under the workspace root, or spawns a process with the workspace as its working directory — has no way to say so. This RFC closes that gap with one declaration: `uses_workspace("repo")`.
+RFC 0007 built the resolution machinery — requirements, observations, policy, diagnostics — and RFC 0004 wired resolved roots into planning. But the only way a resolved root reaches a handler today is through a path-typed argument: the plan keeps a root only when a bound argument names its workspace. A command whose relationship to the workspace is ambient — it writes artifacts under the workspace root, or spawns a process with the workspace as its working directory — has no way to say so. This RFC closes that gap with one declaration: `uses_workspace("project")`.
 
 After this RFC, "which directory does this command operate in" is a catalog fact like every other catalog fact: declared once, validated at registration, resolved and enforced at planning time, visible in help and preview, and covered by the fingerprint that binds approvals to what was previewed.
 
@@ -41,11 +41,13 @@ let server = Server::builder("vbl", "Visible Browser Lab")
 A command that operates inside that workspace — without taking any path argument — says so in its declaration:
 
 ```rust
-.command(
-    CommandSpec::new("export", "artifacts export $args.artifact_id", "Export an artifact to the workspace")
-        .arg(ArgSpec::string("artifact_id", "The artifact to export"))
-        .uses_workspace("project"),
-)
+server.command("artifacts export", |command| {
+    command
+        .summary("Export an artifact to the workspace")
+        .arg(arg::string("artifact_id").summary("The artifact to export"))
+        .uses_workspace("project")
+        // ...
+});
 ```
 
 That is the whole authoring surface. The declaration means: this command needs the `project` workspace resolved before it runs, and its handler receives the selected root.
@@ -54,9 +56,11 @@ At planning time the framework resolves `project` exactly as it would for a path
 
 ```rust
 async fn export(ctx: CommandContext) -> Result<CommandOutput> {
+    // `artifact_id` is the command's declared string argument.
+    let artifact_id = ctx.plan.bound_args["artifact_id"].value.as_str().unwrap_or_default();
     let root = ctx.workspace_root("project")
         .expect("planning guarantees a declared workspace resolves");
-    let dest = root.path()?.join("artifacts").join(&artifact_id);
+    let dest = root.path()?.join("artifacts").join(artifact_id);
     // ...
 }
 ```
@@ -79,7 +83,7 @@ Help teaches the requirement. A command that uses a workspace renders a `Workspa
 
 Agents should learn that some commands have an ambient workspace: a directory the command operates in that is not an argument. Help and the catalog teach which commands these are. The agent's job is never to supply the root — there is no argument to supply it through — but to ensure the environment provides one: expose MCP roots from the client, or rely on the server's declared fallback.
 
-When a workspace fails to resolve, the diagnostic names the requirement and lists what was observed. The agent should treat this like a missing capability, not a malformed call: retrying with different arguments will not help, and the diagnostic says so by locating the failure at the command level rather than on any argument. The steering text should point at the repair: "expose a client root named `project` or configure the server's fallback root."
+When a workspace fails to resolve, the diagnostic names the requirement and lists what was observed. The agent should treat this like a missing capability, not a malformed call: retrying with different arguments will not help, and the diagnostic says so by locating the failure at the command level rather than on any argument. The steering text should point at the repair that can actually work given what was observed. RFC 0007's authority ordering is preserved: when the client has already sent MCP roots, that observation is authoritative — a missing or wrong-named client root leaves the requirement unresolved, and lower-authority fallbacks do not apply. In that case the steering says to expose a client root named `project`; only when no higher-authority observation is present does it suggest the server's declared fallback.
 
 The preview is part of the lesson. When an agent relays a permission preview to a human, the selected workspace root is part of what is being approved. Agents should preserve the fingerprint discipline they already learned from RFC 0003: approval covers exactly the plan that was previewed, including its roots.
 
