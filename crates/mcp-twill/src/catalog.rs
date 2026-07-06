@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ArgSpec, CommandExample, CommandSpec, PermissionEffect, PermissionSpec, WorkspaceDecl,
+    ArgSpec, CommandExample, CommandSpec, PermissionEffect, PermissionSpec, TypeDecl,
+    WorkspaceDecl,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -281,6 +282,8 @@ pub struct CommandCatalog {
     pub workspaces: Vec<WorkspaceDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guidance: Vec<CommandGuidance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<TypeDecl>,
     pub identity: CatalogIdentity,
 }
 

@@ -518,8 +518,58 @@ pub fn verify_catalog_coverage(
     violations.extend(check_effect_metadata(registry));
     violations.extend(check_effect_lanes(registry, primary_tool_name));
     violations.extend(check_workspace_projection(registry));
+    violations.extend(check_type_projection(registry));
     violations.extend(check_runtime_identity(registry));
     violations
+}
+
+/// Named types honor the registration promises (every referenced type
+/// exists, no dead types) and every argument schema is fully inlined:
+/// unions appear only as property-level `oneOf`, never behind `$ref`,
+/// `$defs`, or a top-level `oneOf`.
+pub fn check_type_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_types() {
+        violations.push(violation(None, "types", error.to_string()));
+        // The schema inliner assumes a validated type graph (no cycles,
+        // no dangling references); projecting anyway could recurse forever.
+        return violations;
+    }
+    for command in registry.command_specs() {
+        let schema = registry.arg_schema(command);
+        if schema.get("oneOf").is_some() {
+            violations.push(violation(
+                Some(&command.path.join(" ")),
+                "schema",
+                "argument schema has a top-level `oneOf`; unions must inline at the property level",
+            ));
+        }
+        for forbidden in ["$ref", "$defs"] {
+            if schema_contains_key(&schema, forbidden) {
+                violations.push(violation(
+                    Some(&command.path.join(" ")),
+                    "schema",
+                    format!("argument schema contains `{forbidden}`; named types must be fully inlined"),
+                ));
+            }
+        }
+    }
+    violations
+}
+
+/// Whether any object in the JSON tree has `key` as a property name.
+/// Matching on keys (not the rendered string) avoids false positives when
+/// the text appears inside a description.
+fn schema_contains_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key(key) || map.values().any(|child| schema_contains_key(child, key))
+        }
+        serde_json::Value::Array(items) => {
+            items.iter().any(|child| schema_contains_key(child, key))
+        }
+        _ => false,
+    }
 }
 
 fn render_violations(violations: &[ContractViolation]) -> String {
@@ -592,6 +642,13 @@ macro_rules! contract_tests {
         #[test]
         fn contract_workspace_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_workspace_projection(
+                &$registry(),
+            ));
+        }
+
+        #[test]
+        fn contract_type_projection() {
+            $crate::contract::assert_no_violations($crate::contract::check_type_projection(
                 &$registry(),
             ));
         }

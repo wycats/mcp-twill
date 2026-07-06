@@ -25,6 +25,14 @@ pub enum FrameworkError {
     MissingArgument(String),
     #[error("argument `{0}` must be {1}")]
     InvalidArgumentType(String, &'static str),
+    #[error("{}", union_mismatch_message(argument, type_name, problems))]
+    ArgumentUnionMismatch {
+        argument: String,
+        type_name: String,
+        /// Every declared variant in declaration order, paired with its
+        /// first blocking problem.
+        problems: Vec<(String, String)>,
+    },
     #[error(
         "{}",
         workspace_mismatch_message(argument, workspace, selected_root, diagnostics)
@@ -56,6 +64,21 @@ pub enum FrameworkError {
     Build(String),
     #[error("command handler failed: {0}")]
     Handler(String),
+}
+
+/// Every declared variant appears with its first blocking problem, in
+/// declaration order, so an agent sees exactly which fields would make its
+/// value match.
+fn union_mismatch_message(
+    argument: &str,
+    type_name: &str,
+    problems: &[(String, String)],
+) -> String {
+    let mut message = format!("argument `{argument}` does not match `{type_name}`:");
+    for (variant, problem) in problems {
+        message.push_str(&format!("\n  not `{variant}`: {problem}"));
+    }
+    message
 }
 
 /// A boundary failure and a resolution failure are different causes and get

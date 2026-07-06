@@ -10,6 +10,7 @@ pub mod response;
 pub mod rmcp_adapter;
 pub mod runtime;
 pub mod template;
+pub mod types;
 
 pub use builder::*;
 pub use catalog::*;
@@ -23,3 +24,4 @@ pub use response::*;
 pub use rmcp_adapter::{CliMcpServer, CliMcpServerConfig};
 pub use runtime::RuntimeIdentity;
 pub use template::{CommandTemplate, TemplateToken};
+pub use types::{Field, FieldShape, TypeDecl, Variant};

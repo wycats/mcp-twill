@@ -46,6 +46,8 @@ pub struct CommandRegistry {
     server_description: String,
     commands: BTreeMap<Vec<String>, RegisteredCommand>,
     workspaces: BTreeMap<String, WorkspaceDecl>,
+    types: BTreeMap<String, crate::TypeDecl>,
+    duplicate_types: Vec<String>,
     guidance: Vec<CommandGuidance>,
     policy: PermissionPolicy,
 }
@@ -63,6 +65,8 @@ impl CommandRegistry {
             server_description: server_description.into(),
             commands: BTreeMap::new(),
             workspaces: BTreeMap::new(),
+            types: BTreeMap::new(),
+            duplicate_types: Vec::new(),
             guidance: Vec::new(),
             policy: PermissionPolicy::default(),
         }
@@ -76,6 +80,18 @@ impl CommandRegistry {
     pub fn declare_workspace(mut self, workspace: WorkspaceDecl) -> Self {
         self.workspaces.insert(workspace.name.clone(), workspace);
         self
+    }
+
+    pub fn declare_type(mut self, decl: crate::TypeDecl) -> Self {
+        if self.types.contains_key(&decl.name) {
+            self.duplicate_types.push(decl.name.clone());
+        }
+        self.types.insert(decl.name.clone(), decl);
+        self
+    }
+
+    pub fn types(&self) -> impl Iterator<Item = &crate::TypeDecl> {
+        self.types.values()
     }
 
     pub fn declare_guidance(mut self, guidance: CommandGuidance) -> Self {
@@ -135,6 +151,7 @@ impl CommandRegistry {
             namespaces: group_namespaces(&operations),
             operations,
             workspaces: self.workspaces.values().cloned().collect(),
+            types: self.types.values().cloned().collect(),
             guidance: self.guidance.clone(),
             identity,
         }
@@ -161,6 +178,7 @@ impl CommandRegistry {
             "namespaces": group_namespaces(operations),
             "operations": operations,
             "workspaces": self.workspaces.values().collect::<Vec<_>>(),
+            "types": self.types.values().collect::<Vec<_>>(),
             "guidance": self.guidance,
         });
         let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
@@ -225,6 +243,86 @@ impl CommandRegistry {
             }
         }
         Ok(())
+    }
+
+    /// Validates the type declarations against every rule registration
+    /// promises: unique names, non-empty unions, resolvable references,
+    /// no cycles, no dead types, no ambiguous variant pairs.
+    pub fn validate_types(&self) -> Result<()> {
+        if let Some(name) = self.duplicate_types.first() {
+            return Err(FrameworkError::Build(format!(
+                "type `{name}` is declared more than once"
+            )));
+        }
+        let mut arg_references = Vec::new();
+        for command in self.commands.values() {
+            for arg in &command.spec.args {
+                if let crate::ArgType::Named(type_name) = &arg.value_type {
+                    arg_references.push((
+                        format!("command `{}` argument `{}`", command.spec.name(), arg.name),
+                        type_name.clone(),
+                    ));
+                }
+            }
+        }
+        crate::types::validate_types(&self.types, &arg_references)
+    }
+
+    /// The model-facing JSON schema for one command's arguments. Named types
+    /// are fully inlined at the property site as a property-level `oneOf`
+    /// (array-wrapped when repeated); no `$ref` indirection and no top-level
+    /// `oneOf` appear anywhere in the output.
+    pub fn arg_schema(&self, spec: &crate::CommandSpec) -> Value {
+        let mut properties = serde_json::Map::new();
+        let mut required = Vec::new();
+        for arg in &spec.args {
+            let base = match &arg.value_type {
+                crate::ArgType::String | crate::ArgType::Path => json!({
+                    "type": "string",
+                    "description": arg.summary,
+                }),
+                crate::ArgType::Json => json!({
+                    "description": arg.summary,
+                }),
+                crate::ArgType::Bool => json!({
+                    "type": "boolean",
+                    "description": arg.summary,
+                }),
+                crate::ArgType::Number => json!({
+                    "type": "number",
+                    "description": arg.summary,
+                }),
+                crate::ArgType::Named(type_name) => {
+                    let mut schema = crate::types::inline_type_schema(type_name, &self.types);
+                    // The property site carries the command-specific summary
+                    // ("Element to click"), like every other argument; the
+                    // type's own description lives on its variants.
+                    if let Some(object) = schema.as_object_mut() {
+                        object.insert("description".into(), json!(arg.summary));
+                    }
+                    schema
+                }
+            };
+            let schema = if arg.repeated {
+                json!({
+                    "type": "array",
+                    "description": arg.summary,
+                    "items": base,
+                })
+            } else {
+                base
+            };
+            properties.insert(arg.name.clone(), schema);
+            if arg.required {
+                required.push(Value::String(arg.name.clone()));
+            }
+        }
+        json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        })
     }
 
     pub fn validate_effects(&self) -> Result<()> {
@@ -470,6 +568,38 @@ impl CommandRegistry {
                 }
                 used_workspaces.insert(workspace_name.clone());
             }
+            let variants = if let crate::ArgType::Named(type_name) = &spec.value_type {
+                if spec.repeated {
+                    let elements = value.as_array().ok_or_else(|| {
+                        FrameworkError::InvalidArgumentType(
+                            spec.name.clone(),
+                            "an array of values matching a declared type",
+                        )
+                    })?;
+                    let mut matched = Vec::with_capacity(elements.len());
+                    for (index, element) in elements.iter().enumerate() {
+                        let label = format!("{}[{index}]", spec.name);
+                        matched.push(crate::types::match_named_value(
+                            &label,
+                            &label,
+                            type_name,
+                            element,
+                            &self.types,
+                        )?);
+                    }
+                    Some(crate::ArgVariants::PerElement(matched))
+                } else {
+                    Some(crate::ArgVariants::Single(crate::types::match_named_value(
+                        &spec.name,
+                        &spec.name,
+                        type_name,
+                        value,
+                        &self.types,
+                    )?))
+                }
+            } else {
+                None
+            };
             bound_args.insert(
                 spec.name.clone(),
                 crate::BoundArg {
@@ -477,6 +607,7 @@ impl CommandRegistry {
                     value_type: spec.value_type.clone(),
                     value: value.clone(),
                     workspace: spec.workspace.clone(),
+                    variants,
                 },
             );
         }
@@ -878,12 +1009,78 @@ impl CommandRegistry {
                 .as_ref()
                 .map(|workspace| format!(" workspace `{workspace}`"))
                 .unwrap_or_default();
+            let value_type = match &arg.value_type {
+                crate::ArgType::Named(type_name) if arg.repeated => {
+                    format!("list of `{type_name}`")
+                }
+                crate::ArgType::Named(type_name) => format!("`{type_name}`"),
+                other => format!("{other:?}"),
+            };
             lines.push(format!(
-                "- `$args.{}`: {:?}, {}, {}{}",
-                arg.name, arg.value_type, required, arg.summary, workspace
+                "- `$args.{}`: {}, {}, {}{}",
+                arg.name, value_type, required, arg.summary, workspace
             ));
         }
+        let type_lines = self.referenced_types_text(spec);
+        if !type_lines.is_empty() {
+            lines.push(String::new());
+            lines.extend(type_lines);
+        }
         lines.join("\n")
+    }
+
+    /// Renders each type referenced by this command's arguments exactly
+    /// once, in reference order, including transitively referenced types.
+    fn referenced_types_text(&self, spec: &CommandSpec) -> Vec<String> {
+        let mut queue: Vec<&str> = spec
+            .args
+            .iter()
+            .filter_map(|arg| match &arg.value_type {
+                crate::ArgType::Named(type_name) => Some(type_name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut seen = BTreeSet::new();
+        let mut ordered = Vec::new();
+        while let Some(name) = queue.first().copied() {
+            queue.remove(0);
+            if !seen.insert(name.to_string()) {
+                continue;
+            }
+            let Some(decl) = self.types.get(name) else {
+                continue;
+            };
+            ordered.push(decl);
+            for variant in &decl.variants {
+                for field in &variant.fields {
+                    if let Some(referenced) = field.shape.referenced_type() {
+                        queue.push(referenced);
+                    }
+                }
+            }
+        }
+        let mut lines = Vec::new();
+        for decl in ordered {
+            lines.push(format!("Type `{}`: {}", decl.name, decl.summary));
+            for variant in &decl.variants {
+                lines.push(format!("  - {}: {}", variant.name, variant.summary));
+                for field in &variant.fields {
+                    let required = if field.required {
+                        "required"
+                    } else {
+                        "optional"
+                    };
+                    lines.push(format!(
+                        "    - `{}`: {}, {}, {}",
+                        field.name,
+                        field.shape.label(),
+                        required,
+                        field.summary
+                    ));
+                }
+            }
+        }
+        lines
     }
 
     fn examples_text(&self, spec: &CommandSpec) -> String {
