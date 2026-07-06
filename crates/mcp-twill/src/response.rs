@@ -384,7 +384,8 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
 }
 
 /// Projects resolver workspace diagnostics carried by a workspace mismatch
-/// into envelope diagnostics with the resolver's stable codes.
+/// or an unresolved workspace requirement into envelope diagnostics with the
+/// resolver's stable codes.
 fn workspace_diagnostics(error: &FrameworkError) -> Vec<Diagnostic> {
     let diagnostics = match error {
         FrameworkError::WorkspaceMismatch { diagnostics, .. }

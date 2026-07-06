@@ -249,18 +249,31 @@ pub struct PlanWorkspaceRoot {
 
 impl PlanWorkspaceRoot {
     /// The root as a filesystem path. Errors when the root URI is not a
-    /// `file:` URI, using the resolver's normalization rules.
+    /// `file:` URI, using the resolver's normalization rules. Preserves the
+    /// path shape: UNC hosts keep their `//host` prefix, drive-letter paths
+    /// keep the drive, and relative paths stay relative.
     pub fn path(&self) -> Result<std::path::PathBuf> {
         let normalized = mcp_workspace_resolver::normalize_file_uri(&self.root_uri)
             .map_err(|err| FrameworkError::Handler(err.to_string()))?;
         let mut path = String::new();
+        if let Some(host) = normalized.host() {
+            path.push_str("//");
+            path.push_str(host);
+        }
         if let Some(drive) = normalized.drive() {
             path.push(drive);
             path.push(':');
         }
+        let mut first = true;
         for component in normalized.components() {
-            path.push('/');
-            path.push_str(component);
+            if first && !normalized.is_absolute() && normalized.host().is_none() {
+                // Relative path: no leading separator.
+                path.push_str(component);
+            } else {
+                path.push('/');
+                path.push_str(component);
+            }
+            first = false;
         }
         if path.is_empty() {
             path.push('/');
@@ -399,9 +412,13 @@ impl CommandSpec {
 
     /// Declares that this command requires the named workspace resolved,
     /// without a path argument. Planning fails when the workspace does not
-    /// resolve; the handler observes the root through the plan.
+    /// resolve; the handler observes the root through the plan. Declaring
+    /// the same workspace twice is a no-op.
     pub fn uses_workspace(mut self, name: impl Into<String>) -> Self {
-        self.workspaces.push(name.into());
+        let name = name.into();
+        if !self.workspaces.contains(&name) {
+            self.workspaces.push(name);
+        }
         self
     }
 
@@ -786,10 +803,7 @@ impl CommandContext {
     /// declared workspaces; path-argument workspaces are present when a
     /// bound argument referenced them.
     pub fn workspace_root(&self, id: &str) -> Option<&PlanWorkspaceRoot> {
-        self.plan
-            .workspace_roots
-            .iter()
-            .find(|root| root.id == id)
+        self.plan.workspace_roots.iter().find(|root| root.id == id)
     }
 }
 

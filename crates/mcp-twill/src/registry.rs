@@ -269,13 +269,21 @@ impl CommandRegistry {
     }
 
     /// Validates command-declared workspace requirements: every name passed
-    /// to `uses_workspace` must match a server-declared workspace.
+    /// to `uses_workspace` must match a server-declared workspace, and a
+    /// command must not declare the same workspace twice.
     pub fn validate_workspaces(&self) -> Result<()> {
         for command in self.commands.values() {
+            let mut seen = std::collections::BTreeSet::new();
             for workspace_name in &command.spec.workspaces {
                 if !self.workspaces.contains_key(workspace_name) {
                     return Err(FrameworkError::Build(format!(
                         "command `{}` uses workspace `{workspace_name}`, which is not declared on the server",
+                        command.spec.name()
+                    )));
+                }
+                if !seen.insert(workspace_name) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` declares workspace `{workspace_name}` more than once",
                         command.spec.name()
                     )));
                 }

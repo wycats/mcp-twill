@@ -8,7 +8,8 @@ use std::sync::{
 
 use mcp_twill::{
     ArgSpec, CommandOutput, CommandRegistry, CommandSpec, FrameworkError, HelpRequest, HelpTopic,
-    PermissionSpec, ResponseEnvelope, ResponseProfile, RunRequest, WorkspaceDecl,
+    PermissionSpec, PlanWorkspaceRoot, ResponseEnvelope, ResponseProfile, RunRequest,
+    WorkspaceDecl,
 };
 use mcp_workspace_resolver::{McpRoot, McpRootsObservation, resolve_workspaces};
 use serde_json::json;
@@ -541,4 +542,63 @@ async fn uses_workspace_with_path_argument_lists_root_once() {
         .filter(|root| root.id == "repo")
         .collect();
     assert_eq!(repo_roots.len(), 1, "{:?}", plan.workspace_roots);
+}
+
+// Review regression: declaring the same workspace twice on a command is a
+// no-op at the API boundary, so projection never repeats the entry.
+#[test]
+fn uses_workspace_twice_dedupes_at_declaration() {
+    let spec = CommandSpec::new(["dup", "cmd"], "Dup", "Declares repo twice.")
+        .uses_workspace("repo")
+        .uses_workspace("repo");
+    assert_eq!(spec.workspaces, vec!["repo".to_string()]);
+}
+
+// Review regression: a hand-built CommandSpec with duplicate workspace
+// entries (bypassing the deduping builder) fails validation.
+#[test]
+fn duplicate_workspace_declarations_fail_validation() {
+    let mut spec = CommandSpec::new(["dup", "cmd"], "Dup", "Declares repo twice.")
+        .with_permission(PermissionSpec::read("stuff", "Reads stuff"));
+    spec.workspaces = vec!["repo".to_string(), "repo".to_string()];
+
+    let registry = CommandRegistry::new("dup-workspace", "Duplicate workspace server")
+        .declare_workspace(
+            WorkspaceDecl::file("repo", "file:///workspace/repo")
+                .with_description("Repository root"),
+        )
+        .register(spec, |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
+
+    let error = registry.validate_workspaces().unwrap_err();
+    assert!(
+        error.to_string().contains("more than once"),
+        "unexpected error: {error}"
+    );
+}
+
+// Review regression: PlanWorkspaceRoot::path() preserves non-local path
+// shapes instead of flattening everything to a rooted local path.
+#[test]
+fn plan_workspace_root_path_preserves_path_shapes() {
+    let root = |uri: &str| PlanWorkspaceRoot {
+        id: "repo".to_string(),
+        root_uri: uri.to_string(),
+        source: "declared".to_string(),
+        selection_reason: json!(null),
+    };
+
+    assert_eq!(
+        root("file:///workspace/repo").path().unwrap(),
+        std::path::PathBuf::from("/workspace/repo")
+    );
+    assert_eq!(
+        root("file://server/share").path().unwrap(),
+        std::path::PathBuf::from("//server/share")
+    );
+    assert_eq!(
+        root("relative/dir").path().unwrap(),
+        std::path::PathBuf::from("relative/dir")
+    );
 }
