@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use mcp_twill::{
-    CommandContext, CommandOutput, CommandRegistry, EventSink, FrameworkEvent, Result,
-    WorkspaceDecl, arg,
+    CommandContext, CommandOutput, CommandRegistry, EventSink, Field, FrameworkEvent, Result,
+    TypeDecl, Variant, WorkspaceDecl, arg,
 };
 use rmcp::{ServiceExt, transport::stdio};
 use serde::Deserialize;
@@ -50,6 +50,18 @@ pub fn registry() -> Result<CommandRegistry> {
                 WorkspaceDecl::file("repo", repo_root).with_description("Example repository root"),
             );
 
+            server.declare_type(
+                TypeDecl::union("issue-target", "How to locate the issue to act on")
+                    .variant(
+                        Variant::new("number", "Locate by issue number")
+                            .field(Field::integer("number", "The issue number")),
+                    )
+                    .variant(
+                        Variant::new("search", "Locate by title search")
+                            .field(Field::string("query", "Text to match against titles")),
+                    ),
+            );
+
             server.command("issues create", |command| {
                 command
                     .summary("Create an issue")
@@ -67,6 +79,34 @@ pub fn registry() -> Result<CommandRegistry> {
                         }),
                     )
                     .handle_typed(create_issue);
+            });
+
+            server.command("issues close", |command| {
+                command
+                    .summary("Close an issue")
+                    .description("Closes the issue located by the target union.")
+                    .arg(arg::named("target", "issue-target").summary("Which issue to close"))
+                    .write("issues", "Marks an issue record closed")
+                    .idempotent()
+                    .example_with_args(
+                        "issues close --target $args.target",
+                        "Close an issue located by number",
+                        json!({ "target": { "number": 1 } }),
+                    )
+                    .handle(|context: CommandContext| async move {
+                        // Dispatch on the recorded variant instead of
+                        // re-inspecting the JSON shape.
+                        let target = &context.plan.bound_args["target"];
+                        let by = match &target.variants {
+                            Some(mcp_twill::ArgVariants::Single(variant)) => variant.clone(),
+                            _ => "unknown".to_string(),
+                        };
+                        Ok(CommandOutput::structured(json!({
+                            "closed": target.value,
+                            "by": by,
+                            "status": "closed"
+                        })))
+                    });
             });
 
             server.command("issues list", |command| {

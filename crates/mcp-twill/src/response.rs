@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -60,6 +62,7 @@ impl ErrorCode {
             FrameworkError::UnknownArgument(_) => Self::UnknownArgument,
             FrameworkError::MissingArgument(_) => Self::MissingArgument,
             FrameworkError::InvalidArgumentType(_, _) => Self::InvalidArgumentType,
+            FrameworkError::ArgumentUnionMismatch { .. } => Self::InvalidArgumentType,
             FrameworkError::WorkspaceMismatch { .. } => Self::WorkspaceMismatch,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
@@ -175,6 +178,9 @@ pub struct PermissionPreview {
     /// roots the approval token binds to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_roots: Vec<crate::PlanWorkspaceRoot>,
+    /// The matched union variant for each argument bound to a named type.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub argument_variants: BTreeMap<String, crate::ArgVariants>,
     pub output: OutputSpec,
     pub confirmation_policy: ConfirmationPolicy,
     pub requires_confirmation: bool,
@@ -421,6 +427,18 @@ fn error_details(error: &FrameworkError) -> Value {
         FrameworkError::InvalidArgumentType(name, expected) => {
             json!({ "argument": name, "expected": expected })
         }
+        FrameworkError::ArgumentUnionMismatch {
+            argument,
+            type_name,
+            problems,
+        } => json!({
+            "argument": argument,
+            "typeName": type_name,
+            "variantProblems": problems
+                .iter()
+                .map(|(variant, problem)| json!({ "variant": variant, "problem": problem }))
+                .collect::<Vec<_>>(),
+        }),
         FrameworkError::WorkspaceMismatch {
             argument,
             workspace,
@@ -453,6 +471,15 @@ fn error_details(error: &FrameworkError) -> Value {
 }
 
 fn permission_preview(plan: &InvocationPlan, requires_confirmation: bool) -> PermissionPreview {
+    let argument_variants = plan
+        .bound_args
+        .iter()
+        .filter_map(|(name, arg)| {
+            arg.variants
+                .as_ref()
+                .map(|variants| (name.clone(), variants.clone()))
+        })
+        .collect();
     PermissionPreview {
         operation_id: plan.operation_id.clone(),
         command: plan.command_path.clone(),
@@ -461,6 +488,7 @@ fn permission_preview(plan: &InvocationPlan, requires_confirmation: bool) -> Per
         permissions: plan.permissions.clone(),
         workspaces: plan.workspaces.clone(),
         workspace_roots: plan.workspace_roots.clone(),
+        argument_variants,
         output: plan.output.clone(),
         confirmation_policy: ConfirmationPolicy::EffectDefault,
         requires_confirmation,

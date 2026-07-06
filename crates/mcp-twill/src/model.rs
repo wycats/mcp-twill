@@ -22,6 +22,9 @@ pub enum ArgType {
     Json,
     Bool,
     Number,
+    /// References a `TypeDecl` by name; values are matched against the
+    /// declared union's variants by the planner.
+    Named(String),
 }
 
 impl ArgType {
@@ -32,6 +35,7 @@ impl ArgType {
             ArgType::Json => "JSON",
             ArgType::Bool => "a boolean",
             ArgType::Number => "a number",
+            ArgType::Named(_) => "a value matching a declared type",
         }
     }
 }
@@ -74,6 +78,26 @@ impl ArgSpec {
             workspace: Some(workspace.into()),
             repeated: false,
         }
+    }
+
+    pub fn named(
+        name: impl Into<String>,
+        type_name: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value_type: ArgType::Named(type_name.into()),
+            required: true,
+            summary: summary.into(),
+            workspace: None,
+            repeated: false,
+        }
+    }
+
+    pub fn repeated(mut self) -> Self {
+        self.repeated = true;
+        self
     }
 }
 
@@ -461,6 +485,18 @@ pub struct BoundArg {
     pub value: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// The matched variant name(s) when `value_type` is `Named`. Per-element
+    /// for repeated arguments. Participates in the invocation fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variants: Option<ArgVariants>,
+}
+
+/// Which union variant a bound `Named` argument matched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ArgVariants {
+    Single(String),
+    PerElement(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -766,6 +802,9 @@ pub fn value_matches_type(name: &str, value: &Value, value_type: &ArgType) -> Re
         ArgType::Json => true,
         ArgType::Bool => value.is_boolean(),
         ArgType::Number => value.is_number(),
+        // Named types are matched against their declared variants by the
+        // planner, which has the type table this function does not.
+        ArgType::Named(_) => true,
     };
     if valid {
         Ok(())

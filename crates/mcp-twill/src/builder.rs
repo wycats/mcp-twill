@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::{
     ArgSpec, ArgType, CommandContext, CommandExample, CommandGuidance, CommandHandler,
     CommandOutput, CommandRegistry, CommandSpec, FrameworkError, OutputContract, PermissionSpec,
-    ProgressPhaseSpec, Result, StdinContract, WorkspaceDecl,
+    ProgressPhaseSpec, Result, StdinContract, TypeDecl, WorkspaceDecl,
 };
 
 pub mod arg {
@@ -38,6 +38,12 @@ pub mod arg {
     pub fn json(name: impl Into<String>) -> ArgBuilder {
         ArgBuilder::new(name, ArgType::Json)
     }
+
+    /// An argument whose values match a declared named type (see
+    /// `ServerBuilder::declare_type`).
+    pub fn named(name: impl Into<String>, type_name: impl Into<String>) -> ArgBuilder {
+        ArgBuilder::new(name, ArgType::Named(type_name.into()))
+    }
 }
 
 impl CommandRegistry {
@@ -56,6 +62,7 @@ pub struct ServerBuilder {
     name: String,
     description: String,
     workspaces: Vec<WorkspaceDecl>,
+    types: Vec<TypeDecl>,
     guidance: Vec<CommandGuidance>,
     commands: Vec<BuiltCommand>,
     command_paths: BTreeSet<Vec<String>>,
@@ -73,6 +80,7 @@ impl ServerBuilder {
             name: name.into(),
             description: description.into(),
             workspaces: Vec::new(),
+            types: Vec::new(),
             guidance: Vec::new(),
             commands: Vec::new(),
             command_paths: BTreeSet::new(),
@@ -82,6 +90,11 @@ impl ServerBuilder {
 
     pub fn workspace(&mut self, workspace: WorkspaceDecl) -> &mut Self {
         self.workspaces.push(workspace);
+        self
+    }
+
+    pub fn declare_type(&mut self, decl: TypeDecl) -> &mut Self {
+        self.types.push(decl);
         self
     }
 
@@ -134,12 +147,16 @@ impl ServerBuilder {
         for workspace in self.workspaces.drain(..) {
             registry = registry.declare_workspace(workspace);
         }
+        for decl in self.types.drain(..) {
+            registry = registry.declare_type(decl);
+        }
         for guidance in self.guidance.drain(..) {
             registry = registry.declare_guidance(guidance);
         }
         for command in self.commands {
             registry = registry.register(command.spec, command.handler);
         }
+        registry.validate_types()?;
         registry.validate_examples()?;
         registry.validate_guidance()?;
         Ok(registry)

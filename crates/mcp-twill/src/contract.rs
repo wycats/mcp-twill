@@ -518,7 +518,40 @@ pub fn verify_catalog_coverage(
     violations.extend(check_effect_metadata(registry));
     violations.extend(check_effect_lanes(registry, primary_tool_name));
     violations.extend(check_workspace_projection(registry));
+    violations.extend(check_type_projection(registry));
     violations.extend(check_runtime_identity(registry));
+    violations
+}
+
+/// Named types honor the registration promises (every referenced type
+/// exists, no dead types) and every argument schema is fully inlined:
+/// unions appear only as property-level `oneOf`, never behind `$ref`,
+/// `$defs`, or a top-level `oneOf`.
+pub fn check_type_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_types() {
+        violations.push(violation(None, "types", error.to_string()));
+    }
+    for command in registry.command_specs() {
+        let schema = registry.arg_schema(command);
+        if schema.get("oneOf").is_some() {
+            violations.push(violation(
+                Some(&command.path.join(" ")),
+                "schema",
+                "argument schema has a top-level `oneOf`; unions must inline at the property level",
+            ));
+        }
+        let rendered = schema.to_string();
+        for forbidden in ["\"$ref\"", "\"$defs\""] {
+            if rendered.contains(forbidden) {
+                violations.push(violation(
+                    Some(&command.path.join(" ")),
+                    "schema",
+                    format!("argument schema contains `{forbidden}`; named types must be fully inlined"),
+                ));
+            }
+        }
+    }
     violations
 }
 
@@ -592,6 +625,13 @@ macro_rules! contract_tests {
         #[test]
         fn contract_workspace_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_workspace_projection(
+                &$registry(),
+            ));
+        }
+
+        #[test]
+        fn contract_type_projection() {
+            $crate::contract::assert_no_violations($crate::contract::check_type_projection(
                 &$registry(),
             ));
         }
