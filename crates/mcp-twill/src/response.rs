@@ -64,6 +64,7 @@ impl ErrorCode {
             FrameworkError::InvalidArgumentType(_, _) => Self::InvalidArgumentType,
             FrameworkError::ArgumentUnionMismatch { .. } => Self::InvalidArgumentType,
             FrameworkError::WorkspaceMismatch { .. } => Self::WorkspaceMismatch,
+            FrameworkError::WorkspaceUnresolved { .. } => Self::UnresolvedWorkspaceRequirement,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
@@ -383,10 +384,13 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
 }
 
 /// Projects resolver workspace diagnostics carried by a workspace mismatch
-/// into envelope diagnostics with the resolver's stable codes.
+/// or an unresolved workspace requirement into envelope diagnostics with the
+/// resolver's stable codes.
 fn workspace_diagnostics(error: &FrameworkError) -> Vec<Diagnostic> {
-    let FrameworkError::WorkspaceMismatch { diagnostics, .. } = error else {
-        return Vec::new();
+    let diagnostics = match error {
+        FrameworkError::WorkspaceMismatch { diagnostics, .. }
+        | FrameworkError::WorkspaceUnresolved { diagnostics, .. } => diagnostics,
+        _ => return Vec::new(),
     };
     diagnostics
         .iter()
@@ -450,6 +454,13 @@ fn error_details(error: &FrameworkError) -> Value {
             "workspace": workspace,
             "selectedRoot": selected_root,
             "path": path,
+            "workspaceDiagnostics": diagnostics,
+        }),
+        FrameworkError::WorkspaceUnresolved {
+            workspace,
+            diagnostics,
+        } => json!({
+            "workspace": workspace,
             "workspaceDiagnostics": diagnostics,
         }),
         FrameworkError::StdinMismatch(reason) => json!({ "reason": reason }),
@@ -528,7 +539,8 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
                 name: name.to_string(),
             })
         }
-        FrameworkError::WorkspaceMismatch { workspace, .. } => {
+        FrameworkError::WorkspaceMismatch { workspace, .. }
+        | FrameworkError::WorkspaceUnresolved { workspace, .. } => {
             Some(DiagnosticLocation::Workspace {
                 name: workspace.clone(),
             })

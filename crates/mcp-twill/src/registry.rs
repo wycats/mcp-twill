@@ -268,6 +268,30 @@ impl CommandRegistry {
         crate::types::validate_types(&self.types, &arg_references)
     }
 
+    /// Validates command-declared workspace requirements: every name passed
+    /// to `uses_workspace` must match a server-declared workspace, and a
+    /// command must not declare the same workspace twice.
+    pub fn validate_workspaces(&self) -> Result<()> {
+        for command in self.commands.values() {
+            let mut seen = std::collections::BTreeSet::new();
+            for workspace_name in &command.spec.workspaces {
+                if !self.workspaces.contains_key(workspace_name) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` uses workspace `{workspace_name}`, which is not declared on the server",
+                        command.spec.name()
+                    )));
+                }
+                if !seen.insert(workspace_name) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` declares workspace `{workspace_name}` more than once",
+                        command.spec.name()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The model-facing JSON schema for one command's arguments. Named types
     /// are fully inlined at the property site as a property-level `oneOf`
     /// (array-wrapped when repeated); no `$ref` indirection and no top-level
@@ -610,6 +634,31 @@ impl CommandRegistry {
                     variants,
                 },
             );
+        }
+
+        // Command-declared workspaces resolve unconditionally: `uses_workspace`
+        // is a hard requirement, unlike path-argument workspaces which only
+        // resolve when a bound argument references them.
+        for workspace_name in &registered.spec.workspaces {
+            let workspace_id = mcp_workspace_resolver::WorkspaceId::from(workspace_name.as_str());
+            if resolved.root(&workspace_id).is_none() {
+                let diagnostics = resolved
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic
+                            .requirement
+                            .as_ref()
+                            .is_none_or(|id| id == &workspace_id)
+                    })
+                    .cloned()
+                    .collect();
+                return Err(FrameworkError::WorkspaceUnresolved {
+                    workspace: workspace_name.clone(),
+                    diagnostics,
+                });
+            }
+            used_workspaces.insert(workspace_name.clone());
         }
 
         let tokens = template
@@ -983,6 +1032,21 @@ impl CommandRegistry {
             spec.description.clone(),
             self.arguments_text(spec),
         ];
+        if !spec.workspaces.is_empty() {
+            let mut lines = vec!["Workspaces:".to_string()];
+            for name in &spec.workspaces {
+                let description = self
+                    .workspaces
+                    .get(name)
+                    .and_then(|decl| decl.description.as_deref())
+                    .map(|text| format!("{text} "))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "- `{name}`: {description}Resolved by the server; not a command argument."
+                ));
+            }
+            sections.push(lines.join("\n"));
+        }
         if let Some(stdin) = &spec.stdin {
             sections.push(format!("Stdin: {} ({}).", stdin.summary, stdin.mime_type));
         }

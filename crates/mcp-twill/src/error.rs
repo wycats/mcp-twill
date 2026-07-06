@@ -49,6 +49,13 @@ pub enum FrameworkError {
         /// resolve, when resolution (rather than containment) failed.
         diagnostics: Vec<mcp_workspace_resolver::WorkspaceDiagnostic>,
     },
+    #[error("{}", workspace_unresolved_message(workspace, diagnostics))]
+    WorkspaceUnresolved {
+        /// The workspace the command declared with `uses_workspace`.
+        workspace: String,
+        /// Resolver diagnostics explaining why resolution failed.
+        diagnostics: Vec<mcp_workspace_resolver::WorkspaceDiagnostic>,
+    },
     #[error("stdin mismatch: {0}")]
     StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]
@@ -104,5 +111,25 @@ fn workspace_mismatch_message(
         None => {
             format!("workspace `{workspace}` for path argument `{argument}` could not be resolved")
         }
+    }
+}
+
+/// The command declared the workspace itself, so the failure is located at
+/// the command, not at any argument.
+fn workspace_unresolved_message(
+    workspace: &str,
+    diagnostics: &[mcp_workspace_resolver::WorkspaceDiagnostic],
+) -> String {
+    if diagnostics.is_empty() {
+        format!("workspace `{workspace}` required by this command could not be resolved")
+    } else {
+        format!(
+            "workspace `{workspace}` required by this command could not be resolved: {}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
     }
 }

@@ -451,6 +451,9 @@ pub fn check_runtime_identity(registry: &CommandRegistry) -> Vec<ContractViolati
 /// drift.
 pub fn check_workspace_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
     let mut violations = Vec::new();
+    if let Err(error) = registry.validate_workspaces() {
+        violations.push(violation(None, "workspaces", error.to_string()));
+    }
     let requirements = registry.workspace_requirements();
     for decl in registry.workspaces() {
         let matching: Vec<_> = requirements

@@ -223,6 +223,10 @@ pub struct OperationSpec {
     pub output: OutputContract,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<PermissionSpec>,
+    /// Workspaces the command declared with `uses_workspace`: hard
+    /// requirements resolved at plan time, never caller-supplied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<CommandExample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -246,6 +250,7 @@ impl OperationSpec {
             stdin: spec.stdin.clone(),
             output: spec.output.clone().unwrap_or_default(),
             permissions: spec.permissions.clone(),
+            workspaces: spec.workspaces.clone(),
             examples: spec.examples.clone(),
             progress: spec.progress.clone(),
             idempotent: spec.idempotent,
