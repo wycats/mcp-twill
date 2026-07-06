@@ -47,6 +47,7 @@ pub struct CommandRegistry {
     commands: BTreeMap<Vec<String>, RegisteredCommand>,
     workspaces: BTreeMap<String, WorkspaceDecl>,
     types: BTreeMap<String, crate::TypeDecl>,
+    duplicate_types: Vec<String>,
     guidance: Vec<CommandGuidance>,
     policy: PermissionPolicy,
 }
@@ -65,6 +66,7 @@ impl CommandRegistry {
             commands: BTreeMap::new(),
             workspaces: BTreeMap::new(),
             types: BTreeMap::new(),
+            duplicate_types: Vec::new(),
             guidance: Vec::new(),
             policy: PermissionPolicy::default(),
         }
@@ -81,6 +83,9 @@ impl CommandRegistry {
     }
 
     pub fn declare_type(mut self, decl: crate::TypeDecl) -> Self {
+        if self.types.contains_key(&decl.name) {
+            self.duplicate_types.push(decl.name.clone());
+        }
         self.types.insert(decl.name.clone(), decl);
         self
     }
@@ -244,16 +249,17 @@ impl CommandRegistry {
     /// promises: unique names, non-empty unions, resolvable references,
     /// no cycles, no dead types, no ambiguous variant pairs.
     pub fn validate_types(&self) -> Result<()> {
+        if let Some(name) = self.duplicate_types.first() {
+            return Err(FrameworkError::Build(format!(
+                "type `{name}` is declared more than once"
+            )));
+        }
         let mut arg_references = Vec::new();
         for command in self.commands.values() {
             for arg in &command.spec.args {
                 if let crate::ArgType::Named(type_name) = &arg.value_type {
                     arg_references.push((
-                        format!(
-                            "command `{}` argument `{}`",
-                            command.spec.name(),
-                            arg.name
-                        ),
+                        format!("command `{}` argument `{}`", command.spec.name(), arg.name),
                         type_name.clone(),
                     ));
                 }
@@ -287,7 +293,14 @@ impl CommandRegistry {
                     "description": arg.summary,
                 }),
                 crate::ArgType::Named(type_name) => {
-                    crate::types::inline_type_schema(type_name, &self.types)
+                    let mut schema = crate::types::inline_type_schema(type_name, &self.types);
+                    // The property site carries the command-specific summary
+                    // ("Element to click"), like every other argument; the
+                    // type's own description lives on its variants.
+                    if let Some(object) = schema.as_object_mut() {
+                        object.insert("description".into(), json!(arg.summary));
+                    }
+                    schema
                 }
             };
             let schema = if arg.repeated {
@@ -997,6 +1010,9 @@ impl CommandRegistry {
                 .map(|workspace| format!(" workspace `{workspace}`"))
                 .unwrap_or_default();
             let value_type = match &arg.value_type {
+                crate::ArgType::Named(type_name) if arg.repeated => {
+                    format!("list of `{type_name}`")
+                }
                 crate::ArgType::Named(type_name) => format!("`{type_name}`"),
                 other => format!("{other:?}"),
             };

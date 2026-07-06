@@ -119,6 +119,7 @@ impl CliMcpServer {
     ) -> crate::Result<Self> {
         registry.validate_effects()?;
         registry.validate_guidance()?;
+        registry.validate_types()?;
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));

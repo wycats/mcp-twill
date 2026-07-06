@@ -610,3 +610,189 @@ fn catalog_hash_covers_type_declarations() {
         .catalog_hash;
     assert_ne!(without_extra_variant, with_extra_variant);
 }
+
+// --- Review regressions ---
+
+#[test]
+fn duplicate_type_declarations_fail_validation() {
+    let types = vec![
+        TypeDecl::union("dup", "First declaration")
+            .variant(Variant::new("a", "A").field(Field::string("a", "A"))),
+        TypeDecl::union("dup", "Second declaration")
+            .variant(Variant::new("b", "B").field(Field::string("b", "B"))),
+    ];
+    let error = base_registry(types, "dup").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("type `dup` is declared more than once")
+    );
+}
+
+#[test]
+fn optional_contradictory_constants_stay_ambiguous() {
+    // The constants contradict, but the fields are optional: a value that
+    // omits `kind` matches both variants, so the union is still ambiguous.
+    let types = vec![
+        TypeDecl::union("loose", "Loosely tagged union")
+            .variant(
+                Variant::new("one", "One")
+                    .field(Field::constant("kind", "one").optional())
+                    .field(Field::string("value", "Value")),
+            )
+            .variant(
+                Variant::new("two", "Two")
+                    .field(Field::constant("kind", "two").optional())
+                    .field(Field::string("value", "Value")),
+            ),
+    ];
+    let error = base_registry(types, "loose").unwrap_err();
+    assert!(error.to_string().contains("ambiguous"));
+}
+
+#[test]
+fn serving_path_rejects_invalid_type_graphs() {
+    let registry = CommandRegistry::new("invalid", "Invalid registry").register(
+        CommandSpec::new(["demo"], "Demo", "Demo command")
+            .with_arg(ArgSpec::named("value", "missing-type", "The value"))
+            .with_permission(PermissionSpec::new(
+                PermissionEffect::Read,
+                "demo",
+                "Reads",
+            )),
+        |_context| async { Ok(CommandOutput::text("ok")) },
+    );
+    let error = match mcp_twill::CliMcpServer::new(registry) {
+        Ok(_) => panic!("serving an invalid type graph must fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("missing-type"));
+}
+
+#[test]
+fn contract_check_reports_cycles_without_projecting_schemas() {
+    // The schema inliner assumes an acyclic graph; the contract check must
+    // report the validation failure instead of recursing into projection.
+    let registry = CommandRegistry::new("cyclic", "Cyclic registry")
+        .declare_type(TypeDecl::union("a", "A").variant(
+            Variant::new("only", "Only").field(Field::reference("b", "b", "B value")),
+        ))
+        .declare_type(TypeDecl::union("b", "B").variant(
+            Variant::new("only", "Only").field(Field::reference("a", "a", "A value")),
+        ))
+        .register(
+            CommandSpec::new(["demo"], "Demo", "Demo command")
+                .with_arg(ArgSpec::named("value", "a", "The value"))
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Read,
+                    "demo",
+                    "Reads",
+                )),
+            |_context| async { Ok(CommandOutput::text("ok")) },
+        );
+    let violations = mcp_twill::contract::check_type_projection(&registry);
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0].message.contains("cycle"));
+}
+
+#[test]
+fn repeated_field_problems_keep_the_element_index() {
+    let types = vec![
+        TypeDecl::union("tagged", "Tagged value").variant(
+            Variant::new("only", "Only variant")
+                .field(Field::string("tags", "Tag list").repeated()),
+        ),
+    ];
+    let mut registry = CommandRegistry::new("repeated-field", "Repeated field test");
+    for decl in types {
+        registry = registry.declare_type(decl);
+    }
+    let registry = registry.register(
+        CommandSpec::new(["demo"], "Demo", "Demo command")
+            .with_arg(ArgSpec::named("value", "tagged", "The value"))
+            .with_permission(PermissionSpec::new(
+                PermissionEffect::Read,
+                "demo",
+                "Reads",
+            )),
+        |_context| async { Ok(CommandOutput::text("ok")) },
+    );
+    let error = registry
+        .build_plan(&request(
+            "demo --value $args.value",
+            json!({ "value": { "tags": ["ok", 42] } }),
+        ))
+        .unwrap_err();
+    assert!(error.to_string().contains("tags[1]"));
+}
+
+#[test]
+fn union_mismatch_diagnostic_names_the_argument_and_expected_type() {
+    let error = registry()
+        .build_plan(&request(
+            "page fill-form --fields $args.fields",
+            json!({ "fields": [
+                { "kind": "text", "target": { "css": "#name" }, "value": "Ada" },
+                { "kind": "checked", "target": { "selector": "bad" }, "checked": true }
+            ] }),
+        ))
+        .unwrap_err();
+    let envelope = mcp_twill::ResponseEnvelope::framework_error(error, None, None);
+    let diagnostic = &envelope.diagnostics[0];
+    // The element index stays in the message; the location names the argument.
+    assert_eq!(
+        diagnostic.location,
+        Some(mcp_twill::DiagnosticLocation::Argument {
+            name: "fields".to_string()
+        })
+    );
+    assert_eq!(diagnostic.expected, Some(json!("form-field")));
+}
+
+#[test]
+fn named_argument_schema_carries_the_argument_summary() {
+    let registry = registry();
+    let spec = registry
+        .command_specs()
+        .find(|spec| spec.path == ["page", "click"])
+        .unwrap();
+    let schema = registry.arg_schema(spec);
+    assert_eq!(
+        schema["properties"]["target"]["description"],
+        "Element to click"
+    );
+}
+
+#[test]
+fn help_shows_repeated_named_arguments_as_lists() {
+    let help = registry().help(HelpRequest {
+        command: Some("page fill-form".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(help.text.contains("list of `form-field`"));
+}
+
+#[test]
+fn type_projection_ignores_ref_text_in_descriptions() {
+    // `$ref` appearing in prose must not trip the inlining check.
+    let registry = CommandRegistry::new("prose", "Prose server")
+        .declare_type(
+            TypeDecl::union("noted", "Uses `$ref` and `$defs` in prose").variant(
+                Variant::new("only", "Mentions `$ref` too")
+                    .field(Field::string("value", "A `$defs`-flavored value")),
+            ),
+        )
+        .register(
+            CommandSpec::new(["demo"], "Demo", "Demo command")
+                .with_arg(ArgSpec::named("value", "noted", "The value"))
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Read,
+                    "demo",
+                    "Reads",
+                )),
+            |_context| async { Ok(CommandOutput::text("ok")) },
+        );
+    let violations = mcp_twill::contract::check_type_projection(&registry);
+    assert!(violations.is_empty(), "violations: {violations:?}");
+}

@@ -518,6 +518,16 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
         | FrameworkError::InvalidArgumentType(value, _) => Some(DiagnosticLocation::Argument {
             name: value.clone(),
         }),
+        FrameworkError::ArgumentUnionMismatch { argument, .. } => {
+            // Repeated arguments carry an element index (`fields[2]`);
+            // the location names the argument itself.
+            let name = argument
+                .split_once('[')
+                .map_or(argument.as_str(), |(base, _)| base);
+            Some(DiagnosticLocation::Argument {
+                name: name.to_string(),
+            })
+        }
         FrameworkError::WorkspaceMismatch { workspace, .. } => {
             Some(DiagnosticLocation::Workspace {
                 name: workspace.clone(),
@@ -533,6 +543,7 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
 
     let expected = match error {
         FrameworkError::InvalidArgumentType(_, expected) => Some(json!(expected)),
+        FrameworkError::ArgumentUnionMismatch { type_name, .. } => Some(json!(type_name)),
         _ => None,
     };
 

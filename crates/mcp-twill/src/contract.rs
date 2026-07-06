@@ -531,6 +531,9 @@ pub fn check_type_projection(registry: &CommandRegistry) -> Vec<ContractViolatio
     let mut violations = Vec::new();
     if let Err(error) = registry.validate_types() {
         violations.push(violation(None, "types", error.to_string()));
+        // The schema inliner assumes a validated type graph (no cycles,
+        // no dangling references); projecting anyway could recurse forever.
+        return violations;
     }
     for command in registry.command_specs() {
         let schema = registry.arg_schema(command);
@@ -541,9 +544,8 @@ pub fn check_type_projection(registry: &CommandRegistry) -> Vec<ContractViolatio
                 "argument schema has a top-level `oneOf`; unions must inline at the property level",
             ));
         }
-        let rendered = schema.to_string();
-        for forbidden in ["\"$ref\"", "\"$defs\""] {
-            if rendered.contains(forbidden) {
+        for forbidden in ["$ref", "$defs"] {
+            if schema_contains_key(&schema, forbidden) {
                 violations.push(violation(
                     Some(&command.path.join(" ")),
                     "schema",
@@ -553,6 +555,21 @@ pub fn check_type_projection(registry: &CommandRegistry) -> Vec<ContractViolatio
         }
     }
     violations
+}
+
+/// Whether any object in the JSON tree has `key` as a property name.
+/// Matching on keys (not the rendered string) avoids false positives when
+/// the text appears inside a description.
+fn schema_contains_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key(key) || map.values().any(|child| schema_contains_key(child, key))
+        }
+        serde_json::Value::Array(items) => {
+            items.iter().any(|child| schema_contains_key(child, key))
+        }
+        _ => false,
+    }
 }
 
 fn render_violations(violations: &[ContractViolation]) -> String {

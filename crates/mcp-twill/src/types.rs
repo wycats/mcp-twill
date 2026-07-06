@@ -324,16 +324,20 @@ fn check_cycles<'a>(
     Ok(())
 }
 
-/// Two variants are ambiguous when no shared field has contradictory
-/// constants and each variant's required fields are all accepted (required
-/// or optional) by the other. Scalar-shape differences on shared fields are
-/// conservatively ignored.
+/// Two variants are ambiguous when no shared *required* field has
+/// contradictory constants and each variant's required fields are all
+/// accepted (required or optional) by the other. Optional constants do not
+/// disambiguate: a caller can omit the field and still satisfy both
+/// variants. Scalar-shape differences on shared fields are conservatively
+/// ignored.
 fn variants_ambiguous(left: &Variant, right: &Variant) -> bool {
     for left_field in &left.fields {
         if let Some(right_field) = right
             .fields
             .iter()
             .find(|field| field.name == left_field.name)
+            && left_field.required
+            && right_field.required
             && let (FieldShape::Constant(left_value), FieldShape::Constant(right_value)) =
                 (&left_field.shape, &right_field.shape)
             && left_value != right_value
@@ -461,9 +465,10 @@ fn shape_problem(
                 return Some(format!("field `{field_name}` must be an array"));
             };
             for (index, item) in items.iter().enumerate() {
+                let item_name = format!("{field_name}[{index}]");
                 let item_path = format!("{path}[{index}]");
                 if let Some(problem) =
-                    shape_problem(field_name, inner, item, &item_path, types)
+                    shape_problem(&item_name, inner, item, &item_path, types)
                 {
                     return Some(problem);
                 }
