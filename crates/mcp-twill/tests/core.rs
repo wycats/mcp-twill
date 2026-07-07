@@ -287,7 +287,10 @@ fn runtime_identity_reports_the_registry_and_no_process_facts() {
 
     assert_eq!(identity.server_name, registry().server_name());
     assert_eq!(identity.server_version, None);
-    assert_eq!(identity.catalog_hash, registry().catalog_identity().catalog_hash);
+    assert_eq!(
+        identity.catalog_hash,
+        registry().catalog_identity().catalog_hash
+    );
     assert_eq!(
         identity.run_schema_hash,
         registry().catalog_identity().run_schema_hash
@@ -764,7 +767,10 @@ fn stdin_and_progress_declarations_project_into_catalog_and_help() {
         .find(|operation| operation.name() == "issues create")
         .unwrap();
     assert_eq!(
-        operation.stdin.as_ref().map(|stdin| stdin.mime_type.as_str()),
+        operation
+            .stdin
+            .as_ref()
+            .map(|stdin| stdin.mime_type.as_str()),
         Some("text/markdown")
     );
     assert_eq!(operation.progress.len(), 1);
@@ -777,10 +783,10 @@ fn stdin_and_progress_declarations_project_into_catalog_and_help() {
     assert!(help.text.contains("Stdin:"), "{}", help.text);
     assert!(help.text.contains("Progress phases:"), "{}", help.text);
 
-    let plain = CommandRegistry::new("test", "test server").register(
-        create_issue_spec(),
-        |_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) },
-    );
+    let plain = CommandRegistry::new("test", "test server")
+        .register(create_issue_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({ "id": 1 })))
+        });
     assert_ne!(
         reg.catalog_identity().catalog_hash,
         plain.catalog_identity().catalog_hash,

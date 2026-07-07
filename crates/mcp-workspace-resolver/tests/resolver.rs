@@ -4,8 +4,7 @@ use mcp_workspace_resolver::{
     AMBIGUOUS_WORKSPACE_ROOT, CodexSandboxObservation, DeclaredWorkspaceRoot, DerivedRootKind,
     McpRoot, McpRootsObservation, RootDerivationPolicy, UNRESOLVED_WORKSPACE_REQUIREMENT,
     UNSUPPORTED_ROOT_SCHEME, WorkspaceObservationSet, WorkspaceRequirement, WorkspaceSelection,
-    WorkspaceSelectionReason, WorkspaceSource, resolve_workspaces,
-    resolve_workspaces_with_policy,
+    WorkspaceSelectionReason, WorkspaceSource, resolve_workspaces, resolve_workspaces_with_policy,
 };
 
 fn requirement(id: &str) -> WorkspaceRequirement {
@@ -14,15 +13,20 @@ fn requirement(id: &str) -> WorkspaceRequirement {
 
 #[test]
 fn single_mcp_root_resolves_primary_requirement() {
-    let requirements = [requirement("repo")
-        .with_selection(WorkspaceSelection::PrimaryWhenSingleRoot)];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![McpRoot::new("file:///workspace/project")],
-    ));
+    let requirements =
+        [requirement("repo").with_selection(WorkspaceSelection::PrimaryWhenSingleRoot)];
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
+            McpRoot::new("file:///workspace/project"),
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
-    assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{:?}",
+        resolved.diagnostics
+    );
     let root = resolved.root(&"repo".into()).expect("resolved");
     assert_eq!(root.root_uri, "file:///workspace/project");
     assert_eq!(root.source, WorkspaceSource::McpRoots);
@@ -35,30 +39,35 @@ fn single_mcp_root_resolves_primary_requirement() {
 #[test]
 fn multiple_mcp_roots_resolve_by_name() {
     let requirements = [requirement("docs")];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
             McpRoot::new("file:///workspace/code").with_name("code"),
             McpRoot::new("file:///workspace/docs").with_name("docs"),
-        ],
-    ));
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
-    assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{:?}",
+        resolved.diagnostics
+    );
     let root = resolved.root(&"docs".into()).expect("resolved");
     assert_eq!(root.root_uri, "file:///workspace/docs");
-    assert_eq!(root.selection_reason, WorkspaceSelectionReason::MatchedByName);
+    assert_eq!(
+        root.selection_reason,
+        WorkspaceSelectionReason::MatchedByName
+    );
 }
 
 #[test]
 fn multiple_mcp_roots_resolve_by_alias() {
     let requirements = [requirement("repo").with_alias("source")];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
             McpRoot::new("file:///workspace/docs").with_name("docs"),
             McpRoot::new("file:///workspace/code").with_name("source"),
-        ],
-    ));
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -75,12 +84,11 @@ fn multiple_mcp_roots_resolve_by_alias() {
 #[test]
 fn name_matching_is_case_sensitive() {
     let requirements = [requirement("repo")];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
             McpRoot::new("file:///workspace/a").with_name("Repo"),
             McpRoot::new("file:///workspace/b").with_name("other"),
-        ],
-    ));
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -95,12 +103,11 @@ fn name_matching_is_case_sensitive() {
 #[test]
 fn multiple_mcp_roots_with_no_match_are_unresolved() {
     let requirements = [requirement("repo")];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
             McpRoot::new("file:///workspace/a").with_name("alpha"),
             McpRoot::new("file:///workspace/b").with_name("beta"),
-        ],
-    ));
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -113,12 +120,11 @@ fn multiple_mcp_roots_with_no_match_are_unresolved() {
 #[test]
 fn multiple_matching_roots_are_ambiguous() {
     let requirements = [requirement("repo").with_alias("source")];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
             McpRoot::new("file:///workspace/a").with_name("repo"),
             McpRoot::new("file:///workspace/b").with_name("source"),
-        ],
-    ));
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -147,7 +153,10 @@ fn present_but_unmatched_mcp_roots_block_fall_through() {
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
-    assert!(resolved.roots.is_empty(), "declared roots must not participate");
+    assert!(
+        resolved.roots.is_empty(),
+        "declared roots must not participate"
+    );
     assert_eq!(
         resolved.diagnostics[0].code,
         UNRESOLVED_WORKSPACE_REQUIREMENT
@@ -183,7 +192,11 @@ fn declared_roots_resolve_when_no_runtime_observation_present() {
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
-    assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+    assert!(
+        resolved.diagnostics.is_empty(),
+        "{:?}",
+        resolved.diagnostics
+    );
     let root = resolved.root(&"repo".into()).expect("resolved");
     assert_eq!(root.root_uri, "file:///declared/repo");
     assert_eq!(root.source, WorkspaceSource::Declared);
@@ -212,11 +225,10 @@ fn requirement_fallback_resolves_when_nothing_else_matches() {
 #[test]
 fn non_file_uri_root_produces_unsupported_scheme_diagnostic() {
     let requirements = [requirement("repo")];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
             McpRoot::new("https://example.com/repo").with_name("repo"),
-        ],
-    ));
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -240,8 +252,10 @@ fn non_file_uri_root_produces_unsupported_scheme_diagnostic() {
 #[test]
 fn non_file_declared_root_pairs_scheme_and_unresolved_diagnostics() {
     let requirements = [requirement("repo")];
-    let observations = WorkspaceObservationSet::new()
-        .with_declared(DeclaredWorkspaceRoot::new("repo", "https://example.com/repo"));
+    let observations = WorkspaceObservationSet::new().with_declared(DeclaredWorkspaceRoot::new(
+        "repo",
+        "https://example.com/repo",
+    ));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -253,11 +267,9 @@ fn non_file_declared_root_pairs_scheme_and_unresolved_diagnostics() {
         .expect("scheme diagnostic");
     assert_eq!(scheme.requirement, Some("repo".into()));
     assert!(
-        resolved
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == UNRESOLVED_WORKSPACE_REQUIREMENT
-                && diagnostic.requirement == Some("repo".into())),
+        resolved.diagnostics.iter().any(|diagnostic| diagnostic.code
+            == UNRESOLVED_WORKSPACE_REQUIREMENT
+            && diagnostic.requirement == Some("repo".into())),
         "requirement is also unresolved: {:?}",
         resolved.diagnostics
     );
@@ -265,21 +277,25 @@ fn non_file_declared_root_pairs_scheme_and_unresolved_diagnostics() {
 
 #[test]
 fn explicit_uri_selection_matches_equivalent_path() {
-    let requirements = [requirement("repo").with_selection(WorkspaceSelection::ExplicitUri {
-        uri: "file:///workspace/./project/".into(),
-    })];
-    let observations = WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(
-        vec![
+    let requirements = [
+        requirement("repo").with_selection(WorkspaceSelection::ExplicitUri {
+            uri: "file:///workspace/./project/".into(),
+        }),
+    ];
+    let observations =
+        WorkspaceObservationSet::new().with_mcp_roots(McpRootsObservation::new(vec![
             McpRoot::new("file:///workspace/project").with_name("anything"),
             McpRoot::new("file:///workspace/other").with_name("other"),
-        ],
-    ));
+        ]));
 
     let resolved = resolve_workspaces(&requirements, &observations);
 
     let root = resolved.root(&"repo".into()).expect("resolved");
     assert_eq!(root.root_uri, "file:///workspace/project");
-    assert_eq!(root.selection_reason, WorkspaceSelectionReason::MatchedByUri);
+    assert_eq!(
+        root.selection_reason,
+        WorkspaceSelectionReason::MatchedByUri
+    );
 }
 
 mod codex {
@@ -297,8 +313,8 @@ mod codex {
         fs::write(nested.join("Cargo.toml"), "").expect("write marker");
 
         let requirements = [requirement("repo")];
-        let observations =
-            WorkspaceObservationSet::new().with_codex_sandbox(CodexSandboxObservation::new(&nested));
+        let observations = WorkspaceObservationSet::new()
+            .with_codex_sandbox(CodexSandboxObservation::new(&nested));
 
         let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -330,8 +346,8 @@ mod codex {
         fs::write(project.join("package.json"), "{}").expect("write marker");
 
         let requirements = [requirement("repo")];
-        let observations =
-            WorkspaceObservationSet::new().with_codex_sandbox(CodexSandboxObservation::new(&nested));
+        let observations = WorkspaceObservationSet::new()
+            .with_codex_sandbox(CodexSandboxObservation::new(&nested));
 
         let resolved = resolve_workspaces(&requirements, &observations);
 
@@ -361,8 +377,8 @@ mod codex {
             vcs_markers: vec!["9d3f-nonexistent-vcs".into()],
             project_markers: vec!["9d3f-nonexistent-marker".into()],
         };
-        let observations =
-            WorkspaceObservationSet::new().with_codex_sandbox(CodexSandboxObservation::new(&nested));
+        let observations = WorkspaceObservationSet::new()
+            .with_codex_sandbox(CodexSandboxObservation::new(&nested));
 
         let resolved = resolve_workspaces_with_policy(&requirements, &observations, &policy);
 
@@ -402,14 +418,13 @@ mod codex {
         fs::create_dir_all(&nested).expect("create dirs");
         fs::create_dir(nested.join(".git")).expect("create .git");
 
-        let requirements =
-            [
-                requirement("repo").with_selection(WorkspaceSelection::ExplicitUri {
-                    uri: "file:///somewhere/else".into(),
-                }),
-            ];
-        let observations =
-            WorkspaceObservationSet::new().with_codex_sandbox(CodexSandboxObservation::new(&nested));
+        let requirements = [
+            requirement("repo").with_selection(WorkspaceSelection::ExplicitUri {
+                uri: "file:///somewhere/else".into(),
+            }),
+        ];
+        let observations = WorkspaceObservationSet::new()
+            .with_codex_sandbox(CodexSandboxObservation::new(&nested));
 
         let resolved = resolve_workspaces(&requirements, &observations);
 

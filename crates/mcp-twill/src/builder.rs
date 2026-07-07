@@ -10,10 +10,10 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    Alternative, ArgSpec, ArgType, CapabilityDecl, CommandContext, CommandExample,
-    CommandGuidance, CommandHandler, CommandOutput, CommandRegistry, CommandSpec, Fallback,
-    FrameworkError, OutputContract, PermissionSpec, ProgressPhaseSpec, Result, StdinContract,
-    TypeDecl, WorkspaceDecl,
+    Alternative, ArgSpec, ArgType, CapabilityDecl, CommandContext, CommandExample, CommandGuidance,
+    CommandHandler, CommandOutput, CommandRegistry, CommandSpec, Fallback, FrameworkError,
+    OutputContract, PermissionSpec, ProgressPhaseSpec, Result, StdinContract, TypeDecl,
+    WorkspaceDecl,
 };
 
 pub mod arg {

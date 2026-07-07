@@ -553,7 +553,9 @@ pub fn check_type_projection(registry: &CommandRegistry) -> Vec<ContractViolatio
                 violations.push(violation(
                     Some(&command.path.join(" ")),
                     "schema",
-                    format!("argument schema contains `{forbidden}`; named types must be fully inlined"),
+                    format!(
+                        "argument schema contains `{forbidden}`; named types must be fully inlined"
+                    ),
                 ));
             }
         }
@@ -701,7 +703,9 @@ pub fn check_guidance_projection(registry: &CommandRegistry) -> Vec<ContractViol
                     violations.push(violation(
                         Some(&name),
                         "guidance",
-                        format!("command help does not render derived fallback edge from `{source}`"),
+                        format!(
+                            "command help does not render derived fallback edge from `{source}`"
+                        ),
                     ));
                 }
             }

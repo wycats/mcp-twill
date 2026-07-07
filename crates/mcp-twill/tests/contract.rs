@@ -137,9 +137,8 @@ fn nonpure_operation_without_permissions_is_a_violation() {
     // CommandSpec::new with no permissions is Pure, which is fine. Simulate
     // drift by declaring a permission with an empty description instead.
     let reg = CommandRegistry::new("contract-test", "Contract test server").register(
-        CommandSpec::new(["issues", "purge"], "Purge issues", "Purge issues").with_permission(
-            PermissionSpec::new(PermissionEffect::Delete, "issues", ""),
-        ),
+        CommandSpec::new(["issues", "purge"], "Purge issues", "Purge issues")
+            .with_permission(PermissionSpec::new(PermissionEffect::Delete, "issues", "")),
         |_context| async { Ok(CommandOutput::structured(json!({}))) },
     );
     let violations = contract::check_effect_metadata(&reg);
@@ -171,10 +170,10 @@ fn example_planning_a_different_operation_is_a_violation() {
         );
     let violations = contract::check_examples_and_plans(&reg);
     assert!(
-        violations
-            .iter()
-            .any(|violation| violation.operation.as_deref() == Some("issues.create")
-                && violation.message.contains("plans `issues.list`")),
+        violations.iter().any(
+            |violation| violation.operation.as_deref() == Some("issues.create")
+                && violation.message.contains("plans `issues.list`")
+        ),
         "{violations:?}"
     );
 }

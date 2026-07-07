@@ -47,8 +47,7 @@ fn condition_type() -> TypeDecl {
                 .field(Field::constant("kind", "text"))
                 .field(Field::string("text", "Text to wait for"))
                 .field(
-                    Field::enumerated("state", &["visible", "hidden"], "Desired state")
-                        .optional(),
+                    Field::enumerated("state", &["visible", "hidden"], "Desired state").optional(),
                 ),
         )
         .variant(
@@ -83,13 +82,21 @@ fn form_field_type() -> TypeDecl {
         .variant(
             Variant::new("text", "Fill a text control")
                 .field(Field::constant("kind", "text"))
-                .field(Field::reference("target", "element-target", "Control to fill"))
+                .field(Field::reference(
+                    "target",
+                    "element-target",
+                    "Control to fill",
+                ))
                 .field(Field::string("value", "Text value")),
         )
         .variant(
             Variant::new("checked", "Set a checkbox")
                 .field(Field::constant("kind", "checked"))
-                .field(Field::reference("target", "element-target", "Checkbox to set"))
+                .field(Field::reference(
+                    "target",
+                    "element-target",
+                    "Checkbox to set",
+                ))
                 .field(Field::boolean("checked", "Desired checked state")),
         )
 }
@@ -133,9 +140,7 @@ fn registry() -> CommandRegistry {
         )
         .register(
             CommandSpec::new(["page", "fill-form"], "Fill form", "Fill multiple fields")
-                .with_arg(
-                    ArgSpec::named("fields", "form-field", "Fields to fill").repeated(),
-                )
+                .with_arg(ArgSpec::named("fields", "form-field", "Fields to fill").repeated())
                 .with_permission(PermissionSpec::new(
                     PermissionEffect::Write,
                     "page",
@@ -198,7 +203,11 @@ fn union_matching_rejects_unknown_fields() {
             json!({ "target": { "ref": "node-4", "extra": true } }),
         ))
         .unwrap_err();
-    assert!(error.to_string().contains("not `reference`: unknown field `extra`"));
+    assert!(
+        error
+            .to_string()
+            .contains("not `reference`: unknown field `extra`")
+    );
 }
 
 // --- Discriminated union matching ---
@@ -340,11 +349,7 @@ fn base_registry(types: Vec<TypeDecl>, spec_type: &str) -> mcp_twill::Result<()>
     let registry = registry.register(
         CommandSpec::new(["demo"], "Demo", "Demo command")
             .with_arg(ArgSpec::named("value", spec_type, "The value"))
-            .with_permission(PermissionSpec::new(
-                PermissionEffect::Read,
-                "demo",
-                "Reads",
-            )),
+            .with_permission(PermissionSpec::new(PermissionEffect::Read, "demo", "Reads")),
         |_context| async { Ok(CommandOutput::text("ok")) },
     );
     registry.validate_types()
@@ -358,12 +363,13 @@ fn dangling_type_reference_fails_validation() {
 
 #[test]
 fn dangling_field_reference_fails_validation() {
-    let types = vec![
-        TypeDecl::union("outer", "Outer").variant(
-            Variant::new("only", "Only variant")
-                .field(Field::reference("inner", "missing-inner", "Nested value")),
-        ),
-    ];
+    let types = vec![TypeDecl::union("outer", "Outer").variant(
+        Variant::new("only", "Only variant").field(Field::reference(
+            "inner",
+            "missing-inner",
+            "Nested value",
+        )),
+    )];
     let error = base_registry(types, "outer").unwrap_err();
     assert!(error.to_string().contains("missing-inner"));
 }
@@ -371,12 +377,10 @@ fn dangling_field_reference_fails_validation() {
 #[test]
 fn reference_cycles_fail_validation() {
     let types = vec![
-        TypeDecl::union("a", "A").variant(
-            Variant::new("only", "Only").field(Field::reference("b", "b", "B value")),
-        ),
-        TypeDecl::union("b", "B").variant(
-            Variant::new("only", "Only").field(Field::reference("a", "a", "A value")),
-        ),
+        TypeDecl::union("a", "A")
+            .variant(Variant::new("only", "Only").field(Field::reference("b", "b", "B value"))),
+        TypeDecl::union("b", "B")
+            .variant(Variant::new("only", "Only").field(Field::reference("a", "a", "A value"))),
     ];
     let error = base_registry(types, "a").unwrap_err();
     assert!(error.to_string().contains("cycle"));
@@ -495,7 +499,9 @@ fn discriminated_variants_project_constants_and_enums() {
         .unwrap();
     let schema = registry.arg_schema(spec);
 
-    let variants = schema["properties"]["condition"]["oneOf"].as_array().unwrap();
+    let variants = schema["properties"]["condition"]["oneOf"]
+        .as_array()
+        .unwrap();
     assert_eq!(variants[0]["properties"]["kind"]["const"], "delay");
     let load = &variants[4];
     let states = load["properties"]["state"]["enum"].as_array().unwrap();
@@ -578,7 +584,11 @@ fn fingerprint_diverges_for_different_per_element_sequences() {
 #[test]
 fn catalog_includes_declared_types() {
     let catalog = registry().catalog();
-    let names: Vec<&str> = catalog.types.iter().map(|decl| decl.name.as_str()).collect();
+    let names: Vec<&str> = catalog
+        .types
+        .iter()
+        .map(|decl| decl.name.as_str())
+        .collect();
     assert_eq!(names, vec!["condition", "element-target", "form-field"]);
 }
 
@@ -586,10 +596,12 @@ fn catalog_includes_declared_types() {
 fn catalog_hash_covers_type_declarations() {
     let without_extra_variant = registry().catalog_identity().catalog_hash;
     let with_extra_variant = CommandRegistry::new("types-test", "Named type test server")
-        .declare_type(element_target_type().variant(
-            Variant::new("label", "Locate by label text")
-                .field(Field::string("label", "Visible label text")),
-        ))
+        .declare_type(
+            element_target_type().variant(
+                Variant::new("label", "Locate by label text")
+                    .field(Field::string("label", "Visible label text")),
+            ),
+        )
         .declare_type(condition_type())
         .declare_type(form_field_type())
         .register(
@@ -655,11 +667,7 @@ fn serving_path_rejects_invalid_type_graphs() {
     let registry = CommandRegistry::new("invalid", "Invalid registry").register(
         CommandSpec::new(["demo"], "Demo", "Demo command")
             .with_arg(ArgSpec::named("value", "missing-type", "The value"))
-            .with_permission(PermissionSpec::new(
-                PermissionEffect::Read,
-                "demo",
-                "Reads",
-            )),
+            .with_permission(PermissionSpec::new(PermissionEffect::Read, "demo", "Reads")),
         |_context| async { Ok(CommandOutput::text("ok")) },
     );
     let error = match mcp_twill::CliMcpServer::new(registry) {
@@ -674,20 +682,18 @@ fn contract_check_reports_cycles_without_projecting_schemas() {
     // The schema inliner assumes an acyclic graph; the contract check must
     // report the validation failure instead of recursing into projection.
     let registry = CommandRegistry::new("cyclic", "Cyclic registry")
-        .declare_type(TypeDecl::union("a", "A").variant(
-            Variant::new("only", "Only").field(Field::reference("b", "b", "B value")),
-        ))
-        .declare_type(TypeDecl::union("b", "B").variant(
-            Variant::new("only", "Only").field(Field::reference("a", "a", "A value")),
-        ))
+        .declare_type(
+            TypeDecl::union("a", "A")
+                .variant(Variant::new("only", "Only").field(Field::reference("b", "b", "B value"))),
+        )
+        .declare_type(
+            TypeDecl::union("b", "B")
+                .variant(Variant::new("only", "Only").field(Field::reference("a", "a", "A value"))),
+        )
         .register(
             CommandSpec::new(["demo"], "Demo", "Demo command")
                 .with_arg(ArgSpec::named("value", "a", "The value"))
-                .with_permission(PermissionSpec::new(
-                    PermissionEffect::Read,
-                    "demo",
-                    "Reads",
-                )),
+                .with_permission(PermissionSpec::new(PermissionEffect::Read, "demo", "Reads")),
             |_context| async { Ok(CommandOutput::text("ok")) },
         );
     let violations = mcp_twill::contract::check_type_projection(&registry);
@@ -697,12 +703,13 @@ fn contract_check_reports_cycles_without_projecting_schemas() {
 
 #[test]
 fn repeated_field_problems_keep_the_element_index() {
-    let types = vec![
-        TypeDecl::union("tagged", "Tagged value").variant(
-            Variant::new("only", "Only variant")
-                .field(Field::string("tags", "Tag list").repeated()),
-        ),
-    ];
+    let types =
+        vec![
+            TypeDecl::union("tagged", "Tagged value").variant(
+                Variant::new("only", "Only variant")
+                    .field(Field::string("tags", "Tag list").repeated()),
+            ),
+        ];
     let mut registry = CommandRegistry::new("repeated-field", "Repeated field test");
     for decl in types {
         registry = registry.declare_type(decl);
@@ -710,11 +717,7 @@ fn repeated_field_problems_keep_the_element_index() {
     let registry = registry.register(
         CommandSpec::new(["demo"], "Demo", "Demo command")
             .with_arg(ArgSpec::named("value", "tagged", "The value"))
-            .with_permission(PermissionSpec::new(
-                PermissionEffect::Read,
-                "demo",
-                "Reads",
-            )),
+            .with_permission(PermissionSpec::new(PermissionEffect::Read, "demo", "Reads")),
         |_context| async { Ok(CommandOutput::text("ok")) },
     );
     let error = registry
@@ -786,11 +789,7 @@ fn type_projection_ignores_ref_text_in_descriptions() {
         .register(
             CommandSpec::new(["demo"], "Demo", "Demo command")
                 .with_arg(ArgSpec::named("value", "noted", "The value"))
-                .with_permission(PermissionSpec::new(
-                    PermissionEffect::Read,
-                    "demo",
-                    "Reads",
-                )),
+                .with_permission(PermissionSpec::new(PermissionEffect::Read, "demo", "Reads")),
             |_context| async { Ok(CommandOutput::text("ok")) },
         );
     let violations = mcp_twill::contract::check_type_projection(&registry);

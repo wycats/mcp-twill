@@ -628,11 +628,8 @@ impl CommandRegistry {
                 )));
             }
         }
-        let command_names: BTreeSet<String> = self
-            .commands
-            .keys()
-            .map(|path| path.join(" "))
-            .collect();
+        let command_names: BTreeSet<String> =
+            self.commands.keys().map(|path| path.join(" ")).collect();
         for command in self.commands.values() {
             let name = command.spec.name();
             if let Some(use_when) = &command.spec.use_when {
@@ -1276,7 +1273,10 @@ impl CommandRegistry {
 
     fn server_help(&self) -> HelpResult {
         let identity = self.catalog_identity();
-        let mut lines = vec![format!("# {}", self.server_name), self.server_description.clone()];
+        let mut lines = vec![
+            format!("# {}", self.server_name),
+            self.server_description.clone(),
+        ];
         if let Some(preamble) = &self.preamble {
             lines.push(preamble.clone());
         }
@@ -1416,7 +1416,10 @@ impl CommandRegistry {
         if !spec.alternatives.is_empty() {
             let mut lines = vec!["Use instead:".to_string()];
             for alternative in &spec.alternatives {
-                lines.push(format!("- `{}` — {}", alternative.command, alternative.when));
+                lines.push(format!(
+                    "- `{}` — {}",
+                    alternative.command, alternative.when
+                ));
             }
             sections.push(lines.join("\n"));
         }
@@ -1624,7 +1627,8 @@ fn find_fallback_cycle<'a>(
     Ok(())
 }
 
-fn lane_description(primary_tool_name: &str, lane: EffectLane) -> String {    match lane {
+fn lane_description(primary_tool_name: &str, lane: EffectLane) -> String {
+    match lane {
         EffectLane::Primary => format!(
             "Primary execution tool. Start here for all command templates; the framework returns structured retry data when another effect lane is required."
         ),
