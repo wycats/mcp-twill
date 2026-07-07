@@ -9,7 +9,7 @@
 
 ## Summary
 
-This RFC gives commands a way to declare the capabilities they require — a live session lease, an owned tab — and gives servers a way to declare what those capabilities are and which commands establish them. The declarations project into generated help and the catalog resource, replace the prose and per-tool boilerplate that carry this contract today, and let the framework pre-validate that capability-carrying arguments are present with steering that names the establishing command.
+This RFC gives commands a way to declare the capabilities they require — a live session lease, an owned tab — and gives servers a way to declare what those capabilities are and which commands establish them. The declarations project into generated help and the catalog resource, replace the prose and per-tool boilerplate that carry this contract today, and let the framework pre-validate that capability-carrying arguments are present with steering that names the establishing commands.
 
 Enforcement does not move. The server that checks leases today keeps checking leases; the declaration is a promise about what the server will enforce, exactly as a permission declaration is a promise about what the server will do. What changes is that the promise becomes a catalog fact: visible to agents before they call, checkable by contract tests, and rendered consistently everywhere instead of being re-written by hand in three places.
 
@@ -90,7 +90,7 @@ What the framework does not do is verify the capability is *valid*. It cannot kn
 
 ### How Agents Should Learn This
 
-An agent that reads command help sees the requirement, the argument that carries it, and the commands that establish it, before making any call. An agent that skips help and calls with a missing or stale capability gets a diagnostic that points at the establishing command rather than a bare validation error. Both paths teach the same fact from the same declaration; neither depends on the agent having read a server-level preamble.
+An agent that reads command help sees the requirement, the argument that carries it, and the commands that establish it, before making any call. An agent that skips help and calls with a missing or stale capability gets a diagnostic that points at the establishing commands rather than a bare validation error. Both paths teach the same fact from the same declaration; neither depends on the agent having read a server-level preamble.
 
 ## Reference-Level Explanation
 
@@ -227,4 +227,4 @@ A `check_capability_projection` rule joins the contract suite: every required ca
 - `capability_denied` from a handler produces the same steering.
 - Adding a requirement to a command changes the catalog hash; removing it changes it back.
 - `check_capability_projection` fails a registry whose command help omits a required capability, and passes the example server.
-- The example server demonstrates a provider (`session start`-style command) and a consumer, covered by `contract_tests!`.
+- The example server demonstrates a provider (a `start_session`-style command) and a consumer, covered by `contract_tests!`.
