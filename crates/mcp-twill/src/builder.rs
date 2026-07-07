@@ -10,9 +10,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ArgSpec, ArgType, CommandContext, CommandExample, CommandGuidance, CommandHandler,
-    CommandOutput, CommandRegistry, CommandSpec, FrameworkError, OutputContract, PermissionSpec,
-    ProgressPhaseSpec, Result, StdinContract, TypeDecl, WorkspaceDecl,
+    ArgSpec, ArgType, CapabilityDecl, CommandContext, CommandExample, CommandGuidance,
+    CommandHandler, CommandOutput, CommandRegistry, CommandSpec, FrameworkError, OutputContract,
+    PermissionSpec, ProgressPhaseSpec, Result, StdinContract, TypeDecl, WorkspaceDecl,
 };
 
 pub mod arg {
@@ -62,6 +62,7 @@ pub struct ServerBuilder {
     name: String,
     description: String,
     workspaces: Vec<WorkspaceDecl>,
+    capabilities: Vec<CapabilityDecl>,
     types: Vec<TypeDecl>,
     guidance: Vec<CommandGuidance>,
     commands: Vec<BuiltCommand>,
@@ -80,6 +81,7 @@ impl ServerBuilder {
             name: name.into(),
             description: description.into(),
             workspaces: Vec::new(),
+            capabilities: Vec::new(),
             types: Vec::new(),
             guidance: Vec::new(),
             commands: Vec::new(),
@@ -90,6 +92,11 @@ impl ServerBuilder {
 
     pub fn workspace(&mut self, workspace: WorkspaceDecl) -> &mut Self {
         self.workspaces.push(workspace);
+        self
+    }
+
+    pub fn capability(&mut self, capability: CapabilityDecl) -> &mut Self {
+        self.capabilities.push(capability);
         self
     }
 
@@ -147,6 +154,9 @@ impl ServerBuilder {
         for workspace in self.workspaces.drain(..) {
             registry = registry.declare_workspace(workspace);
         }
+        for capability in self.capabilities.drain(..) {
+            registry = registry.declare_capability(capability);
+        }
         for decl in self.types.drain(..) {
             registry = registry.declare_type(decl);
         }
@@ -158,6 +168,7 @@ impl ServerBuilder {
         }
         registry.validate_types()?;
         registry.validate_workspaces()?;
+        registry.validate_capabilities()?;
         registry.validate_examples()?;
         registry.validate_guidance()?;
         Ok(registry)
@@ -176,6 +187,8 @@ pub struct CommandBuilder {
     progress: Vec<ProgressPhaseSpec>,
     idempotent: bool,
     workspaces: Vec<String>,
+    requires: Vec<String>,
+    provides: Vec<String>,
     handler: Option<SharedCommandHandler>,
     errors: Vec<FrameworkError>,
 }
@@ -194,6 +207,8 @@ impl CommandBuilder {
             progress: Vec::new(),
             idempotent: false,
             workspaces: Vec::new(),
+            requires: Vec::new(),
+            provides: Vec::new(),
             handler: None,
             errors: Vec::new(),
         }
@@ -241,6 +256,21 @@ impl CommandBuilder {
     /// caller-supplied. Planning fails when the workspace does not resolve.
     pub fn uses_workspace(&mut self, name: impl Into<String>) -> &mut Self {
         self.workspaces.push(name.into());
+        self
+    }
+
+    /// Declares that this command requires the named capability. The
+    /// capability's carrier argument must be declared on this command as a
+    /// required argument; registration fails otherwise.
+    pub fn requires(&mut self, capability: impl Into<String>) -> &mut Self {
+        self.requires.push(capability.into());
+        self
+    }
+
+    /// Declares that this command establishes the named capability. Steering
+    /// and help derive "establish it with ..." guidance from this declaration.
+    pub fn provides(&mut self, capability: impl Into<String>) -> &mut Self {
+        self.provides.push(capability.into());
         self
     }
 
@@ -415,6 +445,12 @@ impl CommandBuilder {
         }
         for workspace in self.workspaces {
             spec = spec.uses_workspace(workspace);
+        }
+        for capability in self.requires {
+            spec = spec.requires(capability);
+        }
+        for capability in self.provides {
+            spec = spec.provides(capability);
         }
 
         Ok(BuiltCommand { spec, handler })

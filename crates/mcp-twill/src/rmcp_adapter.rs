@@ -121,6 +121,7 @@ impl CliMcpServer {
         registry.validate_guidance()?;
         registry.validate_types()?;
         registry.validate_workspaces()?;
+        registry.validate_capabilities()?;
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));

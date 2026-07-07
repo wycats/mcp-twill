@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ArgSpec, CommandExample, CommandSpec, PermissionEffect, PermissionSpec, TypeDecl,
-    WorkspaceDecl,
+    ArgSpec, CapabilityDecl, CommandExample, CommandSpec, PermissionEffect, PermissionSpec,
+    TypeDecl, WorkspaceDecl,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -227,6 +227,13 @@ pub struct OperationSpec {
     /// requirements resolved at plan time, never caller-supplied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<String>,
+    /// Capabilities this command requires; the capability's carrier
+    /// argument must be bound on every call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    /// Capabilities this command establishes for later calls.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provides: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<CommandExample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -251,6 +258,8 @@ impl OperationSpec {
             output: spec.output.clone().unwrap_or_default(),
             permissions: spec.permissions.clone(),
             workspaces: spec.workspaces.clone(),
+            requires: spec.requires.clone(),
+            provides: spec.provides.clone(),
             examples: spec.examples.clone(),
             progress: spec.progress.clone(),
             idempotent: spec.idempotent,
@@ -289,6 +298,8 @@ pub struct CommandCatalog {
     pub guidance: Vec<CommandGuidance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<TypeDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<CapabilityDecl>,
     pub identity: CatalogIdentity,
 }
 

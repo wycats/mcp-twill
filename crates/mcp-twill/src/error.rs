@@ -56,6 +56,29 @@ pub enum FrameworkError {
         /// Resolver diagnostics explaining why resolution failed.
         diagnostics: Vec<mcp_workspace_resolver::WorkspaceDiagnostic>,
     },
+    #[error("{}", capability_missing_message(capability, carrier, providers))]
+    CapabilityMissing {
+        /// The declared capability the command requires.
+        capability: String,
+        /// The argument that carries proof of the capability.
+        carrier: String,
+        /// Commands that establish the capability, derived from `provides`
+        /// declarations.
+        providers: Vec<String>,
+    },
+    #[error("capability `{capability}` denied: {detail}")]
+    CapabilityDenied {
+        /// The declared capability the server refused to honor.
+        capability: String,
+        /// Server-specific detail (stale lease, foreign tab).
+        detail: String,
+        /// The carrier argument, filled in by the framework from the
+        /// capability declaration before the response is built.
+        carrier: Option<String>,
+        /// Commands that establish the capability, filled in by the
+        /// framework from `provides` declarations.
+        providers: Vec<String>,
+    },
     #[error("stdin mismatch: {0}")]
     StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]
@@ -71,6 +94,21 @@ pub enum FrameworkError {
     Build(String),
     #[error("command handler failed: {0}")]
     Handler(String),
+}
+
+impl FrameworkError {
+    /// Constructor for handlers that determine a presented capability is
+    /// invalid (stale lease, foreign tab). The framework fills in the
+    /// carrier argument and establishing commands from the declarations
+    /// before the response is built.
+    pub fn capability_denied(capability: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self::CapabilityDenied {
+            capability: capability.into(),
+            detail: detail.into(),
+            carrier: None,
+            providers: Vec::new(),
+        }
+    }
 }
 
 /// Every declared variant appears with its first blocking problem, in
@@ -132,4 +170,21 @@ fn workspace_unresolved_message(
                 .join("; ")
         )
     }
+}
+
+/// The steering names the capability and every establishing command, derived
+/// from `provides` declarations rather than written at the error site.
+fn capability_missing_message(capability: &str, carrier: &str, providers: &[String]) -> String {
+    let mut message = format!(
+        "argument `{carrier}` carries the `{capability}` capability, which this command requires."
+    );
+    if !providers.is_empty() {
+        let listed = providers
+            .iter()
+            .map(|provider| format!("`{provider}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        message.push_str(&format!(" Establish it with {listed}."));
+    }
+    message
 }

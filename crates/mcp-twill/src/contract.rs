@@ -522,6 +522,7 @@ pub fn verify_catalog_coverage(
     violations.extend(check_effect_lanes(registry, primary_tool_name));
     violations.extend(check_workspace_projection(registry));
     violations.extend(check_type_projection(registry));
+    violations.extend(check_capability_projection(registry));
     violations.extend(check_runtime_identity(registry));
     violations
 }
@@ -573,6 +574,56 @@ fn schema_contains_key(value: &serde_json::Value, key: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// Capability declarations honor the registration promises (declared,
+/// provided, consumed, carried by a required argument) and every command
+/// that requires a capability names it in its rendered help.
+pub fn check_capability_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_capabilities() {
+        violations.push(violation(None, "capabilities", error.to_string()));
+        return violations;
+    }
+    let catalog = registry.catalog();
+    for command in registry.command_specs() {
+        if command.requires.is_empty() {
+            continue;
+        }
+        let name = command.path.join(" ");
+        let help = registry.help(crate::HelpRequest {
+            command: Some(name.clone()),
+            topic: None,
+            detail: None,
+        });
+        for capability in &command.requires {
+            if !help.text.contains(capability.as_str()) {
+                violations.push(violation(
+                    Some(&name),
+                    "capabilities",
+                    format!("command help does not mention required capability `{capability}`"),
+                ));
+            }
+        }
+        let operation = catalog
+            .operations
+            .iter()
+            .find(|operation| operation.id == name.replace(' ', "."));
+        match operation {
+            Some(operation) if operation.requires == command.requires => {}
+            Some(_) => violations.push(violation(
+                Some(&name),
+                "capabilities",
+                "catalog operation does not project this command's `requires` declarations",
+            )),
+            None => violations.push(violation(
+                Some(&name),
+                "capabilities",
+                "command missing from catalog operations",
+            )),
+        }
+    }
+    violations
 }
 
 fn render_violations(violations: &[ContractViolation]) -> String {
@@ -652,6 +703,13 @@ macro_rules! contract_tests {
         #[test]
         fn contract_type_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_type_projection(
+                &$registry(),
+            ));
+        }
+
+        #[test]
+        fn contract_capability_projection() {
+            $crate::contract::assert_no_violations($crate::contract::check_capability_projection(
                 &$registry(),
             ));
         }
