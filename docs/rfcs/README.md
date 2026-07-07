@@ -48,6 +48,7 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 - [RFC 0008: Named Argument Types And Unions](stage-0/0008-named-argument-types-and-unions.md)
 - [RFC 0009: Handler-Visible Workspace Roots](stage-0/0009-handler-visible-workspace-roots.md)
 - [RFC 0010: Declared Preconditions](stage-0/0010-declared-preconditions.md)
+- [RFC 0011: Guidance Decomposition](stage-0/0011-guidance-decomposition.md)
 
 ## Suggested Implementation Order
 
