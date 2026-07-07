@@ -626,6 +626,117 @@ pub fn check_capability_projection(registry: &CommandRegistry) -> Vec<ContractVi
     violations
 }
 
+/// Guidance declarations honor the registration promises: routing edges
+/// resolve to catalog commands, every declared edge appears in rendered
+/// help (including the derived reverse edges on preferred commands), the
+/// catalog projects the declarations, and the server preamble does not
+/// inline command names that belong in per-command guidance.
+pub fn check_guidance_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_guidance() {
+        violations.push(violation(None, "guidance", error.to_string()));
+        return violations;
+    }
+    let catalog = registry.catalog();
+    if let Some(preamble) = registry.preamble() {
+        for command in registry.command_specs() {
+            let name = command.path.join(" ");
+            if preamble.contains(&format!("`{name}`")) {
+                violations.push(violation(
+                    None,
+                    "guidance",
+                    format!(
+                        "server preamble names command `{name}`; per-command steering belongs on the command, not the preamble"
+                    ),
+                ));
+            }
+        }
+    }
+    for command in registry.command_specs() {
+        let name = command.path.join(" ");
+        let has_guidance = command.use_when.is_some()
+            || !command.alternatives.is_empty()
+            || command.fallback.is_some();
+        let reverse_edges = registry.derived_fallback_edges(&name);
+        if has_guidance || !reverse_edges.is_empty() {
+            let help = registry.help(crate::HelpRequest {
+                command: Some(name.clone()),
+                topic: None,
+                detail: None,
+            });
+            if let Some(use_when) = &command.use_when
+                && !help.text.contains(use_when.as_str())
+            {
+                violations.push(violation(
+                    Some(&name),
+                    "guidance",
+                    "command help does not render the `use_when` condition",
+                ));
+            }
+            for alternative in &command.alternatives {
+                if !help.text.contains(&format!("`{}`", alternative.command)) {
+                    violations.push(violation(
+                        Some(&name),
+                        "guidance",
+                        format!(
+                            "command help does not route to alternative `{}`",
+                            alternative.command
+                        ),
+                    ));
+                }
+            }
+            if let Some(fallback) = &command.fallback {
+                for preferred in &fallback.prefer {
+                    if !help.text.contains(&format!("`{preferred}`")) {
+                        violations.push(violation(
+                            Some(&name),
+                            "guidance",
+                            format!("command help does not name preferred command `{preferred}`"),
+                        ));
+                    }
+                }
+            }
+            for (source, _) in &reverse_edges {
+                if !help.text.contains(&format!("`{source}`")) {
+                    violations.push(violation(
+                        Some(&name),
+                        "guidance",
+                        format!("command help does not render derived fallback edge from `{source}`"),
+                    ));
+                }
+            }
+        }
+        let operation = catalog
+            .operations
+            .iter()
+            .find(|operation| operation.id == name.replace(' ', "."));
+        match operation {
+            Some(operation)
+                if operation.use_when == command.use_when
+                    && operation.alternatives == command.alternatives
+                    && operation.fallback == command.fallback => {}
+            Some(_) => violations.push(violation(
+                Some(&name),
+                "guidance",
+                "catalog operation does not project this command's guidance declarations",
+            )),
+            None => violations.push(violation(
+                Some(&name),
+                "guidance",
+                "command missing from catalog operations",
+            )),
+        }
+    }
+    if catalog.server.preamble.as_deref() != registry.preamble() {
+        violations.push(violation(
+            None,
+            "guidance",
+            "catalog does not project the server preamble",
+        ));
+    }
+    violations
+}
+
 fn render_violations(violations: &[ContractViolation]) -> String {
     violations
         .iter()
@@ -710,6 +821,13 @@ macro_rules! contract_tests {
         #[test]
         fn contract_capability_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_capability_projection(
+                &$registry(),
+            ));
+        }
+
+        #[test]
+        fn contract_guidance_projection() {
+            $crate::contract::assert_no_violations($crate::contract::check_guidance_projection(
                 &$registry(),
             ));
         }

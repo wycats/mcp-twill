@@ -507,10 +507,18 @@ impl ServerHandler for CliMcpServer {
 
         ServerInfo::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(format!(
-                "Use `help` to discover command templates. Start execution with `{}`; the framework returns structured retry data when another effect-lane tool is required. Command strings are typed templates, not shell programs.",
-                self.config.execution_tool_name
-            ))
+            .with_instructions({
+                let mut instructions = String::new();
+                if let Some(preamble) = self.registry.preamble() {
+                    instructions.push_str(preamble);
+                    instructions.push_str("\n\n");
+                }
+                instructions.push_str(&format!(
+                    "Use `help` to discover command templates. Start execution with `{}`; the framework returns structured retry data when another effect-lane tool is required. Command strings are typed templates, not shell programs.",
+                    self.config.execution_tool_name
+                ));
+                instructions
+            })
     }
 
     async fn list_tools(
@@ -610,10 +618,15 @@ impl ServerHandler for CliMcpServer {
                 None,
             ));
         }
-        let mut text = format!(
+        let mut text = String::new();
+        if let Some(preamble) = self.registry.preamble() {
+            text.push_str(preamble);
+            text.push_str("\n\n");
+        }
+        text.push_str(&format!(
             "First call `help` with no command. Then call `help` for a command. Start execution with `{}` and use escalated lane tools only when a structured response asks for one. Use typed `$args.*` values; do not use shell syntax in the command string.",
             self.config.execution_tool_name
-        );
+        ));
         let guidance = self.registry.guidance();
         if !guidance.is_empty() {
             text.push_str("\n\nGuidance:");

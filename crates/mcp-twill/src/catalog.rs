@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ArgSpec, CapabilityDecl, CommandExample, CommandSpec, PermissionEffect, PermissionSpec,
-    TypeDecl, WorkspaceDecl,
+    Alternative, ArgSpec, CapabilityDecl, CommandExample, CommandSpec, Fallback, PermissionEffect,
+    PermissionSpec, TypeDecl, WorkspaceDecl,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -35,6 +35,10 @@ pub struct ServerSpec {
     pub stability: Stability,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<ProjectValue>,
+    /// Server-level operating guidance rendered in server help, the MCP
+    /// `instructions` field, and the `getting_started` prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preamble: Option<String>,
 }
 
 impl ServerSpec {
@@ -57,6 +61,7 @@ impl ServerSpec {
                     description: "Composition, filtering, redirection, and expansion-like behavior are represented as typed framework features when supported.".to_string(),
                 },
             ],
+            preamble: None,
         }
     }
 }
@@ -234,6 +239,18 @@ pub struct OperationSpec {
     /// Capabilities this command establishes for later calls.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provides: Vec<String>,
+    /// Positive selection criterion: the situation where this command is
+    /// the right choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_when: Option<String>,
+    /// Directed routing edges toward commands that fit better under the
+    /// stated conditions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<Alternative>,
+    /// Marks this command as an escape hatch: prefer the listed commands
+    /// unless the stated condition holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<Fallback>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<CommandExample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -260,6 +277,9 @@ impl OperationSpec {
             workspaces: spec.workspaces.clone(),
             requires: spec.requires.clone(),
             provides: spec.provides.clone(),
+            use_when: spec.use_when.clone(),
+            alternatives: spec.alternatives.clone(),
+            fallback: spec.fallback.clone(),
             examples: spec.examples.clone(),
             progress: spec.progress.clone(),
             idempotent: spec.idempotent,

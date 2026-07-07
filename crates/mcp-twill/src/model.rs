@@ -328,6 +328,29 @@ impl From<&ResolvedWorkspaceRoot> for PlanWorkspaceRoot {
     }
 }
 
+/// A directed routing edge to a command serving a neighboring case, with
+/// the condition that routes there (RFC 0011). Rendered on the command an
+/// agent is about to misuse, not on the target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Alternative {
+    pub command: String,
+    pub when: String,
+}
+
+/// Marks a command as an escape hatch: the commands to exhaust first and
+/// the condition that justifies bypassing them (RFC 0011). Preferred
+/// commands render a derived reverse edge; the framework enforces no
+/// ordering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Fallback {
+    /// Commands to exhaust first.
+    pub prefer: Vec<String>,
+    /// The condition that justifies using this command anyway.
+    pub when: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandExample {
@@ -384,6 +407,16 @@ pub struct CommandSpec {
     /// Capabilities this command establishes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provides: Vec<String>,
+    /// One sentence: when this command is the right choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_when: Option<String>,
+    /// Commands serving neighboring cases, with the condition that routes
+    /// there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<Alternative>,
+    /// Marks this command as an escape hatch for a preferred path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<Fallback>,
 }
 
 impl CommandSpec {
@@ -406,6 +439,9 @@ impl CommandSpec {
             workspaces: Vec::new(),
             requires: Vec::new(),
             provides: Vec::new(),
+            use_when: None,
+            alternatives: Vec::new(),
+            fallback: None,
         }
     }
 
@@ -481,6 +517,39 @@ impl CommandSpec {
         if !self.provides.contains(&capability) {
             self.provides.push(capability);
         }
+        self
+    }
+
+    /// One sentence: when this command is the right choice. Positive
+    /// polarity; mutually exclusive with `fallback`.
+    pub fn use_when(mut self, text: impl Into<String>) -> Self {
+        self.use_when = Some(text.into());
+        self
+    }
+
+    /// Declares a routing edge to the command serving a neighboring case,
+    /// with the condition that routes there.
+    pub fn alternative(mut self, command: impl Into<String>, when: impl Into<String>) -> Self {
+        self.alternatives.push(Alternative {
+            command: command.into(),
+            when: when.into(),
+        });
+        self
+    }
+
+    /// Marks this command as an escape hatch: the commands to exhaust
+    /// first and the condition that justifies bypassing them. Mutually
+    /// exclusive with `use_when` — the fallback's condition is its
+    /// selection criterion.
+    pub fn fallback(
+        mut self,
+        prefer: impl IntoIterator<Item = impl Into<String>>,
+        when: impl Into<String>,
+    ) -> Self {
+        self.fallback = Some(Fallback {
+            prefer: prefer.into_iter().map(Into::into).collect(),
+            when: when.into(),
+        });
         self
     }
 

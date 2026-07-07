@@ -10,9 +10,10 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ArgSpec, ArgType, CapabilityDecl, CommandContext, CommandExample, CommandGuidance,
-    CommandHandler, CommandOutput, CommandRegistry, CommandSpec, FrameworkError, OutputContract,
-    PermissionSpec, ProgressPhaseSpec, Result, StdinContract, TypeDecl, WorkspaceDecl,
+    Alternative, ArgSpec, ArgType, CapabilityDecl, CommandContext, CommandExample,
+    CommandGuidance, CommandHandler, CommandOutput, CommandRegistry, CommandSpec, Fallback,
+    FrameworkError, OutputContract, PermissionSpec, ProgressPhaseSpec, Result, StdinContract,
+    TypeDecl, WorkspaceDecl,
 };
 
 pub mod arg {
@@ -61,6 +62,7 @@ impl CommandRegistry {
 pub struct ServerBuilder {
     name: String,
     description: String,
+    preamble: Option<String>,
     workspaces: Vec<WorkspaceDecl>,
     capabilities: Vec<CapabilityDecl>,
     types: Vec<TypeDecl>,
@@ -80,6 +82,7 @@ impl ServerBuilder {
         Self {
             name: name.into(),
             description: description.into(),
+            preamble: None,
             workspaces: Vec::new(),
             capabilities: Vec::new(),
             types: Vec::new(),
@@ -88,6 +91,16 @@ impl ServerBuilder {
             command_paths: BTreeSet::new(),
             errors: Vec::new(),
         }
+    }
+
+    /// Declares server-level operating guidance: posture and conventions
+    /// that apply across commands. Projects into server help, the MCP
+    /// `instructions` field, and the `getting_started` prompt. Command
+    /// routing belongs on the commands themselves (`use_when`,
+    /// `alternative`, `fallback`), not here.
+    pub fn preamble(&mut self, text: impl Into<String>) -> &mut Self {
+        self.preamble = Some(text.into());
+        self
     }
 
     pub fn workspace(&mut self, workspace: WorkspaceDecl) -> &mut Self {
@@ -151,6 +164,9 @@ impl ServerBuilder {
         }
 
         let mut registry = CommandRegistry::new(self.name, self.description);
+        if let Some(preamble) = self.preamble.take() {
+            registry = registry.declare_preamble(preamble);
+        }
         for workspace in self.workspaces.drain(..) {
             registry = registry.declare_workspace(workspace);
         }
@@ -189,6 +205,9 @@ pub struct CommandBuilder {
     workspaces: Vec<String>,
     requires: Vec<String>,
     provides: Vec<String>,
+    use_when: Option<String>,
+    alternatives: Vec<Alternative>,
+    fallback: Option<Fallback>,
     handler: Option<SharedCommandHandler>,
     errors: Vec<FrameworkError>,
 }
@@ -209,6 +228,9 @@ impl CommandBuilder {
             workspaces: Vec::new(),
             requires: Vec::new(),
             provides: Vec::new(),
+            use_when: None,
+            alternatives: Vec::new(),
+            fallback: None,
             handler: None,
             errors: Vec::new(),
         }
@@ -271,6 +293,42 @@ impl CommandBuilder {
     /// and help derive "establish it with ..." guidance from this declaration.
     pub fn provides(&mut self, capability: impl Into<String>) -> &mut Self {
         self.provides.push(capability.into());
+        self
+    }
+
+    /// One sentence: when this command is the right choice. Positive
+    /// polarity; mutually exclusive with `fallback`.
+    pub fn use_when(&mut self, text: impl Into<String>) -> &mut Self {
+        self.use_when = Some(text.into());
+        self
+    }
+
+    /// Declares a routing edge to the command serving a neighboring case,
+    /// with the condition that routes there.
+    pub fn alternative(
+        &mut self,
+        command: impl Into<String>,
+        when: impl Into<String>,
+    ) -> &mut Self {
+        self.alternatives.push(Alternative {
+            command: command.into(),
+            when: when.into(),
+        });
+        self
+    }
+
+    /// Marks this command as an escape hatch: the commands to exhaust
+    /// first and the condition that justifies bypassing them. Mutually
+    /// exclusive with `use_when`.
+    pub fn fallback(
+        &mut self,
+        prefer: impl IntoIterator<Item = impl Into<String>>,
+        when: impl Into<String>,
+    ) -> &mut Self {
+        self.fallback = Some(Fallback {
+            prefer: prefer.into_iter().map(Into::into).collect(),
+            when: when.into(),
+        });
         self
     }
 
@@ -451,6 +509,15 @@ impl CommandBuilder {
         }
         for capability in self.provides {
             spec = spec.provides(capability);
+        }
+        if let Some(text) = self.use_when {
+            spec = spec.use_when(text);
+        }
+        for alternative in self.alternatives {
+            spec = spec.alternative(alternative.command, alternative.when);
+        }
+        if let Some(fallback) = self.fallback {
+            spec = spec.fallback(fallback.prefer, fallback.when);
         }
 
         Ok(BuiltCommand { spec, handler })
