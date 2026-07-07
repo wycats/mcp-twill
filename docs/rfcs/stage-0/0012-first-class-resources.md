@@ -179,6 +179,7 @@ server.command("close_tab", |command| {
 server.command("list_tabs", |command| {
     command.handle(|session: Res<Session>| async move {
         let tabs = broker.owned_tabs(&session).await?;
+        let ids = tabs.iter().map(|tab| tab.id.clone()).collect();
         Ok(CommandOutput::structured(payload).listing(Listing::<Tab>::new(ids)))
     });
 });
