@@ -236,6 +236,37 @@ impl WorkspaceDecl {
     }
 }
 
+/// A server-level capability declaration: a named precondition that some
+/// commands establish and other commands require, with the argument that
+/// carries proof of it across calls. The framework validates the
+/// declarations and pre-validates call shape; capability validity (a live
+/// lease, an owned tab) stays a server concern.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityDecl {
+    pub name: String,
+    pub summary: String,
+    /// The argument name that carries proof of this capability on
+    /// commands that require it.
+    pub carrier: String,
+}
+
+impl CapabilityDecl {
+    pub fn new(name: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            summary: summary.into(),
+            carrier: String::new(),
+        }
+    }
+
+    /// Names the argument that carries proof of this capability.
+    pub fn carried_by(mut self, argument: impl Into<String>) -> Self {
+        self.carrier = argument.into();
+        self
+    }
+}
+
 /// A workspace root selected for an invocation plan: which root a path
 /// argument was planned against, where it came from, and why it was chosen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -345,6 +376,14 @@ pub struct CommandSpec {
     /// never caller-supplied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<String>,
+    /// Capabilities this command requires (names of server-declared
+    /// capabilities). The capability's carrier argument must be a required
+    /// argument of this command.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    /// Capabilities this command establishes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provides: Vec<String>,
 }
 
 impl CommandSpec {
@@ -365,6 +404,8 @@ impl CommandSpec {
             progress: Vec::new(),
             idempotent: false,
             workspaces: Vec::new(),
+            requires: Vec::new(),
+            provides: Vec::new(),
         }
     }
 
@@ -418,6 +459,27 @@ impl CommandSpec {
         let name = name.into();
         if !self.workspaces.contains(&name) {
             self.workspaces.push(name);
+        }
+        self
+    }
+
+    /// Declares that this command requires the named capability. The
+    /// capability's carrier argument must be declared as a required
+    /// argument. Declaring the same requirement twice is a no-op.
+    pub fn requires(mut self, capability: impl Into<String>) -> Self {
+        let capability = capability.into();
+        if !self.requires.contains(&capability) {
+            self.requires.push(capability);
+        }
+        self
+    }
+
+    /// Declares that this command establishes the named capability.
+    /// Declaring the same capability twice is a no-op.
+    pub fn provides(mut self, capability: impl Into<String>) -> Self {
+        let capability = capability.into();
+        if !self.provides.contains(&capability) {
+            self.provides.push(capability);
         }
         self
     }

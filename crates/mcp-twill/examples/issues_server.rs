@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use mcp_twill::{
-    CommandContext, CommandOutput, CommandRegistry, EventSink, Field, FrameworkEvent, Result,
-    TypeDecl, Variant, WorkspaceDecl, arg,
+    CapabilityDecl, CommandContext, CommandOutput, CommandRegistry, EventSink, Field,
+    FrameworkEvent, Result, TypeDecl, Variant, WorkspaceDecl, arg,
 };
 use rmcp::{ServiceExt, transport::stdio};
 use serde::Deserialize;
@@ -48,6 +48,11 @@ pub fn registry() -> Result<CommandRegistry> {
         |server| {
             server.workspace(
                 WorkspaceDecl::file("repo", repo_root).with_description("Example repository root"),
+            );
+
+            server.capability(
+                CapabilityDecl::new("session", "A live issue-tracker session lease")
+                    .carried_by("session_id"),
             );
 
             server.declare_type(
@@ -143,6 +148,44 @@ pub fn registry() -> Result<CommandRegistry> {
                         Ok(CommandOutput::structured(json!({
                             "exported_to": path.join("issues-export.json"),
                             "root_source": root.source,
+                        })))
+                    });
+            });
+            server.command("session start", |command| {
+                command
+                    .summary("Start an issue-tracker session")
+                    .description(
+                        "Establishes a session lease. Commands that require the `session` \
+                         capability accept the returned id through their `session_id` \
+                         argument.",
+                    )
+                    .provides("session")
+                    .write("sessions", "Creates a session lease")
+                    .example("session start", "Start a session and capture its id")
+                    .handle(|_context| async {
+                        Ok(CommandOutput::structured(json!({ "session_id": "sess-1" })))
+                    });
+            });
+
+            server.command("issues sync", |command| {
+                command
+                    .summary("Sync issues with the remote tracker")
+                    .description(
+                        "Pushes and pulls issue records over an established session.",
+                    )
+                    .arg(arg::string("session_id").summary("Session that owns the sync"))
+                    .requires("session")
+                    .write("issues", "Updates issue records from the remote tracker")
+                    .example_with_args(
+                        "issues sync --session-id $args.session_id",
+                        "Sync issues over an established session",
+                        json!({ "session_id": "sess-1" }),
+                    )
+                    .handle(|context: CommandContext| async move {
+                        let session = &context.plan.bound_args["session_id"].value;
+                        Ok(CommandOutput::structured(json!({
+                            "session_id": session,
+                            "synced": 2
                         })))
                     });
             });

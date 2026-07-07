@@ -48,6 +48,8 @@ pub struct CommandRegistry {
     workspaces: BTreeMap<String, WorkspaceDecl>,
     types: BTreeMap<String, crate::TypeDecl>,
     duplicate_types: Vec<String>,
+    capabilities: BTreeMap<String, crate::CapabilityDecl>,
+    duplicate_capabilities: Vec<String>,
     guidance: Vec<CommandGuidance>,
     policy: PermissionPolicy,
 }
@@ -67,6 +69,8 @@ impl CommandRegistry {
             workspaces: BTreeMap::new(),
             types: BTreeMap::new(),
             duplicate_types: Vec::new(),
+            capabilities: BTreeMap::new(),
+            duplicate_capabilities: Vec::new(),
             guidance: Vec::new(),
             policy: PermissionPolicy::default(),
         }
@@ -88,6 +92,18 @@ impl CommandRegistry {
         }
         self.types.insert(decl.name.clone(), decl);
         self
+    }
+
+    pub fn declare_capability(mut self, decl: crate::CapabilityDecl) -> Self {
+        if self.capabilities.contains_key(&decl.name) {
+            self.duplicate_capabilities.push(decl.name.clone());
+        }
+        self.capabilities.insert(decl.name.clone(), decl);
+        self
+    }
+
+    pub fn capabilities(&self) -> impl Iterator<Item = &crate::CapabilityDecl> {
+        self.capabilities.values()
     }
 
     pub fn types(&self) -> impl Iterator<Item = &crate::TypeDecl> {
@@ -152,6 +168,7 @@ impl CommandRegistry {
             operations,
             workspaces: self.workspaces.values().cloned().collect(),
             types: self.types.values().cloned().collect(),
+            capabilities: self.capabilities.values().cloned().collect(),
             guidance: self.guidance.clone(),
             identity,
         }
@@ -179,6 +196,7 @@ impl CommandRegistry {
             "operations": operations,
             "workspaces": self.workspaces.values().collect::<Vec<_>>(),
             "types": self.types.values().collect::<Vec<_>>(),
+            "capabilities": self.capabilities.values().collect::<Vec<_>>(),
             "guidance": self.guidance,
         });
         let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
@@ -290,6 +308,156 @@ impl CommandRegistry {
             }
         }
         Ok(())
+    }
+
+    /// Validates capability declarations: every `requires`/`provides` name
+    /// must match a declared capability, a requiring command must carry the
+    /// capability's carrier as a required argument, and every capability
+    /// needs both a provider and a consumer.
+    pub fn validate_capabilities(&self) -> Result<()> {
+        if let Some(name) = self.duplicate_capabilities.first() {
+            return Err(FrameworkError::Build(format!(
+                "capability `{name}` is declared more than once"
+            )));
+        }
+        for command in self.commands.values() {
+            let mut seen = std::collections::BTreeSet::new();
+            for capability_name in &command.spec.requires {
+                let Some(capability) = self.capabilities.get(capability_name) else {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` requires capability `{capability_name}`, which is not declared on the server",
+                        command.spec.name()
+                    )));
+                };
+                if !seen.insert(capability_name) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` requires capability `{capability_name}` more than once",
+                        command.spec.name()
+                    )));
+                }
+                let carrier = command
+                    .spec
+                    .args
+                    .iter()
+                    .find(|arg| arg.name == capability.carrier);
+                match carrier {
+                    None => {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{}` requires capability `{capability_name}` but has no `{}` argument to carry it",
+                            command.spec.name(),
+                            capability.carrier
+                        )));
+                    }
+                    Some(arg) if !arg.required => {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{}` requires capability `{capability_name}` but its carrier argument `{}` is optional; a carrier must be required",
+                            command.spec.name(),
+                            capability.carrier
+                        )));
+                    }
+                    Some(_) => {}
+                }
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for capability_name in &command.spec.provides {
+                if !self.capabilities.contains_key(capability_name) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` provides capability `{capability_name}`, which is not declared on the server",
+                        command.spec.name()
+                    )));
+                }
+                if !seen.insert(capability_name) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` provides capability `{capability_name}` more than once",
+                        command.spec.name()
+                    )));
+                }
+            }
+        }
+        for capability in self.capabilities.values() {
+            if self.capability_providers(&capability.name).is_empty() {
+                return Err(FrameworkError::Build(format!(
+                    "capability `{}` has no providing command; declare `provides` on the command that establishes it",
+                    capability.name
+                )));
+            }
+            let consumed = self
+                .commands
+                .values()
+                .any(|command| command.spec.requires.contains(&capability.name));
+            if !consumed {
+                return Err(FrameworkError::Build(format!(
+                    "capability `{}` has no requiring command; remove the declaration or declare `requires` on the commands that need it",
+                    capability.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The commands that establish a capability, derived from `provides`
+    /// declarations. Steering and help name these commands so guidance can
+    /// never drift from the declarations.
+    pub fn capability_providers(&self, capability: &str) -> Vec<String> {
+        self.commands
+            .values()
+            .filter(|command| {
+                command
+                    .spec
+                    .provides
+                    .iter()
+                    .any(|provided| provided == capability)
+            })
+            .map(|command| command.spec.name())
+            .collect()
+    }
+
+    /// One help line for a capability: summary, carrier argument, and the
+    /// commands that establish it, all derived from declarations.
+    fn capability_help_line(&self, capability: &str) -> String {
+        let Some(decl) = self.capabilities.get(capability) else {
+            return format!("`{capability}`");
+        };
+        let providers = self.capability_providers(capability);
+        let establish = if providers.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; establish with {}",
+                providers
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        format!(
+            "`{}`: {} (carried by `{}`{establish})",
+            decl.name, decl.summary, decl.carrier
+        )
+    }
+
+    /// Fills in the carrier argument and establishing commands on a
+    /// handler-raised `CapabilityDenied` so the response layer can locate
+    /// the failure and derive establishment steering from declarations.
+    fn enrich_capability_denied(&self, error: FrameworkError) -> FrameworkError {
+        let FrameworkError::CapabilityDenied {
+            capability, detail, ..
+        } = error
+        else {
+            return error;
+        };
+        let carrier = self
+            .capabilities
+            .get(&capability)
+            .map(|decl| decl.carrier.clone());
+        let providers = self.capability_providers(&capability);
+        FrameworkError::CapabilityDenied {
+            capability,
+            detail,
+            carrier,
+            providers,
+        }
     }
 
     /// The model-facing JSON schema for one command's arguments. Named types
@@ -481,6 +649,21 @@ impl CommandRegistry {
                 }
             }
             _ => {}
+        }
+
+        // A missing carrier gets the capability diagnostic, not the generic
+        // missing-argument one, so this check runs before argument binding.
+        for capability_name in &registered.spec.requires {
+            let Some(capability) = self.capabilities.get(capability_name) else {
+                continue;
+            };
+            if !request.args.contains_key(&capability.carrier) {
+                return Err(FrameworkError::CapabilityMissing {
+                    capability: capability.name.clone(),
+                    carrier: capability.carrier.clone(),
+                    providers: self.capability_providers(&capability.name),
+                });
+            }
         }
 
         let referenced: BTreeSet<_> = template
@@ -815,7 +998,8 @@ impl CommandRegistry {
                 plan: plan.clone(),
                 stdin: request.stdin,
             })
-            .await?
+            .await
+            .map_err(|error| self.enrich_capability_denied(error))?
             .apply_output_spec(&plan.output);
 
         Ok(RunResponse {
@@ -920,6 +1104,14 @@ impl CommandRegistry {
         ];
         for spec in self.command_specs() {
             lines.push(format!("- `{}`: {}", spec.name(), spec.summary));
+        }
+
+        if !self.capabilities.is_empty() {
+            lines.push(String::new());
+            lines.push("Capabilities:".to_string());
+            for name in self.capabilities.keys() {
+                lines.push(format!("- {}", self.capability_help_line(name)));
+            }
         }
 
         if !self.guidance.is_empty() {
@@ -1044,6 +1236,25 @@ impl CommandRegistry {
                 lines.push(format!(
                     "- `{name}`: {description}Resolved by the server; not a command argument."
                 ));
+            }
+            sections.push(lines.join("\n"));
+        }
+        if !spec.requires.is_empty() {
+            let mut lines = vec!["Requires:".to_string()];
+            for name in &spec.requires {
+                lines.push(format!("- {}", self.capability_help_line(name)));
+            }
+            sections.push(lines.join("\n"));
+        }
+        if !spec.provides.is_empty() {
+            let mut lines = vec!["Provides:".to_string()];
+            for name in &spec.provides {
+                let summary = self
+                    .capabilities
+                    .get(name)
+                    .map(|decl| format!(": {}", decl.summary))
+                    .unwrap_or_default();
+                lines.push(format!("- `{name}`{summary}"));
             }
             sections.push(lines.join("\n"));
         }

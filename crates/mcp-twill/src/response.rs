@@ -41,6 +41,11 @@ pub enum ErrorCode {
     AmbiguousWorkspaceRoot,
     /// Resolver diagnostic: a root URI used a scheme other than `file:`.
     UnsupportedRootScheme,
+    /// A required capability's carrier argument was not bound at plan time.
+    CapabilityMissing,
+    /// The handler judged a presented capability invalid (stale lease,
+    /// foreign resource).
+    CapabilityDenied,
     StdinMismatch,
     WrongEffectLane,
     PermissionRequired,
@@ -65,6 +70,8 @@ impl ErrorCode {
             FrameworkError::ArgumentUnionMismatch { .. } => Self::InvalidArgumentType,
             FrameworkError::WorkspaceMismatch { .. } => Self::WorkspaceMismatch,
             FrameworkError::WorkspaceUnresolved { .. } => Self::UnresolvedWorkspaceRequirement,
+            FrameworkError::CapabilityMissing { .. } => Self::CapabilityMissing,
+            FrameworkError::CapabilityDenied { .. } => Self::CapabilityDenied,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
@@ -463,6 +470,26 @@ fn error_details(error: &FrameworkError) -> Value {
             "workspace": workspace,
             "workspaceDiagnostics": diagnostics,
         }),
+        FrameworkError::CapabilityMissing {
+            capability,
+            carrier,
+            providers,
+        } => json!({
+            "capability": capability,
+            "carrier": carrier,
+            "providers": providers,
+        }),
+        FrameworkError::CapabilityDenied {
+            capability,
+            detail,
+            carrier,
+            providers,
+        } => json!({
+            "capability": capability,
+            "detail": detail,
+            "carrier": carrier,
+            "providers": providers,
+        }),
         FrameworkError::StdinMismatch(reason) => json!({ "reason": reason }),
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
@@ -545,6 +572,14 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
                 name: workspace.clone(),
             })
         }
+        FrameworkError::CapabilityMissing { carrier, .. } => Some(DiagnosticLocation::Argument {
+            name: carrier.clone(),
+        }),
+        FrameworkError::CapabilityDenied { carrier, .. } => {
+            carrier.as_ref().map(|carrier| DiagnosticLocation::Argument {
+                name: carrier.clone(),
+            })
+        }
         FrameworkError::WrongEffectLane { current_tool, .. } => {
             Some(DiagnosticLocation::ToolName {
                 name: current_tool.clone(),
@@ -621,6 +656,34 @@ fn steering_for_error(error: &FrameworkError, retry: Option<&RetryAction>) -> Ve
             request: json!({ "tool": "help", "arguments": {} }),
             priority: SteeringPriority::Primary,
         }],
+        FrameworkError::CapabilityMissing {
+            capability,
+            providers,
+            ..
+        }
+        | FrameworkError::CapabilityDenied {
+            capability,
+            providers,
+            ..
+        } => capability_steering(capability, providers),
         _ => Vec::new(),
     }
+}
+
+/// One steering action per establishing command, derived from `provides`
+/// declarations, so establishment guidance can never drift from the
+/// declarations.
+fn capability_steering(capability: &str, providers: &[String]) -> Vec<SteeringAction> {
+    providers
+        .iter()
+        .map(|provider| SteeringAction {
+            kind: SteeringKind::Help,
+            label: format!("Establish `{capability}` with `{provider}`"),
+            request: json!({
+                "tool": "help",
+                "arguments": { "command": provider },
+            }),
+            priority: SteeringPriority::Primary,
+        })
+        .collect()
 }
