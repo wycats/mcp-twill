@@ -17,8 +17,12 @@ fn list_spec() -> CommandSpec {
 }
 
 fn export_spec() -> CommandSpec {
-    CommandSpec::new(["issues", "export"], "Export issues", "Export raw issue records")
-        .with_permission(read_permission())
+    CommandSpec::new(
+        ["issues", "export"],
+        "Export issues",
+        "Export raw issue records",
+    )
+    .with_permission(read_permission())
 }
 
 /// A union whose escape-hatch variant declares a fallback condition.
@@ -143,9 +147,9 @@ fn help_renders_derived_fallback_edges_on_preferred_command() {
     // `issues export`'s fallback declaration.
     let help = help_for(&guidance_registry(), "issues list");
     assert!(help.contains("Fallbacks:"));
-    assert!(
-        help.contains("- `issues export` — when structured listings do not capture the fields you need")
-    );
+    assert!(help.contains(
+        "- `issues export` — when structured listings do not capture the fields you need"
+    ));
 }
 
 #[test]
@@ -166,7 +170,9 @@ fn type_help_renders_variant_fallback() {
     assert!(help.contains("Type `issue-ref`: How to identify an issue"));
     assert!(help.contains("  - number: Locate by issue number"));
     assert!(
-        help.contains("  - search (fallback — the issue number is not known): Locate by search query")
+        help.contains(
+            "  - search (fallback — the issue number is not known): Locate by search query"
+        )
     );
 }
 
@@ -231,7 +237,10 @@ fn hash_with(customize: impl FnOnce(CommandSpec) -> CommandSpec) -> String {
 #[test]
 fn catalog_hash_covers_guidance_declarations() {
     let base = hash_with(|spec| spec);
-    assert_ne!(base, hash_with(|spec| spec.use_when("raw records are required")));
+    assert_ne!(
+        base,
+        hash_with(|spec| spec.use_when("raw records are required"))
+    );
     assert_ne!(
         base,
         hash_with(|spec| spec.alternative("issues list", "structured output is enough"))
@@ -510,9 +519,9 @@ fn builder_wires_guidance_through() {
     ));
     let list = help_for(&registry, "issues list");
     assert!(list.contains("Fallbacks:"));
-    assert!(
-        list.contains("- `issues export` — when structured listings do not capture the fields you need")
-    );
+    assert!(list.contains(
+        "- `issues export` — when structured listings do not capture the fields you need"
+    ));
 }
 
 #[test]
@@ -551,11 +560,9 @@ fn contract_flags_preamble_that_names_commands() {
         });
     let violations = contract::check_guidance_projection(&registry);
     assert!(
-        violations
-            .iter()
-            .any(|violation| violation
-                .to_string()
-                .contains("per-command steering belongs on the command")),
+        violations.iter().any(|violation| violation
+            .to_string()
+            .contains("per-command steering belongs on the command")),
         "{violations:?}"
     );
 }

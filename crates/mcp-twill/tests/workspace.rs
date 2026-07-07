@@ -345,17 +345,20 @@ fn declaring_registry() -> CommandRegistry {
             WorkspaceDecl::file("repo", "file:///workspace/repo")
                 .with_description("Repository root"),
         )
-        .register(export_spec(), |context: mcp_twill::CommandContext| async move {
-            let root = context
-                .workspace_root("repo")
-                .expect("declared workspace resolves at plan time")
-                .clone();
-            Ok(CommandOutput::structured(json!({
-                "rootUri": root.root_uri,
-                "source": root.source,
-                "path": root.path().unwrap(),
-            })))
-        })
+        .register(
+            export_spec(),
+            |context: mcp_twill::CommandContext| async move {
+                let root = context
+                    .workspace_root("repo")
+                    .expect("declared workspace resolves at plan time")
+                    .clone();
+                Ok(CommandOutput::structured(json!({
+                    "rootUri": root.root_uri,
+                    "source": root.source,
+                    "path": root.path().unwrap(),
+                })))
+            },
+        )
 }
 
 // Acceptance: a command with `uses_workspace` and no path arguments plans
@@ -473,7 +476,9 @@ fn uses_workspace_fingerprint_changes_with_resolved_root() {
             McpRoot::new("file:///clients/repo").with_name("repo"),
         ]));
     let resolved = resolve_workspaces(&registry.workspace_requirements(), &observations);
-    let client_plan = registry.build_plan_with_workspaces(&run, &resolved).unwrap();
+    let client_plan = registry
+        .build_plan_with_workspaces(&run, &resolved)
+        .unwrap();
 
     assert_ne!(
         declared_plan.invocation_fingerprint,

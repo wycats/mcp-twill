@@ -121,11 +121,13 @@ fn resolve_from_mcp_roots(
     for root in roots {
         match normalize_file_uri(&root.uri) {
             Ok(path) => file_roots.push(FileRoot { root, path }),
-            Err(err) => set.diagnostics.push(WorkspaceDiagnostic::unsupported_scheme(
-                None,
-                err.to_string(),
-                root.uri.clone(),
-            )),
+            Err(err) => set
+                .diagnostics
+                .push(WorkspaceDiagnostic::unsupported_scheme(
+                    None,
+                    err.to_string(),
+                    root.uri.clone(),
+                )),
         }
     }
 
@@ -282,11 +284,12 @@ fn resolve_from_codex(
                     continue;
                 }
                 Err(err) => {
-                    set.diagnostics.push(WorkspaceDiagnostic::unsupported_scheme(
-                        Some(requirement.id.clone()),
-                        err.to_string(),
-                        uri.clone(),
-                    ));
+                    set.diagnostics
+                        .push(WorkspaceDiagnostic::unsupported_scheme(
+                            Some(requirement.id.clone()),
+                            err.to_string(),
+                            uri.clone(),
+                        ));
                     set.diagnostics.push(WorkspaceDiagnostic::unresolved(
                         requirement.id.clone(),
                         format!(
@@ -332,11 +335,12 @@ fn resolve_from_declared(
             1 => {
                 let root = matches[0];
                 if let Err(err) = normalize_file_uri(&root.uri) {
-                    set.diagnostics.push(WorkspaceDiagnostic::unsupported_scheme(
-                        Some(requirement.id.clone()),
-                        err.to_string(),
-                        root.uri.clone(),
-                    ));
+                    set.diagnostics
+                        .push(WorkspaceDiagnostic::unsupported_scheme(
+                            Some(requirement.id.clone()),
+                            err.to_string(),
+                            root.uri.clone(),
+                        ));
                     set.diagnostics.push(WorkspaceDiagnostic::unresolved(
                         requirement.id.clone(),
                         format!(
@@ -357,11 +361,12 @@ fn resolve_from_declared(
             0 => match &requirement.fallback {
                 Some(fallback) => {
                     if let Err(err) = normalize_file_uri(&fallback.uri) {
-                        set.diagnostics.push(WorkspaceDiagnostic::unsupported_scheme(
-                            Some(requirement.id.clone()),
-                            err.to_string(),
-                            fallback.uri.clone(),
-                        ));
+                        set.diagnostics
+                            .push(WorkspaceDiagnostic::unsupported_scheme(
+                                Some(requirement.id.clone()),
+                                err.to_string(),
+                                fallback.uri.clone(),
+                            ));
                         set.diagnostics.push(WorkspaceDiagnostic::unresolved(
                             requirement.id.clone(),
                             format!(

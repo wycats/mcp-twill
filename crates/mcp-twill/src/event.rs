@@ -45,7 +45,9 @@ impl FrameworkEvent {
                 .clone()
                 .or_else(|| plan.map(|plan| plan.command_path.clone())),
             status: envelope.status.clone(),
-            effects: plan.map(|plan| vec![plan.effect.clone()]).unwrap_or_default(),
+            effects: plan
+                .map(|plan| vec![plan.effect.clone()])
+                .unwrap_or_default(),
             diagnostics: envelope.diagnostics.clone(),
         }
     }

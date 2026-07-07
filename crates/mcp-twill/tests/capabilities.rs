@@ -146,10 +146,10 @@ fn server_help_lists_declared_capabilities() {
 // Acceptance: requiring an undeclared capability fails validation.
 #[test]
 fn requiring_undeclared_capability_fails_validation() {
-    let registry = CommandRegistry::new("bad", "Bad server").register(
-        consumer_spec(),
-        |_context| async { Ok(CommandOutput::structured(json!({}))) },
-    );
+    let registry = CommandRegistry::new("bad", "Bad server")
+        .register(consumer_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
     let error = registry.validate_capabilities().unwrap_err();
     assert!(
         error.to_string().contains(
@@ -162,10 +162,10 @@ fn requiring_undeclared_capability_fails_validation() {
 // Acceptance: providing an undeclared capability fails validation.
 #[test]
 fn providing_undeclared_capability_fails_validation() {
-    let registry = CommandRegistry::new("bad", "Bad server").register(
-        provider_spec(),
-        |_context| async { Ok(CommandOutput::structured(json!({}))) },
-    );
+    let registry = CommandRegistry::new("bad", "Bad server")
+        .register(provider_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
     let error = registry.validate_capabilities().unwrap_err();
     assert!(
         error.to_string().contains(
@@ -295,10 +295,10 @@ fn duplicate_capability_declaration_fails_validation() {
 // invalid, so a server that registers cannot serve undeclared preconditions.
 #[test]
 fn serving_path_rejects_invalid_capability_graph() {
-    let registry = CommandRegistry::new("bad", "Bad server").register(
-        consumer_spec(),
-        |_context| async { Ok(CommandOutput::structured(json!({}))) },
-    );
+    let registry = CommandRegistry::new("bad", "Bad server")
+        .register(consumer_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
     let error = match mcp_twill::CliMcpServer::new(registry) {
         Ok(_) => panic!("expected serving to reject an invalid capability graph"),
         Err(error) => error,
@@ -421,26 +421,29 @@ async fn handler_capability_denial_is_enriched_from_declarations() {
 fn capability_requirements_change_catalog_hash() {
     let with_capability = registry().catalog_identity().catalog_hash;
 
-    let without_capability = CommandRegistry::new("capability-test", "Capability integration test server")
-        .register(
-            CommandSpec::new(
-                ["session", "start"],
-                "Start session",
-                "Starts a browser session and returns its id.",
-            ),
-            |_context| async { Ok(CommandOutput::structured(json!({ "session_id": "sess-1" }))) },
-        )
-        .register(
-            CommandSpec::new(
-                ["tabs", "list"],
-                "List tabs",
-                "Lists tabs in an active session.",
+    let without_capability =
+        CommandRegistry::new("capability-test", "Capability integration test server")
+            .register(
+                CommandSpec::new(
+                    ["session", "start"],
+                    "Start session",
+                    "Starts a browser session and returns its id.",
+                ),
+                |_context| async {
+                    Ok(CommandOutput::structured(json!({ "session_id": "sess-1" })))
+                },
             )
-            .with_arg(ArgSpec::string("session_id", "Session to inspect")),
-            |_context| async { Ok(CommandOutput::structured(json!({ "tabs": [] }))) },
-        )
-        .catalog_identity()
-        .catalog_hash;
+            .register(
+                CommandSpec::new(
+                    ["tabs", "list"],
+                    "List tabs",
+                    "Lists tabs in an active session.",
+                )
+                .with_arg(ArgSpec::string("session_id", "Session to inspect")),
+                |_context| async { Ok(CommandOutput::structured(json!({ "tabs": [] }))) },
+            )
+            .catalog_identity()
+            .catalog_hash;
 
     assert_ne!(with_capability, without_capability);
 }
@@ -601,10 +604,10 @@ async fn unknown_argument_reported_before_missing_carrier() {
 // is invalid rather than projecting it.
 #[test]
 fn contract_capability_projection_reports_invalid_graph() {
-    let registry = CommandRegistry::new("bad", "Bad server").register(
-        consumer_spec(),
-        |_context| async { Ok(CommandOutput::structured(json!({}))) },
-    );
+    let registry = CommandRegistry::new("bad", "Bad server")
+        .register(consumer_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
     let violations = mcp_twill::contract::check_capability_projection(&registry);
     assert_eq!(violations.len(), 1);
     assert!(

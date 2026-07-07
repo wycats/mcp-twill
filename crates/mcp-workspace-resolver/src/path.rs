@@ -12,7 +12,9 @@ use thiserror::Error;
 /// A URI used a scheme other than `file:`, so it cannot participate in
 /// path boundary checks.
 #[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
-#[error("unsupported root scheme `{scheme}` in `{uri}`; only file: URIs participate in boundary checks")]
+#[error(
+    "unsupported root scheme `{scheme}` in `{uri}`; only file: URIs participate in boundary checks"
+)]
 pub struct UnsupportedRootScheme {
     pub scheme: String,
     pub uri: String,

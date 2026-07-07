@@ -393,7 +393,10 @@ fn builder_declares_guidance_stdin_and_progress() {
         .find(|operation| operation.name() == "notes add")
         .unwrap();
     assert_eq!(
-        operation.stdin.as_ref().map(|stdin| stdin.mime_type.as_str()),
+        operation
+            .stdin
+            .as_ref()
+            .map(|stdin| stdin.mime_type.as_str()),
         Some("text/plain")
     );
     assert_eq!(operation.progress.len(), 1);
@@ -401,21 +404,25 @@ fn builder_declares_guidance_stdin_and_progress() {
 
 #[test]
 fn builder_rejects_run_command_guidance_that_does_not_plan() {
-    let error = expect_build_err(CommandRegistry::build("notes", "Note-taking server", |server| {
-        server.guidance(mcp_twill::CommandGuidance::run_command(
-            "quickstart",
-            "getting-started",
-            "notes frobnicate --text $args.text",
-        ));
-        server.command("notes add", |command| {
-            command
-                .summary("Add note")
-                .description("Adds a note from typed text.")
-                .arg(arg::string("text").summary("Note text"))
-                .write("notes", "Writes note records")
-                .handle(|_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) });
-        });
-    }));
+    let error = expect_build_err(CommandRegistry::build(
+        "notes",
+        "Note-taking server",
+        |server| {
+            server.guidance(mcp_twill::CommandGuidance::run_command(
+                "quickstart",
+                "getting-started",
+                "notes frobnicate --text $args.text",
+            ));
+            server.command("notes add", |command| {
+                command
+                    .summary("Add note")
+                    .description("Adds a note from typed text.")
+                    .arg(arg::string("text").summary("Note text"))
+                    .write("notes", "Writes note records")
+                    .handle(|_context| async { Ok(CommandOutput::structured(json!({ "id": 1 }))) });
+            });
+        },
+    ));
     assert!(
         error.to_string().contains("matches no catalog command"),
         "{error}"

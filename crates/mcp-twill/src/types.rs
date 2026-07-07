@@ -378,9 +378,9 @@ pub(crate) fn match_named_value(
     value: &Value,
     types: &BTreeMap<String, TypeDecl>,
 ) -> Result<String> {
-    let decl = types.get(type_name).ok_or_else(|| {
-        FrameworkError::Build(format!("type `{type_name}` is not declared"))
-    })?;
+    let decl = types
+        .get(type_name)
+        .ok_or_else(|| FrameworkError::Build(format!("type `{type_name}` is not declared")))?;
 
     let mut problems = Vec::new();
     for variant in &decl.variants {
@@ -444,12 +444,15 @@ fn shape_problem(
     types: &BTreeMap<String, TypeDecl>,
 ) -> Option<String> {
     match shape {
-        FieldShape::String => (!value.is_string())
-            .then(|| format!("field `{field_name}` must be a string")),
-        FieldShape::Bool => (!value.is_boolean())
-            .then(|| format!("field `{field_name}` must be a boolean")),
-        FieldShape::Number => (!value.is_number())
-            .then(|| format!("field `{field_name}` must be a number")),
+        FieldShape::String => {
+            (!value.is_string()).then(|| format!("field `{field_name}` must be a string"))
+        }
+        FieldShape::Bool => {
+            (!value.is_boolean()).then(|| format!("field `{field_name}` must be a boolean"))
+        }
+        FieldShape::Number => {
+            (!value.is_number()).then(|| format!("field `{field_name}` must be a number"))
+        }
         FieldShape::Integer => {
             let integral = value.as_i64().is_some()
                 || value.as_u64().is_some()
@@ -480,9 +483,7 @@ fn shape_problem(
             for (index, item) in items.iter().enumerate() {
                 let item_name = format!("{field_name}[{index}]");
                 let item_path = format!("{path}[{index}]");
-                if let Some(problem) =
-                    shape_problem(&item_name, inner, item, &item_path, types)
-                {
+                if let Some(problem) = shape_problem(&item_name, inner, item, &item_path, types) {
                     return Some(problem);
                 }
             }
@@ -508,10 +509,7 @@ fn shape_problem(
 /// The inlined JSON schema for a named type: a `oneOf` of closed object
 /// variant schemas. References are fully dereferenced; termination is
 /// guaranteed because registration rejects cycles.
-pub(crate) fn inline_type_schema(
-    type_name: &str,
-    types: &BTreeMap<String, TypeDecl>,
-) -> Value {
+pub(crate) fn inline_type_schema(type_name: &str, types: &BTreeMap<String, TypeDecl>) -> Value {
     let Some(decl) = types.get(type_name) else {
         return Value::Null;
     };

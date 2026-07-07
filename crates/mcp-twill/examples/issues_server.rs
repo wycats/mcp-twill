@@ -151,7 +151,10 @@ pub fn registry() -> Result<CommandRegistry> {
                     .uses_workspace("repo")
                     .write("issues", "Writes an export file under the repository root")
                     .idempotent()
-                    .example("issues export", "Export issues under the resolved repo root")
+                    .example(
+                        "issues export",
+                        "Export issues under the resolved repo root",
+                    )
                     .handle(|context: CommandContext| async move {
                         let root = context
                             .workspace_root("repo")
@@ -182,9 +185,7 @@ pub fn registry() -> Result<CommandRegistry> {
             server.command("issues sync", |command| {
                 command
                     .summary("Sync issues with the remote tracker")
-                    .description(
-                        "Pushes and pulls issue records over an established session.",
-                    )
+                    .description("Pushes and pulls issue records over an established session.")
                     .arg(arg::string("session_id").summary("Session that owns the sync"))
                     .requires("session")
                     .write("issues", "Updates issue records from the remote tracker")

@@ -168,11 +168,7 @@ impl ClientHandler for RootsClient {
 async fn getting_started_prompt_includes_declared_guidance() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
     let server = CliMcpServer::new(registry().declare_guidance(
-        mcp_twill::CommandGuidance::run_command(
-            "quickstart",
-            "getting-started",
-            "issues list",
-        ),
+        mcp_twill::CommandGuidance::run_command("quickstart", "getting-started", "issues list"),
     ))?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
@@ -245,7 +241,10 @@ fn server_runtime_identity_includes_the_crate_version() -> anyhow::Result<()> {
     let identity = server.runtime_identity();
 
     assert_eq!(identity.server_name, server.registry().server_name());
-    assert_eq!(identity.server_version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        identity.server_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
     assert_eq!(
         identity.catalog_hash,
         server.registry().catalog_identity().catalog_hash
@@ -509,7 +508,10 @@ async fn custom_effects_are_rejected_at_server_construction() -> anyhow::Result<
         Err(error) => error,
     };
     let message = error.to_string();
-    assert!(message.contains("issues sync"), "names the command: {message}");
+    assert!(
+        message.contains("issues sync"),
+        "names the command: {message}"
+    );
     assert!(message.contains("sync"), "names the effect: {message}");
     assert!(
         message.contains("read, write, delete, exec, or network"),
