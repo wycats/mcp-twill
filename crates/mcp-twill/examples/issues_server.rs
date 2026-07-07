@@ -46,6 +46,11 @@ pub fn registry() -> Result<CommandRegistry> {
         "issues-example",
         "Example MCP Twill server for issue tracking commands.",
         |server| {
+            server.preamble(
+                "Issue records are the source of truth; keep them synchronized \
+                 before acting on stale listings.",
+            );
+
             server.workspace(
                 WorkspaceDecl::file("repo", repo_root).with_description("Example repository root"),
             );
@@ -63,7 +68,8 @@ pub fn registry() -> Result<CommandRegistry> {
                     )
                     .variant(
                         Variant::new("search", "Locate by title search")
-                            .field(Field::string("query", "Text to match against titles")),
+                            .field(Field::string("query", "Text to match against titles"))
+                            .fallback("the issue number is not known"),
                     ),
             );
 
@@ -71,6 +77,8 @@ pub fn registry() -> Result<CommandRegistry> {
                 command
                     .summary("Create an issue")
                     .description("Creates a new issue from typed title and body arguments.")
+                    .use_when("reporting a single new problem")
+                    .alternative("issues sync", "pulling issues that already exist remotely")
                     .arg(arg::string("title").summary("Issue title"))
                     .arg(arg::string("body").summary("Issue body"))
                     .write("issues", "Creates a new issue record")
@@ -135,6 +143,10 @@ pub fn registry() -> Result<CommandRegistry> {
                         "Writes an issue export under the repository root. The root is \
                          resolved by the server from the workspace declaration; it is \
                          never a command argument.",
+                    )
+                    .fallback(
+                        ["issues list"],
+                        "structured listings do not capture the fields you need",
                     )
                     .uses_workspace("repo")
                     .write("issues", "Writes an export file under the repository root")

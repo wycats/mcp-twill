@@ -44,6 +44,7 @@ where
 pub struct CommandRegistry {
     server_name: String,
     server_description: String,
+    preamble: Option<String>,
     commands: BTreeMap<Vec<String>, RegisteredCommand>,
     workspaces: BTreeMap<String, WorkspaceDecl>,
     types: BTreeMap<String, crate::TypeDecl>,
@@ -65,6 +66,7 @@ impl CommandRegistry {
         Self {
             server_name: server_name.into(),
             server_description: server_description.into(),
+            preamble: None,
             commands: BTreeMap::new(),
             workspaces: BTreeMap::new(),
             types: BTreeMap::new(),
@@ -74,6 +76,17 @@ impl CommandRegistry {
             guidance: Vec::new(),
             policy: PermissionPolicy::default(),
         }
+    }
+
+    /// Declares server-level operating guidance rendered in server help,
+    /// the MCP `instructions` field, and the `getting_started` prompt.
+    pub fn declare_preamble(mut self, text: impl Into<String>) -> Self {
+        self.preamble = Some(text.into());
+        self
+    }
+
+    pub fn preamble(&self) -> Option<&str> {
+        self.preamble.as_deref()
     }
 
     pub fn with_policy(mut self, policy: PermissionPolicy) -> Self {
@@ -163,7 +176,7 @@ impl CommandRegistry {
         let operations = self.operation_specs();
         let identity = self.catalog_identity_for(&operations);
         CommandCatalog {
-            server: ServerSpec::new(&self.server_name, &self.server_description),
+            server: self.server_spec(),
             namespaces: group_namespaces(&operations),
             operations,
             workspaces: self.workspaces.values().cloned().collect(),
@@ -172,6 +185,12 @@ impl CommandRegistry {
             guidance: self.guidance.clone(),
             identity,
         }
+    }
+
+    fn server_spec(&self) -> ServerSpec {
+        let mut server = ServerSpec::new(&self.server_name, &self.server_description);
+        server.preamble = self.preamble.clone();
+        server
     }
 
     pub fn catalog_identity(&self) -> CatalogIdentity {
@@ -191,7 +210,7 @@ impl CommandRegistry {
         // and embeds the identity itself). The hash is an opaque change
         // detector; clients cannot recompute it from the resource bytes.
         let catalog_value = json!({
-            "server": ServerSpec::new(&self.server_name, &self.server_description),
+            "server": self.server_spec(),
             "namespaces": group_namespaces(operations),
             "operations": operations,
             "workspaces": self.workspaces.values().collect::<Vec<_>>(),
@@ -430,6 +449,23 @@ impl CommandRegistry {
             .collect()
     }
 
+    /// The escape hatches that prefer this command, derived from `fallback`
+    /// declarations on other commands. The reverse edge is never written by
+    /// hand — exactly as establishing commands are derived from `provides`.
+    pub fn derived_fallback_edges(&self, command_name: &str) -> Vec<(String, String)> {
+        self.commands
+            .values()
+            .filter_map(|command| {
+                let fallback = command.spec.fallback.as_ref()?;
+                fallback
+                    .prefer
+                    .iter()
+                    .any(|preferred| preferred == command_name)
+                    .then(|| (command.spec.name(), fallback.when.clone()))
+            })
+            .collect()
+    }
+
     /// One help line for a capability: summary, carrier argument, and the
     /// commands that establish it, all derived from declarations.
     fn capability_help_line(&self, capability: &str) -> String {
@@ -562,6 +598,127 @@ impl CommandRegistry {
     }
 
     pub fn validate_guidance(&self) -> Result<()> {
+        if let Some(preamble) = &self.preamble
+            && preamble.trim().is_empty()
+        {
+            return Err(FrameworkError::Build(
+                "server preamble is empty; declare text or remove it".to_string(),
+            ));
+        }
+        for type_decl in self.types.values() {
+            for variant in &type_decl.variants {
+                if let Some(when) = &variant.fallback
+                    && when.trim().is_empty()
+                {
+                    return Err(FrameworkError::Build(format!(
+                        "type `{}` variant `{}` declares a fallback with an empty condition",
+                        type_decl.name, variant.name
+                    )));
+                }
+            }
+            if !type_decl.variants.is_empty()
+                && type_decl
+                    .variants
+                    .iter()
+                    .all(|variant| variant.fallback.is_some())
+            {
+                return Err(FrameworkError::Build(format!(
+                    "type `{}` declares a fallback on every variant; a set of alternatives that are all dispreferred prefers nothing",
+                    type_decl.name
+                )));
+            }
+        }
+        let command_names: BTreeSet<String> = self
+            .commands
+            .keys()
+            .map(|path| path.join(" "))
+            .collect();
+        for command in self.commands.values() {
+            let name = command.spec.name();
+            if let Some(use_when) = &command.spec.use_when {
+                if use_when.trim().is_empty() {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` declares an empty `use_when`"
+                    )));
+                }
+                if command.spec.fallback.is_some() {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` declares both `use_when` and `fallback`; a fallback's condition is its selection criterion"
+                    )));
+                }
+            }
+            let mut seen = BTreeSet::new();
+            for alternative in &command.spec.alternatives {
+                if alternative.when.trim().is_empty() {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` declares alternative `{}` with an empty condition",
+                        alternative.command
+                    )));
+                }
+                if alternative.command == name {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` lists itself as an alternative"
+                    )));
+                }
+                if !command_names.contains(&alternative.command) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` declares alternative `{}`, which is not a catalog command",
+                        alternative.command
+                    )));
+                }
+                if !seen.insert(alternative.command.as_str()) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` declares alternative `{}` more than once",
+                        alternative.command
+                    )));
+                }
+            }
+            if let Some(fallback) = &command.spec.fallback {
+                if fallback.when.trim().is_empty() {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` declares a fallback with an empty condition"
+                    )));
+                }
+                if fallback.prefer.is_empty() {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` declares a fallback with an empty `prefer` list; an escape hatch must say what it is an escape from"
+                    )));
+                }
+                let mut seen = BTreeSet::new();
+                for preferred in &fallback.prefer {
+                    if *preferred == name {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{name}` prefers itself in its fallback declaration"
+                        )));
+                    }
+                    if !command_names.contains(preferred) {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{name}` prefers `{preferred}`, which is not a catalog command"
+                        )));
+                    }
+                    if !seen.insert(preferred.as_str()) {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{name}` prefers `{preferred}` more than once"
+                        )));
+                    }
+                }
+            }
+        }
+        let fallback_prefer: BTreeMap<String, Vec<String>> = self
+            .commands
+            .values()
+            .filter_map(|command| {
+                command
+                    .spec
+                    .fallback
+                    .as_ref()
+                    .map(|fallback| (command.spec.name(), fallback.prefer.clone()))
+            })
+            .collect();
+        for start in fallback_prefer.keys() {
+            let mut stack = vec![start.as_str()];
+            find_fallback_cycle(start, &fallback_prefer, &mut stack)?;
+        }
         for guidance in &self.guidance {
             if guidance.kind != crate::GuidanceKind::RunCommand {
                 continue;
@@ -1119,9 +1276,11 @@ impl CommandRegistry {
 
     fn server_help(&self) -> HelpResult {
         let identity = self.catalog_identity();
-        let mut lines = vec![
-            format!("# {}", self.server_name),
-            self.server_description.clone(),
+        let mut lines = vec![format!("# {}", self.server_name), self.server_description.clone()];
+        if let Some(preamble) = &self.preamble {
+            lines.push(preamble.clone());
+        }
+        lines.extend([
             String::new(),
             "Start with the primary execution tool. Use lane tools only when the framework returns structured retry data.".to_string(),
             "Command strings are typed templates, not shell programs.".to_string(),
@@ -1132,7 +1291,7 @@ impl CommandRegistry {
             format!("- Help schema hash: `{}`", identity.help_schema_hash),
             String::new(),
             "Commands:".to_string(),
-        ];
+        ]);
         for spec in self.command_specs() {
             lines.push(format!("- `{}`: {}", spec.name(), spec.summary));
         }
@@ -1250,11 +1409,38 @@ impl CommandRegistry {
     }
 
     fn usage_text(&self, spec: &CommandSpec) -> String {
-        let mut sections = vec![
-            format!("# `{}`", spec.name()),
-            spec.description.clone(),
-            self.arguments_text(spec),
-        ];
+        let mut sections = vec![format!("# `{}`", spec.name()), spec.description.clone()];
+        if let Some(use_when) = &spec.use_when {
+            sections.push(format!("Use when: {use_when}"));
+        }
+        if !spec.alternatives.is_empty() {
+            let mut lines = vec!["Use instead:".to_string()];
+            for alternative in &spec.alternatives {
+                lines.push(format!("- `{}` — {}", alternative.command, alternative.when));
+            }
+            sections.push(lines.join("\n"));
+        }
+        if let Some(fallback) = &spec.fallback {
+            let preferred = fallback
+                .prefer
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sections.push(format!(
+                "Fallback: prefer {preferred}. Use only when {}.",
+                fallback.when
+            ));
+        }
+        let reverse_edges = self.derived_fallback_edges(&spec.name());
+        if !reverse_edges.is_empty() {
+            let mut lines = vec!["Fallbacks:".to_string()];
+            for (name, when) in reverse_edges {
+                lines.push(format!("- `{name}` — when {when}"));
+            }
+            sections.push(lines.join("\n"));
+        }
+        sections.push(self.arguments_text(spec));
         if !spec.workspaces.is_empty() {
             let mut lines = vec!["Workspaces:".to_string()];
             for name in &spec.workspaces {
@@ -1369,7 +1555,15 @@ impl CommandRegistry {
         for decl in ordered {
             lines.push(format!("Type `{}`: {}", decl.name, decl.summary));
             for variant in &decl.variants {
-                lines.push(format!("  - {}: {}", variant.name, variant.summary));
+                let fallback = variant
+                    .fallback
+                    .as_ref()
+                    .map(|when| format!(" (fallback — {when})"))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  - {}{fallback}: {}",
+                    variant.name, variant.summary
+                ));
                 for field in &variant.fields {
                     let required = if field.required {
                         "required"
@@ -1401,8 +1595,36 @@ impl CommandRegistry {
     }
 }
 
-fn lane_description(primary_tool_name: &str, lane: EffectLane) -> String {
-    match lane {
+/// Walks the fallback-preference graph looking for a cycle. Two escape
+/// hatches preferring each other describe no ladder; registration rejects
+/// the pair.
+fn find_fallback_cycle<'a>(
+    current: &'a str,
+    fallback_prefer: &'a BTreeMap<String, Vec<String>>,
+    stack: &mut Vec<&'a str>,
+) -> Result<()> {
+    let Some(preferred) = fallback_prefer.get(current) else {
+        return Ok(());
+    };
+    for next in preferred {
+        if stack.contains(&next.as_str()) {
+            return Err(FrameworkError::Build(format!(
+                "fallback preference cycle: {} -> `{next}`",
+                stack
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            )));
+        }
+        stack.push(next);
+        find_fallback_cycle(next, fallback_prefer, stack)?;
+        stack.pop();
+    }
+    Ok(())
+}
+
+fn lane_description(primary_tool_name: &str, lane: EffectLane) -> String {    match lane {
         EffectLane::Primary => format!(
             "Primary execution tool. Start here for all command templates; the framework returns structured retry data when another effect lane is required."
         ),

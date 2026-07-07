@@ -42,6 +42,11 @@ pub struct Variant {
     pub summary: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<Field>,
+    /// Marks this variant as dispreferred: use sibling variants unless
+    /// this condition holds (RFC 0011). Needs no prefer list — the
+    /// siblings are the preferred path by construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 impl Variant {
@@ -50,11 +55,19 @@ impl Variant {
             name: name.into(),
             summary: summary.into(),
             fields: Vec::new(),
+            fallback: None,
         }
     }
 
     pub fn field(mut self, field: Field) -> Self {
         self.fields.push(field);
+        self
+    }
+
+    /// Marks this variant as dispreferred: use sibling variants unless
+    /// this condition holds.
+    pub fn fallback(mut self, when: impl Into<String>) -> Self {
+        self.fallback = Some(when.into());
         self
     }
 }
