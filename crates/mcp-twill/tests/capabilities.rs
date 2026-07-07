@@ -453,6 +453,150 @@ fn contract_capability_projection_passes_valid_registry() {
     assert!(violations.is_empty(), "violations: {violations:?}");
 }
 
+// Regression: a capability declared without a carrier argument fails
+// validation instead of producing errors with an empty argument name.
+#[test]
+fn capability_without_carrier_fails_validation() {
+    let registry = CommandRegistry::new("bad", "Bad server")
+        .declare_capability(CapabilityDecl::new("session", "An active browser session"))
+        .register(provider_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        })
+        .register(consumer_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
+    let error = registry.validate_capabilities().unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "capability `session` does not declare a carrier argument; use `carried_by` to name the argument that carries it"
+        ),
+        "error: {error}"
+    );
+}
+
+// Regression: a capability whose only provider also requires it fails
+// validation; steering must name a command that can bootstrap the
+// capability without already holding it.
+#[test]
+fn capability_with_only_self_dependent_providers_fails_validation() {
+    let mut example = CommandExample::new(
+        "session refresh --session $args.session_id",
+        "Refresh a session",
+    );
+    example
+        .args
+        .insert("session_id".to_string(), json!("sess-1"));
+    let refresh = CommandSpec::new(
+        ["session", "refresh"],
+        "Refresh session",
+        "Refreshes an active session in place.",
+    )
+    .with_arg(ArgSpec::string("session_id", "Session to refresh"))
+    .with_example(example)
+    .requires("session")
+    .provides("session");
+    let registry = CommandRegistry::new("bad", "Bad server")
+        .declare_capability(session_capability())
+        .register(refresh, |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
+    let error = registry.validate_capabilities().unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "capability `session` has only providers that also require it; declare `provides` on a command that can establish it without an existing `session`"
+        ),
+        "error: {error}"
+    );
+}
+
+// Regression: a self-dependent provider is fine as long as a bootstrap
+// provider also exists.
+#[test]
+fn self_dependent_provider_passes_with_bootstrap_provider() {
+    let mut example = CommandExample::new(
+        "session refresh --session $args.session_id",
+        "Refresh a session",
+    );
+    example
+        .args
+        .insert("session_id".to_string(), json!("sess-1"));
+    let refresh = CommandSpec::new(
+        ["session", "refresh"],
+        "Refresh session",
+        "Refreshes an active session in place.",
+    )
+    .with_arg(ArgSpec::string("session_id", "Session to refresh"))
+    .with_example(example)
+    .requires("session")
+    .provides("session");
+    let registry = CommandRegistry::new("ok", "Good server")
+        .declare_capability(session_capability())
+        .register(provider_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        })
+        .register(refresh, |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        })
+        .register(consumer_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
+    registry
+        .validate_capabilities()
+        .expect("bootstrap provider satisfies the graph");
+}
+
+// Regression: enrichment preserves carrier and providers that the handler
+// set explicitly instead of overwriting them from declarations.
+#[tokio::test]
+async fn handler_provided_denial_guidance_is_preserved() {
+    let registry = CommandRegistry::new("capability-test", "Capability test server")
+        .declare_capability(session_capability())
+        .register(provider_spec(), |_context| async {
+            Ok(CommandOutput::structured(json!({ "session_id": "sess-1" })))
+        })
+        .register(consumer_spec(), |_context| async {
+            Err(FrameworkError::CapabilityDenied {
+                capability: "session".to_string(),
+                detail: "session `sess-9` is not active".to_string(),
+                carrier: Some("custom_carrier".to_string()),
+                providers: vec!["custom recover".to_string()],
+            })
+        });
+
+    let error = registry
+        .run(request(
+            "tabs list --session $args.session_id",
+            json!({ "session_id": "sess-9" }),
+        ))
+        .await
+        .unwrap_err();
+
+    let FrameworkError::CapabilityDenied {
+        carrier, providers, ..
+    } = &error
+    else {
+        panic!("expected CapabilityDenied, got {error:?}");
+    };
+    assert_eq!(carrier.as_deref(), Some("custom_carrier"));
+    assert_eq!(providers, &vec!["custom recover".to_string()]);
+}
+
+// Regression: a malformed request shape (unknown argument) reports the
+// shape error, not a capability diagnostic; the capability check only
+// replaces the generic missing-argument case for valid shapes.
+#[tokio::test]
+async fn unknown_argument_reported_before_missing_carrier() {
+    let error = registry()
+        .run(request("tabs list", json!({ "typo": "oops" })))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&error, FrameworkError::UnknownArgument(name) if name == "typo"),
+        "expected UnknownArgument, got {error:?}"
+    );
+}
+
 // Acceptance: the contract check reports a registry whose capability graph
 // is invalid rather than projecting it.
 #[test]

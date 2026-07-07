@@ -320,6 +320,14 @@ impl CommandRegistry {
                 "capability `{name}` is declared more than once"
             )));
         }
+        for capability in self.capabilities.values() {
+            if capability.carrier.is_empty() {
+                return Err(FrameworkError::Build(format!(
+                    "capability `{}` does not declare a carrier argument; use `carried_by` to name the argument that carries it",
+                    capability.name
+                )));
+            }
+        }
         for command in self.commands.values() {
             let mut seen = std::collections::BTreeSet::new();
             for capability_name in &command.spec.requires {
@@ -381,6 +389,16 @@ impl CommandRegistry {
                     capability.name
                 )));
             }
+            let has_bootstrap_provider = self.commands.values().any(|command| {
+                command.spec.provides.contains(&capability.name)
+                    && !command.spec.requires.contains(&capability.name)
+            });
+            if !has_bootstrap_provider {
+                return Err(FrameworkError::Build(format!(
+                    "capability `{}` has only providers that also require it; declare `provides` on a command that can establish it without an existing `{}`",
+                    capability.name, capability.name
+                )));
+            }
             let consumed = self
                 .commands
                 .values()
@@ -440,18 +458,28 @@ impl CommandRegistry {
     /// Fills in the carrier argument and establishing commands on a
     /// handler-raised `CapabilityDenied` so the response layer can locate
     /// the failure and derive establishment steering from declarations.
+    /// Values the handler already set are preserved; only missing pieces
+    /// are filled from the declarations.
     fn enrich_capability_denied(&self, error: FrameworkError) -> FrameworkError {
         let FrameworkError::CapabilityDenied {
-            capability, detail, ..
+            capability,
+            detail,
+            carrier,
+            providers,
         } = error
         else {
             return error;
         };
-        let carrier = self
-            .capabilities
-            .get(&capability)
-            .map(|decl| decl.carrier.clone());
-        let providers = self.capability_providers(&capability);
+        let carrier = carrier.or_else(|| {
+            self.capabilities
+                .get(&capability)
+                .map(|decl| decl.carrier.clone())
+        });
+        let providers = if providers.is_empty() {
+            self.capability_providers(&capability)
+        } else {
+            providers
+        };
         FrameworkError::CapabilityDenied {
             capability,
             detail,
@@ -651,8 +679,29 @@ impl CommandRegistry {
             _ => {}
         }
 
-        // A missing carrier gets the capability diagnostic, not the generic
-        // missing-argument one, so this check runs before argument binding.
+        let referenced: BTreeSet<_> = template
+            .placeholders()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        for arg_name in &referenced {
+            if registered.spec.arg(arg_name).is_none() {
+                return Err(FrameworkError::UnknownArgument(arg_name.clone()));
+            }
+        }
+        for arg_name in request.args.keys() {
+            if registered.spec.arg(arg_name).is_none() {
+                return Err(FrameworkError::UnknownArgument(arg_name.clone()));
+            }
+            if !referenced.contains(arg_name) {
+                return Err(FrameworkError::PlaceholderInterpolation(format!(
+                    "$args.{arg_name}"
+                )));
+            }
+        }
+
+        // The request shape is valid, so a missing carrier gets the
+        // capability diagnostic instead of the generic missing-argument one.
         for capability_name in &registered.spec.requires {
             let Some(capability) = self.capabilities.get(capability_name) else {
                 continue;
@@ -666,27 +715,9 @@ impl CommandRegistry {
             }
         }
 
-        let referenced: BTreeSet<_> = template
-            .placeholders()
-            .into_iter()
-            .map(ToOwned::to_owned)
-            .collect();
         for arg_name in &referenced {
-            if registered.spec.arg(arg_name).is_none() {
-                return Err(FrameworkError::UnknownArgument(arg_name.clone()));
-            }
             if !request.args.contains_key(arg_name) {
                 return Err(FrameworkError::MissingArgument(arg_name.clone()));
-            }
-        }
-        for arg_name in request.args.keys() {
-            if registered.spec.arg(arg_name).is_none() {
-                return Err(FrameworkError::UnknownArgument(arg_name.clone()));
-            }
-            if !referenced.contains(arg_name) {
-                return Err(FrameworkError::PlaceholderInterpolation(format!(
-                    "$args.{arg_name}"
-                )));
             }
         }
 

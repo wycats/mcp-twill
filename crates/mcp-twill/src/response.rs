@@ -576,9 +576,11 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
             name: carrier.clone(),
         }),
         FrameworkError::CapabilityDenied { carrier, .. } => {
-            carrier.as_ref().map(|carrier| DiagnosticLocation::Argument {
-                name: carrier.clone(),
-            })
+            carrier
+                .as_ref()
+                .map(|carrier| DiagnosticLocation::Argument {
+                    name: carrier.clone(),
+                })
         }
         FrameworkError::WrongEffectLane { current_tool, .. } => {
             Some(DiagnosticLocation::ToolName {
