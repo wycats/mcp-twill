@@ -1,2 +1,5 @@
 /target/
 /.exo/
+
+# vercel-ai-gateway investigation logs
+.logs/
