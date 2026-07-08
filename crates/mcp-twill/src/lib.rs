@@ -6,6 +6,7 @@ pub mod event;
 pub mod help;
 pub mod model;
 pub mod registry;
+pub mod resource;
 pub mod response;
 pub mod rmcp_adapter;
 pub mod runtime;
@@ -20,6 +21,10 @@ pub use event::{EventSink, FrameworkEvent, InMemoryEventSink, NoopEventSink, Pla
 pub use help::{HelpDetail, HelpRequest, HelpResult, HelpTopic};
 pub use model::*;
 pub use registry::{CommandHandler, CommandRegistry, HandlerFuture};
+pub use resource::{
+    Grant, Granted, Listed, Listing, ReadResource, Release, Res, ResolveResource,
+    ResolvedResources, Resource, ResourceOutput, ResourceRefusal,
+};
 pub use response::*;
 pub use rmcp_adapter::{CliMcpServer, CliMcpServerConfig};
 pub use runtime::RuntimeIdentity;

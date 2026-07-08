@@ -79,6 +79,22 @@ pub enum FrameworkError {
         /// framework from `provides` declarations.
         providers: Vec<String>,
     },
+    #[error("resource `{resource}` refused for `{reference}`: {detail}")]
+    ResourceRefused {
+        /// The declared resource whose reference did not resolve.
+        resource: String,
+        /// The reference as presented (bare id or URI).
+        reference: String,
+        /// The resolver's prose (stale lease, foreign tab, expired
+        /// session).
+        detail: String,
+        /// Commands that enumerate the resource, derived from handler
+        /// output types — the recovery path for lost references.
+        enumerate: Vec<String>,
+        /// Commands that grant the resource, derived from handler output
+        /// types — the establishment path when nothing exists yet.
+        establish: Vec<String>,
+    },
     #[error("stdin mismatch: {0}")]
     StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]

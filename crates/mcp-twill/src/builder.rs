@@ -12,8 +12,9 @@ use serde_json::Value;
 use crate::{
     Alternative, ArgSpec, ArgType, CapabilityDecl, CommandContext, CommandExample, CommandGuidance,
     CommandHandler, CommandOutput, CommandRegistry, CommandSpec, Fallback, FrameworkError,
-    OutputContract, PermissionSpec, ProgressPhaseSpec, Result, StdinContract, TypeDecl,
-    WorkspaceDecl,
+    OutputContract, PermissionSpec, ProgressPhaseSpec, ResourceDecl, Result, StdinContract,
+    TypeDecl, WorkspaceDecl,
+    resource::{ReadResource, ResolveResource, Resource, ResourceDialect},
 };
 
 pub mod arg {
@@ -66,6 +67,8 @@ pub struct ServerBuilder {
     workspaces: Vec<WorkspaceDecl>,
     capabilities: Vec<CapabilityDecl>,
     types: Vec<TypeDecl>,
+    resources: Vec<ResourceDecl>,
+    resource_bindings: Vec<Box<dyn FnOnce(CommandRegistry) -> CommandRegistry>>,
     guidance: Vec<CommandGuidance>,
     commands: Vec<BuiltCommand>,
     command_paths: BTreeSet<Vec<String>>,
@@ -86,6 +89,8 @@ impl ServerBuilder {
             workspaces: Vec::new(),
             capabilities: Vec::new(),
             types: Vec::new(),
+            resources: Vec::new(),
+            resource_bindings: Vec::new(),
             guidance: Vec::new(),
             commands: Vec::new(),
             command_paths: BTreeSet::new(),
@@ -115,6 +120,33 @@ impl ServerBuilder {
 
     pub fn declare_type(&mut self, decl: TypeDecl) -> &mut Self {
         self.types.push(decl);
+        self
+    }
+
+    /// Declares a server-held resource (RFC 0012). Declaring one derives a
+    /// reference argument type (`{name}-ref`) and a capability (`{name}`);
+    /// the lifecycle edges derive from handler signatures, never from the
+    /// declaration.
+    pub fn resource(&mut self, decl: ResourceDecl) -> &mut Self {
+        self.resources.push(decl);
+        self
+    }
+
+    /// Binds the resolver that turns references to `T` into live values.
+    /// Required for any resource a command requires or releases.
+    pub fn resolver<T: Resource>(&mut self, resolver: impl ResolveResource<T>) -> &mut Self {
+        self.resource_bindings
+            .push(Box::new(move |registry| registry.with_resolver(resolver)));
+        self
+    }
+
+    /// Binds a reader for `T`. On MCP, a bound reader turns grants into
+    /// `resource_link` content parts and serves `resources/read` for minted
+    /// URIs; without one, the URI in the structured payload is the whole
+    /// story.
+    pub fn reader<T: Resource>(&mut self, reader: impl ReadResource<T>) -> &mut Self {
+        self.resource_bindings
+            .push(Box::new(move |registry| registry.with_reader(reader)));
         self
     }
 
@@ -159,9 +191,11 @@ impl ServerBuilder {
     }
 
     fn finish(mut self) -> Result<CommandRegistry> {
-        if let Some(error) = self.errors.into_iter().next() {
+        if let Some(error) = self.errors.drain(..).next() {
             return Err(error);
         }
+
+        self.project_resource_signatures();
 
         let mut registry = CommandRegistry::new(self.name, self.description);
         if let Some(preamble) = self.preamble.take() {
@@ -170,11 +204,31 @@ impl ServerBuilder {
         for workspace in self.workspaces.drain(..) {
             registry = registry.declare_workspace(workspace);
         }
+        let hand_declared_capabilities = self
+            .capabilities
+            .iter()
+            .map(|capability| capability.name.clone())
+            .collect::<BTreeSet<_>>();
         for capability in self.capabilities.drain(..) {
             registry = registry.declare_capability(capability);
         }
         for decl in self.types.drain(..) {
             registry = registry.declare_type(decl);
+        }
+        for decl in &self.resources {
+            registry = registry.declare_resource(decl.clone());
+            // A hand-declared capability with the resource's name is a
+            // collision `validate_resources` reports; declaring the derived
+            // capability over it would mask that.
+            if !hand_declared_capabilities.contains(&decl.name) {
+                registry = registry.declare_derived_capability(
+                    CapabilityDecl::new(decl.name.clone(), decl.summary.clone())
+                        .carried_by(decl.carrier_name()),
+                );
+            }
+        }
+        for binding in self.resource_bindings {
+            registry = binding(registry);
         }
         for guidance in self.guidance.drain(..) {
             registry = registry.declare_guidance(guidance);
@@ -187,7 +241,72 @@ impl ServerBuilder {
         registry.validate_capabilities()?;
         registry.validate_examples()?;
         registry.validate_guidance()?;
+        registry.validate_resources()?;
         Ok(registry)
+    }
+
+    /// Projects signature-derived resource facts onto command specs, with
+    /// every declaration in view: a required or released resource surfaces
+    /// as a required carrier argument of the derived reference type, and a
+    /// hand-written capability edge repeating a signature-derived fact
+    /// deduplicates to the derived one.
+    fn project_resource_signatures(&mut self) {
+        let decls = self
+            .resources
+            .iter()
+            .map(|decl| (decl.name.clone(), decl.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for command in &mut self.commands {
+            let spec = &mut command.spec;
+            let mut injected = BTreeSet::new();
+            let resolved = spec
+                .requires_resources
+                .iter()
+                .chain(&spec.releases)
+                .cloned()
+                .collect::<Vec<_>>();
+            for resource in resolved {
+                if !injected.insert(resource.clone()) {
+                    continue;
+                }
+                // Undeclared resources are `validate_resources` errors; skip
+                // injection so that check names the real problem.
+                let Some(decl) = decls.get(&resource) else {
+                    continue;
+                };
+                let carrier = decl.carrier_name();
+                if !spec.args.iter().any(|arg| arg.name == carrier) {
+                    spec.args.push(ArgSpec {
+                        name: carrier,
+                        value_type: ArgType::ResourceRef(resource.clone()),
+                        required: true,
+                        summary: format!(
+                            "The `{}` to operate on; accepts a bare id or its URI.",
+                            decl.name
+                        ),
+                        workspace: None,
+                        repeated: false,
+                    });
+                }
+            }
+            let covered_requires = spec
+                .requires_resources
+                .iter()
+                .chain(&spec.releases)
+                .filter(|resource| decls.contains_key(*resource))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            spec.requires
+                .retain(|capability| !covered_requires.contains(capability));
+            let covered_provides = spec
+                .grants
+                .iter()
+                .filter(|resource| decls.contains_key(*resource))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            spec.provides
+                .retain(|capability| !covered_provides.contains(capability));
+        }
     }
 }
 
@@ -208,6 +327,10 @@ pub struct CommandBuilder {
     use_when: Option<String>,
     alternatives: Vec<Alternative>,
     fallback: Option<Fallback>,
+    requires_resources: Vec<String>,
+    grants: Vec<String>,
+    releases: Vec<String>,
+    enumerates: Vec<String>,
     handler: Option<SharedCommandHandler>,
     errors: Vec<FrameworkError>,
 }
@@ -231,6 +354,10 @@ impl CommandBuilder {
             use_when: None,
             alternatives: Vec::new(),
             fallback: None,
+            requires_resources: Vec::new(),
+            grants: Vec::new(),
+            releases: Vec::new(),
+            enumerates: Vec::new(),
             handler: None,
             errors: Vec::new(),
         }
@@ -408,11 +535,30 @@ impl CommandBuilder {
         self
     }
 
-    pub fn handle<H>(&mut self, handler: H) -> &mut Self
+    /// Installs the handler and reads the command's resource footprint from
+    /// its type (RFC 0012): `Res<T>`/`Release<T>` parameters become require
+    /// and release edges, `Granted<T>`/`Listed<T>` outputs become grant and
+    /// enumerate edges. Plain `Fn(CommandContext)` handlers carry no
+    /// resource facts and register unchanged.
+    pub fn handle<M, H>(&mut self, handler: H) -> &mut Self
     where
-        H: CommandHandler,
+        H: ResourceDialect<M>,
     {
-        self.handler = Some(SharedCommandHandler::new(handler));
+        for resource_use in H::resource_uses() {
+            if resource_use.released {
+                self.releases.push(resource_use.resource.to_string());
+            } else {
+                self.requires_resources
+                    .push(resource_use.resource.to_string());
+            }
+        }
+        self.grants
+            .extend(H::granted().into_iter().map(ToOwned::to_owned));
+        self.enumerates
+            .extend(H::enumerated().into_iter().map(ToOwned::to_owned));
+        self.handler = Some(SharedCommandHandler::from_arc(
+            handler.into_command_handler(),
+        ));
         self
     }
 
@@ -519,6 +665,10 @@ impl CommandBuilder {
         if let Some(fallback) = self.fallback {
             spec = spec.fallback(fallback.prefer, fallback.when);
         }
+        spec.requires_resources = self.requires_resources;
+        spec.grants = self.grants;
+        spec.releases = self.releases;
+        spec.enumerates = self.enumerates;
 
         Ok(BuiltCommand { spec, handler })
     }
@@ -629,6 +779,10 @@ impl SharedCommandHandler {
         Self {
             inner: Arc::new(handler),
         }
+    }
+
+    fn from_arc(inner: Arc<dyn CommandHandler>) -> Self {
+        Self { inner }
     }
 }
 

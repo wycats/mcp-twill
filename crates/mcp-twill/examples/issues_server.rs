@@ -1,12 +1,16 @@
-use std::sync::Arc;
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
 
 use mcp_twill::{
-    CapabilityDecl, CommandContext, CommandOutput, CommandRegistry, EventSink, Field,
-    FrameworkEvent, Result, TypeDecl, Variant, WorkspaceDecl, arg,
+    CommandContext, CommandOutput, CommandRegistry, EventSink, Field, FrameworkEvent, Grant,
+    InvocationPlan, Listing, ReadResource, Release, Res, ResolveResource, Resource, ResourceDecl,
+    ResourceRefusal, Result, TypeDecl, Variant, WorkspaceDecl, arg,
 };
 use rmcp::{ServiceExt, transport::stdio};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Debug, Deserialize)]
 struct CreateIssueArgs {
@@ -21,6 +25,90 @@ async fn create_issue(_context: CommandContext, args: CreateIssueArgs) -> Result
         "body": args.body,
         "status": "open"
     })))
+}
+
+/// The handler-side value for the `session` resource. The resolver produces
+/// one from a reference; handlers receive it through `Res<Session>` or
+/// `Release<Session>` parameters.
+struct Session {
+    id: String,
+}
+
+impl Resource for Session {
+    const NAME: &'static str = "session";
+}
+
+/// The server's lease table. The framework never sees this — it hands
+/// references to the resolver and receives resolved-or-refused.
+#[derive(Default)]
+struct SessionStore {
+    live: Mutex<BTreeSet<String>>,
+    next: Mutex<u64>,
+}
+
+impl SessionStore {
+    fn start(&self) -> String {
+        let mut next = self.next.lock().expect("session counter");
+        *next += 1;
+        let id = format!("sess-{next}");
+        self.live.lock().expect("session table").insert(id.clone());
+        id
+    }
+
+    fn end(&self, id: &str) {
+        self.live.lock().expect("session table").remove(id);
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.live.lock().expect("session table").contains(id)
+    }
+
+    fn live_ids(&self) -> Vec<String> {
+        self.live
+            .lock()
+            .expect("session table")
+            .iter()
+            .cloned()
+            .collect()
+    }
+}
+
+struct SessionResolver {
+    store: Arc<SessionStore>,
+}
+
+impl ResolveResource<Session> for SessionResolver {
+    async fn resolve(
+        &self,
+        reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Session, ResourceRefusal> {
+        if self.store.contains(reference) {
+            Ok(Session {
+                id: reference.to_string(),
+            })
+        } else {
+            Err(ResourceRefusal::new(format!(
+                "session `{reference}` is not a live session on this server"
+            )))
+        }
+    }
+}
+
+struct SessionReader {
+    store: Arc<SessionStore>,
+}
+
+impl ReadResource<Session> for SessionReader {
+    async fn read(&self, id: &str) -> std::result::Result<Value, ResourceRefusal> {
+        if self.store.contains(id) {
+            Ok(json!({ "id": id, "status": "live" }))
+        } else {
+            Err(ResourceRefusal::new(format!(
+                "session `{id}` is not a live session on this server"
+            )))
+        }
+    }
 }
 
 /// Writes one JSON line per framework event to stderr. Stdout belongs to the
@@ -41,6 +129,7 @@ pub fn registry() -> Result<CommandRegistry> {
         .map_err(|error| mcp_twill::FrameworkError::Build(error.to_string()))?
         .to_string_lossy()
         .into_owned();
+    let store = Arc::new(SessionStore::default());
 
     CommandRegistry::build(
         "issues-example",
@@ -55,10 +144,21 @@ pub fn registry() -> Result<CommandRegistry> {
                 WorkspaceDecl::file("repo", repo_root).with_description("Example repository root"),
             );
 
-            server.capability(
-                CapabilityDecl::new("session", "A live issue-tracker session lease")
-                    .carried_by("session_id"),
+            // A first-class resource (RFC 0012): declaring it derives the
+            // `session-ref` argument type and the `session` capability. The
+            // lifecycle edges derive from the handler signatures below.
+            server.resource(
+                ResourceDecl::new("session", "A live issue-tracker session lease")
+                    .uri("issues://session/{id}")
+                    .lifetime("Valid from `session start` until `session end`")
+                    .expiry("All sessions end when the server process exits"),
             );
+            server.resolver::<Session>(SessionResolver {
+                store: store.clone(),
+            });
+            server.reader::<Session>(SessionReader {
+                store: store.clone(),
+            });
 
             server.declare_type(
                 TypeDecl::union("issue-target", "How to locate the issue to act on")
@@ -170,15 +270,69 @@ pub fn registry() -> Result<CommandRegistry> {
                 command
                     .summary("Start an issue-tracker session")
                     .description(
-                        "Establishes a session lease. Commands that require the `session` \
-                         capability accept the returned id through their `session_id` \
-                         argument.",
+                        "Establishes a session lease. The granted reference is what \
+                         commands that operate on a session accept through their \
+                         `session_id` argument.",
                     )
-                    .provides("session")
                     .write("sessions", "Creates a session lease")
                     .example("session start", "Start a session and capture its id")
-                    .handle(|_context| async {
-                        Ok(CommandOutput::structured(json!({ "session_id": "sess-1" })))
+                    .handle({
+                        let store = store.clone();
+                        move |_context: CommandContext| {
+                            let store = store.clone();
+                            async move {
+                                let id = store.start();
+                                Ok(CommandOutput::structured(json!({ "session_id": id }))
+                                    .grant(Grant::<Session>::new(id)))
+                            }
+                        }
+                    });
+            });
+
+            server.command("session list", |command| {
+                command
+                    .summary("List live sessions")
+                    .description(
+                        "Enumerates live sessions — the recovery path when a session \
+                         id has fallen out of context.",
+                    )
+                    .read("sessions", "Reads session leases")
+                    .example("session list", "Recover the ids of live sessions")
+                    .handle({
+                        let store = store.clone();
+                        move |_context: CommandContext| {
+                            let store = store.clone();
+                            async move {
+                                let ids = store.live_ids();
+                                Ok(CommandOutput::structured(json!({ "count": ids.len() }))
+                                    .listing(Listing::<Session>::new(ids)))
+                            }
+                        }
+                    });
+            });
+
+            server.command("session end", |command| {
+                command
+                    .summary("End an issue-tracker session")
+                    .description("Releases the session lease; its references stop resolving.")
+                    .write("sessions", "Removes a session lease")
+                    .idempotent()
+                    .example_with_args(
+                        "session end --session-id $args.session_id",
+                        "End a session by id",
+                        json!({ "session_id": "sess-1" }),
+                    )
+                    .handle({
+                        let store = store.clone();
+                        move |session: Release<Session>, _context: CommandContext| {
+                            let store = store.clone();
+                            async move {
+                                store.end(&session.id);
+                                Ok(CommandOutput::structured(json!({
+                                    "ended": session.id
+                                })))
+                            }
+                        }
                     });
             });
 
@@ -186,21 +340,20 @@ pub fn registry() -> Result<CommandRegistry> {
                 command
                     .summary("Sync issues with the remote tracker")
                     .description("Pushes and pulls issue records over an established session.")
-                    .arg(arg::string("session_id").summary("Session that owns the sync"))
-                    .requires("session")
                     .write("issues", "Updates issue records from the remote tracker")
                     .example_with_args(
                         "issues sync --session-id $args.session_id",
                         "Sync issues over an established session",
                         json!({ "session_id": "sess-1" }),
                     )
-                    .handle(|context: CommandContext| async move {
-                        let session = &context.plan.bound_args["session_id"].value;
-                        Ok(CommandOutput::structured(json!({
-                            "session_id": session,
-                            "synced": 2
-                        })))
-                    });
+                    .handle(
+                        |session: Res<Session>, _context: CommandContext| async move {
+                            Ok(CommandOutput::structured(json!({
+                                "session_id": session.id,
+                                "synced": 2
+                            })))
+                        },
+                    );
             });
         },
     )

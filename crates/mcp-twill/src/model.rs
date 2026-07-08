@@ -25,6 +25,10 @@ pub enum ArgType {
     /// References a `TypeDecl` by name; values are matched against the
     /// declared union's variants by the planner.
     Named(String),
+    /// A reference to a declared resource (RFC 0012), accepting a bare id
+    /// or the resource's full URI. The framework injects arguments of this
+    /// type as the carrier for signature-required resources.
+    ResourceRef(String),
 }
 
 impl ArgType {
@@ -36,6 +40,7 @@ impl ArgType {
             ArgType::Bool => "a boolean",
             ArgType::Number => "a number",
             ArgType::Named(_) => "a value matching a declared type",
+            ArgType::ResourceRef(_) => "a resource reference string",
         }
     }
 }
@@ -267,6 +272,150 @@ impl CapabilityDecl {
     }
 }
 
+/// A server-held resource with an identity, a lifetime, and commands that
+/// mint, enumerate, and release references to it (RFC 0012). Declaring a
+/// resource derives a reference argument type (`{name}-ref`) and a
+/// capability (`{name}`), so the RFC 0010 vocabulary keeps working; the
+/// lifecycle edges themselves derive from handler signatures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceDecl {
+    pub name: String,
+    pub summary: String,
+    /// URI template with exactly one `{id}` slot, e.g. `vbl://tab/{id}`.
+    pub uri: String,
+    /// Argument name used when a tier binds this resource's references to
+    /// an argument. Defaults to `{name}_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<String>,
+    /// Resource this one is scoped within.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
+    /// Prose: the window in which references stay valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<String>,
+    /// Prose: how the resource leaves the world without an explicit
+    /// releasing command (lease expiry, session end).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expiry: Option<String>,
+}
+
+impl ResourceDecl {
+    pub fn new(name: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            summary: summary.into(),
+            uri: String::new(),
+            carrier: None,
+            within: None,
+            lifetime: None,
+            expiry: None,
+        }
+    }
+
+    /// The URI template for references to this resource. Must contain
+    /// exactly one `{id}` slot.
+    pub fn uri(mut self, template: impl Into<String>) -> Self {
+        self.uri = template.into();
+        self
+    }
+
+    /// Names the argument that carries references on argument-bound tiers.
+    pub fn carrier(mut self, argument: impl Into<String>) -> Self {
+        self.carrier = Some(argument.into());
+        self
+    }
+
+    /// Scopes this resource inside another declared resource.
+    pub fn within(mut self, resource: impl Into<String>) -> Self {
+        self.within = Some(resource.into());
+        self
+    }
+
+    /// Prose describing the window in which references stay valid.
+    pub fn lifetime(mut self, prose: impl Into<String>) -> Self {
+        self.lifetime = Some(prose.into());
+        self
+    }
+
+    /// Prose describing how the resource retires without an explicit
+    /// releasing command.
+    pub fn expiry(mut self, prose: impl Into<String>) -> Self {
+        self.expiry = Some(prose.into());
+        self
+    }
+
+    /// The carrier argument name, defaulted to `{name}_id`.
+    pub fn carrier_name(&self) -> String {
+        self.carrier
+            .clone()
+            .unwrap_or_else(|| format!("{}_id", self.name))
+    }
+
+    /// The derived reference type name.
+    pub fn reference_type_name(&self) -> String {
+        format!("{}-ref", self.name)
+    }
+
+    /// The template split at its single `{id}` slot, or `None` when the
+    /// template does not have exactly one slot.
+    pub fn uri_parts(&self) -> Option<(&str, &str)> {
+        let start = self.uri.find("{id}")?;
+        let suffix = &self.uri[start + 4..];
+        if suffix.contains("{id}") {
+            return None;
+        }
+        Some((&self.uri[..start], suffix))
+    }
+
+    /// Mints the URI for a granted id. Refuses ids that would not
+    /// round-trip: substitution and parse-back must be exact inverses, so
+    /// ids are limited to URI-unreserved characters.
+    pub fn mint_uri(&self, id: &str) -> Result<String> {
+        if id.is_empty() || !id.bytes().all(uri_unreserved) {
+            return Err(FrameworkError::Handler(format!(
+                "grant id `{id}` for resource `{}` would not round-trip through `{}`; ids must be non-empty and use URI-unreserved characters (A-Z a-z 0-9 - . _ ~)",
+                self.name, self.uri
+            )));
+        }
+        let (prefix, suffix) = self.uri_parts().ok_or_else(|| {
+            FrameworkError::Handler(format!(
+                "resource `{}` URI template `{}` does not have exactly one `{{id}}` slot",
+                self.name, self.uri
+            ))
+        })?;
+        Ok(format!("{prefix}{id}{suffix}"))
+    }
+
+    /// Normalizes a reference to its bare id: a full URI matching the
+    /// template loses the template text; anything else is already an id.
+    pub fn normalize_reference<'a>(&self, reference: &'a str) -> &'a str {
+        self.parse_uri(reference).unwrap_or(reference)
+    }
+
+    /// Extracts the id from a full URI matching this template, or `None`
+    /// when the value is not a URI of this resource.
+    pub fn parse_uri<'a>(&self, value: &'a str) -> Option<&'a str> {
+        let (prefix, suffix) = self.uri_parts()?;
+        let id = value.strip_prefix(prefix)?.strip_suffix(suffix)?;
+        (!id.is_empty()).then_some(id)
+    }
+}
+
+fn uri_unreserved(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+}
+
+/// A reference to a declared resource carried in structured output:
+/// which resource, the bare id, and the minted URI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceRef {
+    pub resource: String,
+    pub id: String,
+    pub uri: String,
+}
+
 /// A workspace root selected for an invocation plan: which root a path
 /// argument was planned against, where it came from, and why it was chosen.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -417,6 +566,22 @@ pub struct CommandSpec {
     /// Marks this command as an escape hatch for a preferred path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<Fallback>,
+    /// Resources this command requires live references to. Derived from
+    /// the handler signature (`Res<T>`), never written by authors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_resources: Vec<String>,
+    /// Resources this command grants references to. Derived from the
+    /// handler output type (`Granted<T>`), never written by authors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<String>,
+    /// Resources this command releases. Derived from the handler signature
+    /// (`Release<T>`), never written by authors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<String>,
+    /// Resources this command enumerates. Derived from the handler output
+    /// type (`Listed<T>`), never written by authors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enumerates: Vec<String>,
 }
 
 impl CommandSpec {
@@ -442,6 +607,10 @@ impl CommandSpec {
             use_when: None,
             alternatives: Vec::new(),
             fallback: None,
+            requires_resources: Vec::new(),
+            grants: Vec::new(),
+            releases: Vec::new(),
+            enumerates: Vec::new(),
         }
     }
 
@@ -801,6 +970,14 @@ pub struct CommandOutput {
     pub stderr: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// References this call granted, minted by the framework from the
+    /// handler's typed output (RFC 0012).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<ResourceRef>,
+    /// References this call enumerated, minted by the framework from the
+    /// handler's typed output (RFC 0012).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listings: Vec<ResourceRef>,
 }
 
 impl CommandOutput {
@@ -810,6 +987,8 @@ impl CommandOutput {
             structured: Some(value),
             stderr: Vec::new(),
             next_cursor: None,
+            grants: Vec::new(),
+            listings: Vec::new(),
         }
     }
 
@@ -819,6 +998,8 @@ impl CommandOutput {
             structured: None,
             stderr: Vec::new(),
             next_cursor: None,
+            grants: Vec::new(),
+            listings: Vec::new(),
         }
     }
 
@@ -926,6 +1107,11 @@ pub struct RunResponse {
 pub struct CommandContext {
     pub plan: InvocationPlan,
     pub stdin: Option<StdinSpec>,
+    /// The resources the framework resolved for this invocation (RFC
+    /// 0012). Extractor parameters read from here; the field never
+    /// serializes because resolved values are live server-side state.
+    #[serde(skip)]
+    pub resources: crate::ResolvedResources,
 }
 
 impl CommandContext {
@@ -1000,6 +1186,9 @@ pub fn value_matches_type(name: &str, value: &Value, value_type: &ArgType) -> Re
         // Named types are matched against their declared variants by the
         // planner, which has the type table this function does not.
         ArgType::Named(_) => true,
+        // Resource references are strings (bare id or URI); liveness is
+        // the resolver's judgment at extraction time.
+        ArgType::ResourceRef(_) => value.is_string(),
     };
     if valid {
         Ok(())

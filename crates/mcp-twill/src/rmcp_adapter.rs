@@ -122,6 +122,7 @@ impl CliMcpServer {
         registry.validate_types()?;
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
+        registry.validate_resources()?;
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));
@@ -262,11 +263,40 @@ impl CliMcpServer {
                     .with_runtime((*self.identity).clone()),
             );
         }
+        let links = self.resource_links(&outcome.envelope);
         if outcome.rendered_output {
-            success_result(outcome.envelope, profile)
+            let mut result = success_result(outcome.envelope, profile);
+            result.content.extend(links);
+            result
         } else {
-            envelope_result(outcome.envelope)
+            let mut result = envelope_result(outcome.envelope);
+            result.content.extend(links);
+            result
         }
+    }
+
+    /// Grants and listings become `resource_link` content parts, but only
+    /// for resources with a bound reader: a link the server cannot serve
+    /// through `resources/read` is a dead link. Without a reader, the URI in
+    /// the structured payload is the whole story.
+    fn resource_links(&self, envelope: &ResponseEnvelope) -> Vec<Content> {
+        let Some(output) = &envelope.output else {
+            return Vec::new();
+        };
+        output
+            .grants
+            .iter()
+            .chain(&output.listings)
+            .filter(|reference| {
+                !reference.uri.is_empty() && self.registry.has_reader(&reference.resource)
+            })
+            .map(|reference| {
+                Content::resource_link(RawResource::new(
+                    reference.uri.clone(),
+                    format!("{} {}", reference.resource, reference.id),
+                ))
+            })
+            .collect()
     }
 
     async fn run_tool_flow(
@@ -585,6 +615,25 @@ impl ServerHandler for CliMcpServer {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ReadResourceResult, rmcp::ErrorData> {
+        if let Some((decl, id)) = self.registry.match_resource_uri(&request.uri) {
+            let name = decl.name.clone();
+            let reader = self.registry.resource_reader(&name).ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    format!("Resource `{name}` does not support resources/read"),
+                    None,
+                )
+            })?;
+            let value = reader.read_erased(&id).await.map_err(|refusal| {
+                rmcp::ErrorData::invalid_params(
+                    format!("Cannot read {}: {}", request.uri, refusal.detail),
+                    None,
+                )
+            })?;
+            let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+            return Ok(ReadResourceResult::new(vec![
+                ResourceContents::text(text, request.uri).with_mime_type("application/json"),
+            ]));
+        }
         let text = if request.uri == "cli://lanes" {
             lanes_text(&self.execution_lanes())
         } else {

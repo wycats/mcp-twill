@@ -578,6 +578,102 @@ fn schema_contains_key(value: &serde_json::Value, key: &str) -> bool {
     }
 }
 
+/// Resource declarations honor the registration promises: every resource
+/// with lifecycle edges renders in server help, every command's resource
+/// fields render in its command help, listing producers carry the reference
+/// array in structured output, and grant URIs round-trip through the
+/// derived reference type (mint → parse → same id).
+pub fn check_resource_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_resources() {
+        violations.push(violation(None, "resources", error.to_string()));
+        return violations;
+    }
+    let server_help = registry.help(crate::HelpRequest {
+        command: None,
+        topic: None,
+        detail: None,
+    });
+    for decl in registry.resource_decls() {
+        let name = &decl.name;
+        let has_edges = !registry.resource_granters(name).is_empty()
+            || !registry.resource_releasers(name).is_empty()
+            || !registry.resource_enumerators(name).is_empty()
+            || !registry.resource_requirers(name).is_empty();
+        if has_edges && !server_help.text.contains(&format!("`{name}`")) {
+            violations.push(violation(
+                None,
+                "resources",
+                format!("server help does not render resource `{name}`"),
+            ));
+        }
+        // Mint → parse must be exact inverses for the derived reference type
+        // to treat ids and URIs as interchangeable.
+        let probe = "probe-id_0.~";
+        match decl.mint_uri(probe) {
+            Ok(uri) => {
+                if decl.parse_uri(&uri) != Some(probe) {
+                    violations.push(violation(
+                        None,
+                        "resources",
+                        format!("resource `{name}` URI template does not round-trip minted ids"),
+                    ));
+                }
+            }
+            Err(error) => violations.push(violation(
+                None,
+                "resources",
+                format!("resource `{name}` cannot mint a URI from a conforming id: {error}"),
+            )),
+        }
+    }
+    for command in registry.command_specs() {
+        let resource_fields: Vec<(&str, &Vec<String>)> = [
+            ("requires", &command.requires_resources),
+            ("grants", &command.grants),
+            ("releases", &command.releases),
+            ("enumerates", &command.enumerates),
+        ]
+        .into_iter()
+        .filter(|(_, names)| !names.is_empty())
+        .collect();
+        if resource_fields.is_empty() {
+            continue;
+        }
+        let name = command.path.join(" ");
+        let help = registry.help(crate::HelpRequest {
+            command: Some(name.clone()),
+            topic: None,
+            detail: None,
+        });
+        for (field, resources) in resource_fields {
+            for resource in resources {
+                if !help.text.contains(&format!("`{resource}`")) {
+                    violations.push(violation(
+                        Some(&name),
+                        "resources",
+                        format!("command help does not render {field} edge for `{resource}`"),
+                    ));
+                }
+            }
+        }
+        if !command.enumerates.is_empty() {
+            // Structured output is the shared CommandOutput envelope; the
+            // reference array must be a schema-visible field, not folklore.
+            let schema = serde_json::to_value(schemars::schema_for!(crate::CommandOutput))
+                .unwrap_or(serde_json::Value::Null);
+            if !schema_contains_key(&schema, "listings") {
+                violations.push(violation(
+                    Some(&name),
+                    "resources",
+                    "listing producer's output schema does not carry the reference array",
+                ));
+            }
+        }
+    }
+    violations
+}
+
 /// Capability declarations honor the registration promises (declared,
 /// provided, consumed, carried by a required argument) and every command
 /// that requires a capability names it in its rendered help.
@@ -825,6 +921,13 @@ macro_rules! contract_tests {
         #[test]
         fn contract_capability_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_capability_projection(
+                &$registry(),
+            ));
+        }
+
+        #[test]
+        fn contract_resource_projection() {
+            $crate::contract::assert_no_violations($crate::contract::check_resource_projection(
                 &$registry(),
             ));
         }
