@@ -49,6 +49,9 @@ pub enum ErrorCode {
     /// A resource reference did not resolve to a live value (stale lease,
     /// foreign tab, expired session).
     ResourceRefused,
+    /// Host request metadata did not satisfy the conversation-identity
+    /// contract or contained conflicting trusted observations.
+    InvalidRequestContext,
     StdinMismatch,
     WrongEffectLane,
     PermissionRequired,
@@ -76,6 +79,8 @@ impl ErrorCode {
             FrameworkError::CapabilityMissing { .. } => Self::CapabilityMissing,
             FrameworkError::CapabilityDenied { .. } => Self::CapabilityDenied,
             FrameworkError::ResourceRefused { .. } => Self::ResourceRefused,
+            FrameworkError::InvalidConversationIdentity { .. }
+            | FrameworkError::ConflictingConversationIdentity => Self::InvalidRequestContext,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
@@ -119,6 +124,7 @@ pub enum DiagnosticLocation {
     OutputField { name: String },
     ToolName { name: String },
     Workspace { name: String },
+    RequestContext { key: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -509,6 +515,26 @@ fn error_details(error: &FrameworkError) -> Value {
                 "establish": establish,
             },
         }),
+        FrameworkError::InvalidConversationIdentity {
+            observation_source,
+            key,
+            field,
+            reason,
+            ..
+        } => {
+            let mut details = serde_json::Map::new();
+            details.insert("source".to_string(), json!(observation_source));
+            details.insert("key".to_string(), json!(key));
+            if let Some(field) = field {
+                details.insert("field".to_string(), json!(field));
+            }
+            details.insert("reason".to_string(), json!(reason));
+            Value::Object(details)
+        }
+        FrameworkError::ConflictingConversationIdentity => json!({
+            "reason": "conflicting_observations",
+            "sources": [crate::CONVERSATION_IDENTITY_META_KEY, "threadId"],
+        }),
         FrameworkError::StdinMismatch(reason) => json!({ "reason": reason }),
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
@@ -606,12 +632,23 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
                 name: current_tool.clone(),
             })
         }
+        FrameworkError::InvalidConversationIdentity { key, .. } => {
+            Some(DiagnosticLocation::RequestContext { key: key.clone() })
+        }
+        FrameworkError::ConflictingConversationIdentity => {
+            Some(DiagnosticLocation::RequestContext {
+                key: crate::CONVERSATION_IDENTITY_META_KEY.to_string(),
+            })
+        }
         _ => None,
     };
 
     let expected = match error {
         FrameworkError::InvalidArgumentType(_, expected) => Some(json!(expected)),
         FrameworkError::ArgumentUnionMismatch { type_name, .. } => Some(json!(type_name)),
+        FrameworkError::InvalidConversationIdentity { expected, .. } => {
+            expected.as_ref().map(|expected| json!(expected))
+        }
         _ => None,
     };
 

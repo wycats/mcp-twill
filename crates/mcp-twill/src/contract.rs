@@ -510,6 +510,80 @@ pub fn check_workspace_projection(registry: &CommandRegistry) -> Vec<ContractVio
     violations
 }
 
+/// Optional conversation identity projects as a catalog/help capability and
+/// never as a model-visible input value.
+pub fn check_conversation_identity_projection(
+    registry: &CommandRegistry,
+) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    let operations = registry.operation_specs();
+    for command in registry.command_specs() {
+        let operation_id = command.path.join(".");
+        let Some(operation) = operations
+            .iter()
+            .find(|operation| operation.id == operation_id)
+        else {
+            violations.push(violation(
+                Some(&command.name()),
+                "conversation_identity",
+                "command has no operation projection",
+            ));
+            continue;
+        };
+        if command.uses_conversation_identity != operation.uses_conversation_identity {
+            violations.push(violation(
+                Some(&command.name()),
+                "conversation_identity",
+                "command and operation declarations disagree",
+            ));
+        }
+
+        let help = registry.help(crate::HelpRequest {
+            command: Some(command.name()),
+            topic: Some(crate::HelpTopic::Usage),
+            detail: None,
+        });
+        let help_names_context = help
+            .text
+            .contains("conversation identity (optional, supplied by host)");
+        if help_names_context != command.uses_conversation_identity {
+            violations.push(violation(
+                Some(&command.name()),
+                "help",
+                if command.uses_conversation_identity {
+                    "declaring command help omits optional conversation identity"
+                } else {
+                    "non-declaring command help names conversation identity"
+                },
+            ));
+        }
+
+        let schema = registry.arg_schema(command);
+        if schema_contains_key(&schema, crate::CONVERSATION_IDENTITY_META_KEY)
+            || schema_contains_key(&schema, "conversationIdentity")
+        {
+            violations.push(violation(
+                Some(&command.name()),
+                "schema",
+                "conversation identity appears in the generated input schema",
+            ));
+        }
+        if command.examples.iter().any(|example| {
+            example
+                .args
+                .contains_key(crate::CONVERSATION_IDENTITY_META_KEY)
+                || example.args.contains_key("conversationIdentity")
+        }) {
+            violations.push(violation(
+                Some(&command.name()),
+                "examples",
+                "conversation identity appears in a command example",
+            ));
+        }
+    }
+    violations
+}
+
 pub fn verify_catalog_coverage(
     registry: &CommandRegistry,
     primary_tool_name: &str,
@@ -521,6 +595,7 @@ pub fn verify_catalog_coverage(
     violations.extend(check_effect_metadata(registry));
     violations.extend(check_effect_lanes(registry, primary_tool_name));
     violations.extend(check_workspace_projection(registry));
+    violations.extend(check_conversation_identity_projection(registry));
     violations.extend(check_type_projection(registry));
     violations.extend(check_capability_projection(registry));
     violations.extend(check_runtime_identity(registry));
@@ -909,6 +984,13 @@ macro_rules! contract_tests {
             $crate::contract::assert_no_violations($crate::contract::check_workspace_projection(
                 &$registry(),
             ));
+        }
+
+        #[test]
+        fn contract_conversation_identity_projection() {
+            $crate::contract::assert_no_violations(
+                $crate::contract::check_conversation_identity_projection(&$registry()),
+            );
         }
 
         #[test]
