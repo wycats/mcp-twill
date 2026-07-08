@@ -95,6 +95,21 @@ pub enum FrameworkError {
         /// types — the establishment path when nothing exists yet.
         establish: Box<[String]>,
     },
+    #[error("invalid conversation identity request context at `{key}` ({reason})")]
+    InvalidConversationIdentity {
+        /// Stable source label (`canonical` or `codexThreadId`).
+        observation_source: String,
+        /// Metadata key that contained the invalid observation.
+        key: String,
+        /// Invalid or missing field, when the failure is field-specific.
+        field: Option<String>,
+        /// Stable redacted subreason.
+        reason: String,
+        /// Safe description of the accepted shape, when useful.
+        expected: Option<String>,
+    },
+    #[error("conflicting conversation identity request context observations")]
+    ConflictingConversationIdentity,
     #[error("stdin mismatch: {0}")]
     StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]

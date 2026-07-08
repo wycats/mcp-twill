@@ -626,6 +626,10 @@ pub struct CommandSpec {
     /// never caller-supplied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<String>,
+    /// Whether the handler can consume optional host-supplied conversation
+    /// identity through `CommandContext`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uses_conversation_identity: bool,
     /// Capabilities this command requires (names of server-declared
     /// capabilities). The capability's carrier argument must be a required
     /// argument of this command.
@@ -680,6 +684,7 @@ impl CommandSpec {
             progress: Vec::new(),
             idempotent: false,
             workspaces: Vec::new(),
+            uses_conversation_identity: false,
             requires: Vec::new(),
             provides: Vec::new(),
             use_when: None,
@@ -743,6 +748,13 @@ impl CommandSpec {
         if !self.workspaces.contains(&name) {
             self.workspaces.push(name);
         }
+        self
+    }
+
+    /// Declares that this command can consume optional host-supplied
+    /// conversation identity through `CommandContext`.
+    pub fn uses_conversation_identity(mut self) -> Self {
+        self.uses_conversation_identity = true;
         self
     }
 
@@ -1187,10 +1199,47 @@ pub struct CommandContext {
     /// 0012). Extractor parameters read from here; the field never
     /// serializes because resolved values are live server-side state.
     #[serde(skip)]
+    #[schemars(skip)]
     pub resources: crate::ResolvedResources,
+    /// Private host facts for this invocation. Values are structurally
+    /// excluded from both serialization and schema generation.
+    #[serde(skip)]
+    #[schemars(skip)]
+    invocation_context: crate::InvocationContext,
 }
 
 impl CommandContext {
+    pub fn new(
+        plan: InvocationPlan,
+        stdin: Option<StdinSpec>,
+        resources: crate::ResolvedResources,
+    ) -> Self {
+        Self {
+            plan,
+            stdin,
+            resources,
+            invocation_context: crate::InvocationContext::default(),
+        }
+    }
+
+    pub(crate) fn with_invocation_context(
+        plan: InvocationPlan,
+        stdin: Option<StdinSpec>,
+        resources: crate::ResolvedResources,
+        invocation_context: crate::InvocationContext,
+    ) -> Self {
+        Self {
+            plan,
+            stdin,
+            resources,
+            invocation_context,
+        }
+    }
+
+    pub fn conversation_identity(&self) -> Option<&crate::ConversationIdentity> {
+        self.invocation_context.conversation_identity()
+    }
+
     /// The resolved root for a workspace this command declared or one of
     /// its path arguments referenced. Planning guarantees presence for
     /// declared workspaces; path-argument workspaces are present when a

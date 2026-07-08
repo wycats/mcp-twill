@@ -232,6 +232,10 @@ pub struct OperationSpec {
     /// requirements resolved at plan time, never caller-supplied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<String>,
+    /// Optional host-supplied conversation identity is available to this
+    /// operation's handler.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uses_conversation_identity: bool,
     /// Capabilities this command requires; the capability's carrier
     /// argument must be bound on every call.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -291,6 +295,7 @@ impl OperationSpec {
             output: spec.output.clone().unwrap_or_default(),
             permissions: spec.permissions.clone(),
             workspaces: spec.workspaces.clone(),
+            uses_conversation_identity: spec.uses_conversation_identity,
             requires: spec.requires.clone(),
             provides: spec.provides.clone(),
             use_when: spec.use_when.clone(),

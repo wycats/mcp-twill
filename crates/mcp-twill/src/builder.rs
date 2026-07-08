@@ -332,6 +332,7 @@ pub struct CommandBuilder {
     progress: Vec<ProgressPhaseSpec>,
     idempotent: bool,
     workspaces: Vec<String>,
+    uses_conversation_identity: bool,
     requires: Vec<String>,
     provides: Vec<String>,
     use_when: Option<String>,
@@ -359,6 +360,7 @@ impl CommandBuilder {
             progress: Vec::new(),
             idempotent: false,
             workspaces: Vec::new(),
+            uses_conversation_identity: false,
             requires: Vec::new(),
             provides: Vec::new(),
             use_when: None,
@@ -415,6 +417,13 @@ impl CommandBuilder {
     /// caller-supplied. Planning fails when the workspace does not resolve.
     pub fn uses_workspace(&mut self, name: impl Into<String>) -> &mut Self {
         self.workspaces.push(name.into());
+        self
+    }
+
+    /// Declares optional host-supplied conversation identity for this
+    /// handler. Absence remains valid.
+    pub fn uses_conversation_identity(&mut self) -> &mut Self {
+        self.uses_conversation_identity = true;
         self
     }
 
@@ -659,6 +668,9 @@ impl CommandBuilder {
         }
         for workspace in self.workspaces {
             spec = spec.uses_workspace(workspace);
+        }
+        if self.uses_conversation_identity {
+            spec = spec.uses_conversation_identity();
         }
         for capability in self.requires {
             spec = spec.requires(capability);

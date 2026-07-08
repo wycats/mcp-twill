@@ -31,15 +31,24 @@ use tokio::sync::Mutex;
 
 use crate::{
     ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, EventSink,
-    FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InvocationPlan, NoopEventSink,
-    PermissionAuthorizer, PermissionDecision, PlanFacts, ReplayRecord, ResponseEnvelope,
-    ResponseProfile, RunMode, RunRequest, RunResponse, RuntimeIdentity, ToolLaneSpec,
+    FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InvocationContext, InvocationPlan,
+    NoopEventSink, PermissionAuthorizer, PermissionDecision, PlanFacts, ReplayRecord,
+    ResponseEnvelope, ResponseProfile, RunMode, RunRequest, RunResponse, RuntimeIdentity,
+    ToolLaneSpec,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConversationIdentityCompatibility {
+    #[default]
+    Disabled,
+    TrustedCodexThreadId,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliMcpServerConfig {
     pub execution_tool_name: String,
     pub replay_ttl_ms: i64,
+    pub conversation_identity_compatibility: ConversationIdentityCompatibility,
 }
 
 impl Default for CliMcpServerConfig {
@@ -47,6 +56,7 @@ impl Default for CliMcpServerConfig {
         Self {
             execution_tool_name: "run".to_string(),
             replay_ttl_ms: 10 * 60 * 1000,
+            conversation_identity_compatibility: ConversationIdentityCompatibility::Disabled,
         }
     }
 }
@@ -59,6 +69,14 @@ impl CliMcpServerConfig {
 
     pub fn with_replay_ttl_seconds(mut self, seconds: i64) -> Self {
         self.replay_ttl_ms = seconds.saturating_mul(1000);
+        self
+    }
+
+    pub fn with_conversation_identity_compatibility(
+        mut self,
+        compatibility: ConversationIdentityCompatibility,
+    ) -> Self {
+        self.conversation_identity_compatibility = compatibility;
         self
     }
 }
@@ -312,9 +330,23 @@ impl CliMcpServer {
         let authorizer = &self.authorizer;
         let profile = response_profile(&request);
         let mode = request.effective_mode();
+        let invocation_context =
+            match invocation_context_from_meta(&meta, config.conversation_identity_compatibility) {
+                Ok(context) => context,
+                Err(error) => {
+                    return RunOutcome::envelope(
+                        ResponseEnvelope::framework_error(error, Some(request), None),
+                        None,
+                    );
+                }
+            };
         let resolved = Self::resolve_workspaces_for_call(registry, &meta, &client).await;
         Self::notify_progress(&meta, &client, 1.0, 4.0, "Parsing command template").await;
-        let plan = match registry.build_plan_with_workspaces(&request, &resolved) {
+        let plan = match registry.build_plan_with_workspaces_and_context(
+            &request,
+            &resolved,
+            &invocation_context,
+        ) {
             Ok(plan) => plan,
             Err(error) => {
                 return RunOutcome::envelope(
@@ -439,12 +471,13 @@ impl CliMcpServer {
 
         Self::notify_progress(&meta, &client, 3.0, 4.0, "Dispatching command handler").await;
         let result = registry
-            .run_in_lane_with_workspaces(
+            .run_in_lane_with_workspaces_and_context(
                 request.clone(),
                 tool_name,
                 lane,
                 &config.execution_tool_name,
                 &resolved,
+                &invocation_context,
             )
             .await;
         match result {
@@ -956,6 +989,38 @@ fn codex_sandbox_observation(meta: &Meta) -> Option<CodexSandboxObservation> {
         observation = observation.with_permission_profile(profile);
     }
     Some(observation)
+}
+
+fn invocation_context_from_meta(
+    meta: &Meta,
+    compatibility: ConversationIdentityCompatibility,
+) -> crate::Result<InvocationContext> {
+    let canonical = meta
+        .0
+        .get(crate::CONVERSATION_IDENTITY_META_KEY)
+        .map(crate::conversation_identity::parse_canonical_identity)
+        .transpose()?;
+
+    if matches!(compatibility, ConversationIdentityCompatibility::Disabled) {
+        return Ok(canonical.map_or_else(InvocationContext::new, |identity| {
+            InvocationContext::new().with_conversation_identity(identity)
+        }));
+    }
+
+    let codex = meta
+        .0
+        .get("threadId")
+        .map(crate::conversation_identity::codex_thread_identity)
+        .transpose()?;
+    match (canonical, codex) {
+        (Some(canonical), Some(codex)) if canonical != codex => {
+            Err(FrameworkError::ConflictingConversationIdentity)
+        }
+        (Some(identity), _) | (None, Some(identity)) => {
+            Ok(InvocationContext::new().with_conversation_identity(identity))
+        }
+        (None, None) => Ok(InvocationContext::new()),
+    }
 }
 
 fn response_profile(request: &RunRequest) -> ResponseProfile {

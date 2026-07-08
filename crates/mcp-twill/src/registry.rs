@@ -1144,7 +1144,19 @@ impl CommandRegistry {
     }
 
     pub fn build_plan(&self, request: &RunRequest) -> Result<InvocationPlan> {
-        self.build_plan_with_workspaces(request, &self.resolve_declared_workspaces())
+        self.build_plan_with_context(request, &crate::InvocationContext::default())
+    }
+
+    pub fn build_plan_with_context(
+        &self,
+        request: &RunRequest,
+        context: &crate::InvocationContext,
+    ) -> Result<InvocationPlan> {
+        self.build_plan_with_workspaces_and_context(
+            request,
+            &self.resolve_declared_workspaces(),
+            context,
+        )
     }
 
     /// Projects every declared workspace into a resolver requirement. The
@@ -1188,6 +1200,22 @@ impl CommandRegistry {
         &self,
         request: &RunRequest,
         resolved: &ResolvedWorkspaceSet,
+    ) -> Result<InvocationPlan> {
+        self.build_plan_with_workspaces_and_context(
+            request,
+            resolved,
+            &crate::InvocationContext::default(),
+        )
+    }
+
+    /// Builds an invocation plan against pre-resolved workspaces and private
+    /// host invocation context. The context affects only declared private
+    /// fingerprint facts and is never stored on the returned plan.
+    pub fn build_plan_with_workspaces_and_context(
+        &self,
+        request: &RunRequest,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
     ) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
         let registered =
@@ -1465,7 +1493,7 @@ impl CommandRegistry {
                 "textHash": stable_hash_value(&json!(stdin.text)),
             })
         });
-        let invocation_fingerprint = stable_hash_value(&json!({
+        let mut fingerprint_input = json!({
             "normalizedCommand": {
                 "path": &registered.spec.path,
                 "tokens": &tokens,
@@ -1481,7 +1509,25 @@ impl CommandRegistry {
             "workspaceRoots": &workspace_roots,
             "idempotent": operation.idempotent,
             "output": &output,
-        }));
+        });
+        if registered.spec.uses_conversation_identity {
+            let identity_digest = context.conversation_identity().map(|identity| {
+                stable_hash_value(&json!([
+                    "conversation-identity",
+                    identity.version(),
+                    identity.issuer(),
+                    identity.id(),
+                ]))
+            });
+            fingerprint_input
+                .as_object_mut()
+                .expect("fingerprint input is an object")
+                .insert(
+                    "conversationIdentity".to_string(),
+                    identity_digest.map_or(Value::Null, Value::String),
+                );
+        }
+        let invocation_fingerprint = stable_hash_value(&fingerprint_input);
 
         Ok(InvocationPlan {
             operation_id: operation.id.clone(),
@@ -1502,12 +1548,22 @@ impl CommandRegistry {
     }
 
     pub async fn run(&self, request: RunRequest) -> Result<RunResponse> {
+        self.run_with_context(request, crate::InvocationContext::default())
+            .await
+    }
+
+    pub async fn run_with_context(
+        &self,
+        request: RunRequest,
+        context: crate::InvocationContext,
+    ) -> Result<RunResponse> {
         self.run_with_lane(
             request,
             None,
             None,
             None,
             &self.resolve_declared_workspaces(),
+            &context,
         )
         .await
     }
@@ -1525,6 +1581,7 @@ impl CommandRegistry {
             Some(lane),
             Some(primary_tool_name.as_ref().to_string()),
             &self.resolve_declared_workspaces(),
+            &crate::InvocationContext::default(),
         )
         .await
     }
@@ -1539,12 +1596,36 @@ impl CommandRegistry {
         primary_tool_name: impl AsRef<str>,
         resolved: &ResolvedWorkspaceSet,
     ) -> Result<RunResponse> {
+        self.run_in_lane_with_workspaces_and_context(
+            request,
+            current_tool,
+            lane,
+            primary_tool_name,
+            resolved,
+            &crate::InvocationContext::default(),
+        )
+        .await
+    }
+
+    /// Like [`run_in_lane_with_workspaces`](Self::run_in_lane_with_workspaces),
+    /// with private host invocation context shared with planning and handler
+    /// dispatch.
+    pub async fn run_in_lane_with_workspaces_and_context(
+        &self,
+        request: RunRequest,
+        current_tool: impl Into<String>,
+        lane: EffectLane,
+        primary_tool_name: impl AsRef<str>,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
+    ) -> Result<RunResponse> {
         self.run_with_lane(
             request,
             Some(current_tool.into()),
             Some(lane),
             Some(primary_tool_name.as_ref().to_string()),
             resolved,
+            context,
         )
         .await
     }
@@ -1556,8 +1637,9 @@ impl CommandRegistry {
         current_lane: Option<EffectLane>,
         primary_tool_name: Option<String>,
         resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
     ) -> Result<RunResponse> {
-        let plan = self.build_plan_with_workspaces(&request, resolved)?;
+        let plan = self.build_plan_with_workspaces_and_context(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
             && plan.lane != current_lane
         {
@@ -1589,13 +1671,19 @@ impl CommandRegistry {
             .resolve_signature_resources(&registered.spec, &plan)
             .await?;
 
+        let handler_context = if registered.spec.uses_conversation_identity {
+            context.clone()
+        } else {
+            crate::InvocationContext::default()
+        };
         let output = registered
             .handler
-            .call(CommandContext {
-                plan: plan.clone(),
-                stdin: request.stdin,
+            .call(CommandContext::with_invocation_context(
+                plan.clone(),
+                request.stdin,
                 resources,
-            })
+                handler_context,
+            ))
             .await
             .map_err(|error| self.enrich_capability_denied(error))?;
         let output = self.mint_output_references(&registered.spec, output)?;
@@ -1980,6 +2068,12 @@ impl CommandRegistry {
             sections.push(lines.join("\n"));
         }
         sections.push(self.arguments_text(spec));
+        if spec.uses_conversation_identity {
+            sections.push(
+                "Request context:\n- conversation identity (optional, supplied by host)"
+                    .to_string(),
+            );
+        }
         if !spec.workspaces.is_empty() {
             let mut lines = vec!["Workspaces:".to_string()];
             for name in &spec.workspaces {
