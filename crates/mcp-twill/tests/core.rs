@@ -238,6 +238,8 @@ fn output_limits_structured_content_and_preserves_logs_and_cursors() {
         ])),
         stderr: vec!["handler warning".to_string()],
         next_cursor: Some("next-page".to_string()),
+        grants: Vec::new(),
+        listings: Vec::new(),
     }
     .apply_output_spec(&OutputSpec {
         max_bytes: Some(48),

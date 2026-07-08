@@ -46,6 +46,9 @@ pub enum ErrorCode {
     /// The handler judged a presented capability invalid (stale lease,
     /// foreign resource).
     CapabilityDenied,
+    /// A resource reference did not resolve to a live value (stale lease,
+    /// foreign tab, expired session).
+    ResourceRefused,
     StdinMismatch,
     WrongEffectLane,
     PermissionRequired,
@@ -72,6 +75,7 @@ impl ErrorCode {
             FrameworkError::WorkspaceUnresolved { .. } => Self::UnresolvedWorkspaceRequirement,
             FrameworkError::CapabilityMissing { .. } => Self::CapabilityMissing,
             FrameworkError::CapabilityDenied { .. } => Self::CapabilityDenied,
+            FrameworkError::ResourceRefused { .. } => Self::ResourceRefused,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
@@ -489,6 +493,21 @@ fn error_details(error: &FrameworkError) -> Value {
             "detail": detail,
             "carrier": carrier,
             "providers": providers,
+        }),
+        FrameworkError::ResourceRefused {
+            resource,
+            reference,
+            detail,
+            enumerate,
+            establish,
+        } => json!({
+            "resource": resource,
+            "reference": reference,
+            "detail": detail,
+            "recover": {
+                "enumerate": enumerate,
+                "establish": establish,
+            },
         }),
         FrameworkError::StdinMismatch(reason) => json!({ "reason": reason }),
         FrameworkError::PermissionDenied { effect, scope } => {

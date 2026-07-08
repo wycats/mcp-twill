@@ -122,6 +122,7 @@ impl CliMcpServer {
         registry.validate_types()?;
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
+        registry.validate_resources()?;
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));
@@ -262,11 +263,40 @@ impl CliMcpServer {
                     .with_runtime((*self.identity).clone()),
             );
         }
+        let links = self.resource_links(&outcome.envelope);
         if outcome.rendered_output {
-            success_result(outcome.envelope, profile)
+            let mut result = success_result(outcome.envelope, profile);
+            result.content.extend(links);
+            result
         } else {
-            envelope_result(outcome.envelope)
+            let mut result = envelope_result(outcome.envelope);
+            result.content.extend(links);
+            result
         }
+    }
+
+    /// Grants and listings become `resource_link` content parts, but only
+    /// for resources with a bound reader: a link the server cannot serve
+    /// through `resources/read` is a dead link. Without a reader, the URI in
+    /// the structured payload is the whole story.
+    fn resource_links(&self, envelope: &ResponseEnvelope) -> Vec<Content> {
+        let Some(output) = &envelope.output else {
+            return Vec::new();
+        };
+        output
+            .grants
+            .iter()
+            .chain(&output.listings)
+            .filter(|reference| {
+                !reference.uri.is_empty() && self.registry.has_reader(&reference.resource)
+            })
+            .map(|reference| {
+                Content::resource_link(RawResource::new(
+                    reference.uri.clone(),
+                    format!("{} {}", reference.resource, reference.id),
+                ))
+            })
+            .collect()
     }
 
     async fn run_tool_flow(
@@ -585,6 +615,25 @@ impl ServerHandler for CliMcpServer {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ReadResourceResult, rmcp::ErrorData> {
+        if let Some((decl, id)) = self.registry.match_resource_uri(&request.uri) {
+            let name = decl.name.clone();
+            let reader = self.registry.resource_reader(&name).ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    format!("Resource `{name}` does not support resources/read"),
+                    None,
+                )
+            })?;
+            let value = reader.read_erased(&id).await.map_err(|refusal| {
+                rmcp::ErrorData::invalid_params(
+                    format!("Cannot read {}: {}", request.uri, refusal.detail),
+                    None,
+                )
+            })?;
+            let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+            return Ok(ReadResourceResult::new(vec![
+                ResourceContents::text(text, request.uri).with_mime_type("application/json"),
+            ]));
+        }
         let text = if request.uri == "cli://lanes" {
             lanes_text(&self.execution_lanes())
         } else {
@@ -810,8 +859,8 @@ async fn issue_replay_record(
             single_use: true,
         };
         let mut replay = replay.lock().await;
-        if !replay.contains_key(&token) {
-            replay.insert(token, record.clone());
+        if let std::collections::btree_map::Entry::Vacant(entry) = replay.entry(token) {
+            entry.insert(record.clone());
             return record;
         }
     }
@@ -944,7 +993,7 @@ fn envelope_result(envelope: ResponseEnvelope) -> CallToolResult {
 
 fn success_result(envelope: ResponseEnvelope, profile: ResponseProfile) -> CallToolResult {
     if matches!(profile, ResponseProfile::Text) {
-        let text = envelope
+        let mut text = envelope
             .output
             .as_ref()
             .and_then(|output| {
@@ -956,6 +1005,19 @@ fn success_result(envelope: ResponseEnvelope, profile: ResponseProfile) -> CallT
                 })
             })
             .unwrap_or_else(|| envelope.display_text());
+        // Minted references survive the text projection: without a reader
+        // there is no resource_link content part, so this line is the only
+        // place the URI reaches a text-profile caller.
+        if let Some(output) = &envelope.output {
+            for reference in output.grants.iter().chain(&output.listings) {
+                if !reference.uri.is_empty() {
+                    text.push_str(&format!(
+                        "\n{}: {} ({})",
+                        reference.resource, reference.id, reference.uri
+                    ));
+                }
+            }
+        }
         return CallToolResult::success(vec![Content::text(text)]);
     }
     envelope_result(envelope)

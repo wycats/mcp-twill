@@ -47,14 +47,14 @@ pub enum FrameworkError {
         path: Option<String>,
         /// Resolver diagnostics explaining why the workspace failed to
         /// resolve, when resolution (rather than containment) failed.
-        diagnostics: Vec<mcp_workspace_resolver::WorkspaceDiagnostic>,
+        diagnostics: Box<[mcp_workspace_resolver::WorkspaceDiagnostic]>,
     },
     #[error("{}", workspace_unresolved_message(workspace, diagnostics))]
     WorkspaceUnresolved {
         /// The workspace the command declared with `uses_workspace`.
         workspace: String,
         /// Resolver diagnostics explaining why resolution failed.
-        diagnostics: Vec<mcp_workspace_resolver::WorkspaceDiagnostic>,
+        diagnostics: Box<[mcp_workspace_resolver::WorkspaceDiagnostic]>,
     },
     #[error("{}", capability_missing_message(capability, carrier, providers))]
     CapabilityMissing {
@@ -78,6 +78,22 @@ pub enum FrameworkError {
         /// Commands that establish the capability, filled in by the
         /// framework from `provides` declarations.
         providers: Vec<String>,
+    },
+    #[error("resource `{resource}` refused for `{reference}`: {detail}")]
+    ResourceRefused {
+        /// The declared resource whose reference did not resolve.
+        resource: String,
+        /// The reference as presented (bare id or URI).
+        reference: String,
+        /// The resolver's prose (stale lease, foreign tab, expired
+        /// session).
+        detail: String,
+        /// Commands that enumerate the resource, derived from handler
+        /// output types — the recovery path for lost references.
+        enumerate: Box<[String]>,
+        /// Commands that grant the resource, derived from handler output
+        /// types — the establishment path when nothing exists yet.
+        establish: Box<[String]>,
     },
     #[error("stdin mismatch: {0}")]
     StdinMismatch(String),

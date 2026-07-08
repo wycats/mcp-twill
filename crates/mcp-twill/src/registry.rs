@@ -51,6 +51,14 @@ pub struct CommandRegistry {
     duplicate_types: Vec<String>,
     capabilities: BTreeMap<String, crate::CapabilityDecl>,
     duplicate_capabilities: Vec<String>,
+    resources: BTreeMap<String, crate::ResourceDecl>,
+    duplicate_resources: Vec<String>,
+    /// Capability names derived from resource declarations. These skip the
+    /// provider/consumer capability rules; the resource rules (unpaired
+    /// grant, unenumerable grant) own those semantics.
+    resource_capabilities: BTreeSet<String>,
+    resolvers: BTreeMap<String, Arc<dyn crate::resource::ErasedResolver>>,
+    readers: BTreeMap<String, Arc<dyn crate::resource::ErasedReader>>,
     guidance: Vec<CommandGuidance>,
     policy: PermissionPolicy,
 }
@@ -73,6 +81,11 @@ impl CommandRegistry {
             duplicate_types: Vec::new(),
             capabilities: BTreeMap::new(),
             duplicate_capabilities: Vec::new(),
+            resources: BTreeMap::new(),
+            duplicate_resources: Vec::new(),
+            resource_capabilities: BTreeSet::new(),
+            resolvers: BTreeMap::new(),
+            readers: BTreeMap::new(),
             guidance: Vec::new(),
             policy: PermissionPolicy::default(),
         }
@@ -113,6 +126,74 @@ impl CommandRegistry {
         }
         self.capabilities.insert(decl.name.clone(), decl);
         self
+    }
+
+    /// Declares a server-held resource (RFC 0012). Lifecycle edges derive
+    /// from handler signatures, never from the declaration.
+    pub fn declare_resource(mut self, decl: crate::ResourceDecl) -> Self {
+        if self.resources.contains_key(&decl.name) {
+            self.duplicate_resources.push(decl.name.clone());
+        }
+        self.resources.insert(decl.name.clone(), decl);
+        self
+    }
+
+    /// Declares the capability derived from a resource declaration. The
+    /// derived capability keeps the RFC 0010 vocabulary and projections
+    /// working; the resource rules own its lifecycle semantics.
+    pub(crate) fn declare_derived_capability(mut self, decl: crate::CapabilityDecl) -> Self {
+        self.resource_capabilities.insert(decl.name.clone());
+        self.capabilities.insert(decl.name.clone(), decl);
+        self
+    }
+
+    /// Binds the resolver that turns references to `T` into live values.
+    pub fn with_resolver<T: crate::Resource>(
+        mut self,
+        resolver: impl crate::ResolveResource<T>,
+    ) -> Self {
+        self.resolvers.insert(
+            T::NAME.to_string(),
+            Arc::new(crate::resource::ResolverAdapter::new(resolver)),
+        );
+        self
+    }
+
+    /// Binds a reader for `T`, enabling `resources/read` and
+    /// `resource_link` emission for its grants on capable transports.
+    pub fn with_reader<T: crate::Resource>(mut self, reader: impl crate::ReadResource<T>) -> Self {
+        self.readers.insert(
+            T::NAME.to_string(),
+            Arc::new(crate::resource::ReaderAdapter::new(reader)),
+        );
+        self
+    }
+
+    pub fn resource_decls(&self) -> impl Iterator<Item = &crate::ResourceDecl> {
+        self.resources.values()
+    }
+
+    pub fn resource_decl(&self, name: &str) -> Option<&crate::ResourceDecl> {
+        self.resources.get(name)
+    }
+
+    pub fn has_reader(&self, resource: &str) -> bool {
+        self.readers.contains_key(resource)
+    }
+
+    pub(crate) fn resource_reader(
+        &self,
+        resource: &str,
+    ) -> Option<Arc<dyn crate::resource::ErasedReader>> {
+        self.readers.get(resource).cloned()
+    }
+
+    /// Matches a URI against every declared resource template, returning
+    /// the declaration and the extracted id.
+    pub fn match_resource_uri(&self, uri: &str) -> Option<(&crate::ResourceDecl, String)> {
+        self.resources
+            .values()
+            .find_map(|decl| decl.parse_uri(uri).map(|id| (decl, id.to_string())))
     }
 
     pub fn capabilities(&self) -> impl Iterator<Item = &crate::CapabilityDecl> {
@@ -182,9 +263,31 @@ impl CommandRegistry {
             workspaces: self.workspaces.values().cloned().collect(),
             types: self.types.values().cloned().collect(),
             capabilities: self.capabilities.values().cloned().collect(),
+            resources: self.resource_specs(),
             guidance: self.guidance.clone(),
             identity,
         }
+    }
+
+    /// Every declared resource with its derived lifecycle edges: who grants
+    /// it, who releases it, who enumerates it, who requires it.
+    pub fn resource_specs(&self) -> Vec<crate::ResourceSpec> {
+        self.resources
+            .values()
+            .map(|decl| crate::ResourceSpec {
+                name: decl.name.clone(),
+                summary: decl.summary.clone(),
+                uri: decl.uri.clone(),
+                carrier: decl.carrier_name(),
+                within: decl.within.clone(),
+                lifetime: decl.lifetime.clone(),
+                expiry: decl.expiry.clone(),
+                granted_by: self.resource_granters(&decl.name),
+                released_by: self.resource_releasers(&decl.name),
+                enumerated_by: self.resource_enumerators(&decl.name),
+                required_by: self.resource_requirers(&decl.name),
+            })
+            .collect()
     }
 
     fn server_spec(&self) -> ServerSpec {
@@ -216,6 +319,7 @@ impl CommandRegistry {
             "workspaces": self.workspaces.values().collect::<Vec<_>>(),
             "types": self.types.values().collect::<Vec<_>>(),
             "capabilities": self.capabilities.values().collect::<Vec<_>>(),
+            "resources": self.resource_specs(),
             "guidance": self.guidance,
         });
         let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
@@ -332,7 +436,9 @@ impl CommandRegistry {
     /// Validates capability declarations: every `requires`/`provides` name
     /// must match a declared capability, a requiring command must carry the
     /// capability's carrier as a required argument, and every capability
-    /// needs both a provider and a consumer.
+    /// needs both a provider and a consumer. Capabilities derived from
+    /// resource declarations skip the provider/consumer rules; the resource
+    /// rules (unpaired grant, unenumerable grant) own those semantics.
     pub fn validate_capabilities(&self) -> Result<()> {
         if let Some(name) = self.duplicate_capabilities.first() {
             return Err(FrameworkError::Build(format!(
@@ -402,6 +508,9 @@ impl CommandRegistry {
             }
         }
         for capability in self.capabilities.values() {
+            if self.resource_capabilities.contains(&capability.name) {
+                continue;
+            }
             if self.capability_providers(&capability.name).is_empty() {
                 return Err(FrameworkError::Build(format!(
                     "capability `{}` has no providing command; declare `provides` on the command that establishes it",
@@ -466,6 +575,216 @@ impl CommandRegistry {
             .collect()
     }
 
+    /// Commands that grant references to a resource, derived from handler
+    /// output types.
+    pub fn resource_granters(&self, resource: &str) -> Vec<String> {
+        self.commands_where(|spec| spec.grants.iter().any(|name| name == resource))
+    }
+
+    /// Commands that release a resource, derived from handler signatures.
+    pub fn resource_releasers(&self, resource: &str) -> Vec<String> {
+        self.commands_where(|spec| spec.releases.iter().any(|name| name == resource))
+    }
+
+    /// Commands that enumerate a resource, derived from handler output
+    /// types. Enumeration is the recovery path: an agent that lost a
+    /// reference re-asks the server instead of remembering.
+    pub fn resource_enumerators(&self, resource: &str) -> Vec<String> {
+        self.commands_where(|spec| spec.enumerates.iter().any(|name| name == resource))
+    }
+
+    /// Commands that require a live reference to a resource, derived from
+    /// handler signatures.
+    pub fn resource_requirers(&self, resource: &str) -> Vec<String> {
+        self.commands_where(|spec| spec.requires_resources.iter().any(|name| name == resource))
+    }
+
+    fn commands_where(&self, matches: impl Fn(&CommandSpec) -> bool) -> Vec<String> {
+        self.commands
+            .values()
+            .filter(|command| matches(&command.spec))
+            .map(|command| command.spec.name())
+            .collect()
+    }
+
+    /// Validates resource declarations against every RFC 0012 registration
+    /// rule: well-formed unique URI templates, resolvable `within` scoping
+    /// with no cycles, no derived-name collisions, signatures referencing
+    /// only declared resources, resolvers bound where required, no unpaired
+    /// grants, and no unenumerable scoped grants.
+    pub fn validate_resources(&self) -> Result<()> {
+        if let Some(name) = self.duplicate_resources.first() {
+            return Err(FrameworkError::Build(format!(
+                "resource `{name}` is declared more than once"
+            )));
+        }
+        for decl in self.resources.values() {
+            if decl.summary.trim().is_empty() {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` is missing a summary",
+                    decl.name
+                )));
+            }
+            if decl.uri_parts().is_none() {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` URI template `{}` must contain exactly one `{{id}}` slot",
+                    decl.name, decl.uri
+                )));
+            }
+            // Minted references travel bare through MCP content and agent
+            // context; a template without a scheme mints relative strings
+            // that nothing can route back to this server.
+            if !crate::model::template_has_scheme(&decl.uri) {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` URI template `{}` must be an absolute URI with a scheme (like `app://{{id}}`)",
+                    decl.name, decl.uri
+                )));
+            }
+            for other in self.resources.values() {
+                if other.name != decl.name && other.uri == decl.uri {
+                    return Err(FrameworkError::Build(format!(
+                        "resources `{}` and `{}` declare the same URI template `{}`",
+                        decl.name.clone().min(other.name.clone()),
+                        decl.name.clone().max(other.name.clone()),
+                        decl.uri
+                    )));
+                }
+                // Distinct templates can still mint colliding URIs (like
+                // `x://{id}/bar` + `x://foo/{id}`); reads of such a URI
+                // would route by map order, so refuse the pair up front.
+                if other.name != decl.name
+                    && other.uri != decl.uri
+                    && crate::model::templates_overlap(decl, other)
+                {
+                    let (first, second) = if decl.name < other.name {
+                        (decl, other)
+                    } else {
+                        (other, decl)
+                    };
+                    return Err(FrameworkError::Build(format!(
+                        "resources `{}` (`{}`) and `{}` (`{}`) have URI templates that can mint the same URI; templates must not overlap",
+                        first.name, first.uri, second.name, second.uri
+                    )));
+                }
+            }
+            if let Some(within) = &decl.within {
+                if within == &decl.name {
+                    return Err(FrameworkError::Build(format!(
+                        "resource `{}` is scoped within itself",
+                        decl.name
+                    )));
+                }
+                if !self.resources.contains_key(within) {
+                    return Err(FrameworkError::Build(format!(
+                        "resource `{}` is scoped within `{within}`, which is not a declared resource",
+                        decl.name
+                    )));
+                }
+            }
+            // Derived names collide with hand declarations: the resource
+            // owns `{name}` (capability) and `{name}-ref` (type); the fix
+            // is to delete the hand-written declaration.
+            if self.types.contains_key(&decl.reference_type_name()) {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` derives reference type `{}`, which is also declared with `declare_type`; the resource owns that name",
+                    decl.name,
+                    decl.reference_type_name()
+                )));
+            }
+            if self.capabilities.contains_key(&decl.name)
+                && !self.resource_capabilities.contains(&decl.name)
+            {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` derives capability `{}`, which is also declared with `declare_capability`; the resource owns that name",
+                    decl.name, decl.name
+                )));
+            }
+        }
+        // `within` cycles.
+        for start in self.resources.keys() {
+            let mut current = start.as_str();
+            let mut hops = 0;
+            while let Some(within) = self
+                .resources
+                .get(current)
+                .and_then(|decl| decl.within.as_deref())
+            {
+                hops += 1;
+                if within == start || hops > self.resources.len() {
+                    return Err(FrameworkError::Build(format!(
+                        "resource scoping cycle through `{start}`; `within` must form a tree"
+                    )));
+                }
+                current = within;
+            }
+        }
+        for command in self.commands.values() {
+            let name = command.spec.name();
+            let signature_resources = command
+                .spec
+                .requires_resources
+                .iter()
+                .chain(&command.spec.grants)
+                .chain(&command.spec.releases)
+                .chain(&command.spec.enumerates);
+            for resource in signature_resources {
+                if !self.resources.contains_key(resource) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` references resource `{resource}` in its handler signature, which is not declared on the server"
+                    )));
+                }
+            }
+            for resource in command
+                .spec
+                .requires_resources
+                .iter()
+                .chain(&command.spec.releases)
+            {
+                if !self.resolvers.contains_key(resource) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` requires resource `{resource}`, which has no bound resolver; bind one with `resolver`"
+                    )));
+                }
+            }
+        }
+        for decl in self.resources.values() {
+            let granters = self.resource_granters(&decl.name);
+            if granters.is_empty() {
+                continue;
+            }
+            // The stewardship rule as structure: an unpaired acquisition is
+            // undeclarable. A releasing command or a declared expiry names
+            // the owner whose drop revokes the grant.
+            if self.resource_releasers(&decl.name).is_empty() && decl.expiry.is_none() {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` is granted by {} but no command releases it and no `expiry` retires it; an acquisition must name its release path",
+                    decl.name,
+                    granters
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+            // Enumeration-as-recovery is mandatory for scoped resources.
+            // Root resources are exempt: enumerating a lost session would
+            // require the very scope that was lost, so their recovery edge
+            // is the establishing command.
+            if decl.within.is_some() && self.resource_enumerators(&decl.name).is_empty() {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` is granted by {} but no command enumerates it; a scoped resource must be recoverable by re-asking the server",
+                    decl.name,
+                    granters
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// One help line for a capability: summary, carrier argument, and the
     /// commands that establish it, all derived from declarations.
     fn capability_help_line(&self, capability: &str) -> String {
@@ -489,6 +808,60 @@ impl CommandRegistry {
             "`{}`: {} (carried by `{}`{establish})",
             decl.name, decl.summary, decl.carrier
         )
+    }
+
+    /// One help line for a required resource: summary and the derived
+    /// recovery edge — the enumerator for scoped resources, the granting
+    /// commands otherwise.
+    fn resource_requirement_line(&self, resource: &str) -> String {
+        let Some(decl) = self.resources.get(resource) else {
+            return format!("- `{resource}`");
+        };
+        let enumerators = self.resource_enumerators(resource);
+        let recover = if enumerators.is_empty() {
+            let granters = self.resource_granters(resource);
+            if granters.is_empty() {
+                String::new()
+            } else {
+                format!(" Establish with {}.", backticked_list(&granters))
+            }
+        } else {
+            format!(" Recover with {}.", backticked_list(&enumerators))
+        };
+        format!(
+            "- a live `{}` — {} (carried by `{}`).{recover}",
+            decl.name,
+            decl.summary,
+            decl.carrier_name()
+        )
+    }
+
+    /// One help line for a granted resource: URI template, validity prose,
+    /// enumerator, and releasers — all derived.
+    fn resource_grant_line(&self, resource: &str) -> String {
+        let Some(decl) = self.resources.get(resource) else {
+            return format!("- `{resource}`");
+        };
+        let mut line = format!("- `{}` ({})", decl.name, decl.uri);
+        if let Some(lifetime) = &decl.lifetime {
+            line.push_str(&format!(" — {lifetime}"));
+        }
+        line.push('.');
+        let enumerators = self.resource_enumerators(resource);
+        if !enumerators.is_empty() {
+            line.push_str(&format!(
+                " Enumerate with {}.",
+                backticked_list(&enumerators)
+            ));
+        }
+        let releasers = self.resource_releasers(resource);
+        if !releasers.is_empty() {
+            line.push_str(&format!(" Release with {}.", backticked_list(&releasers)));
+        }
+        if let Some(expiry) = &decl.expiry {
+            line.push_str(&format!(" Expiry: {expiry}."));
+        }
+        line
     }
 
     /// Fills in the carrier argument and establishing commands on a
@@ -557,6 +930,20 @@ impl CommandRegistry {
                         object.insert("description".into(), json!(arg.summary));
                     }
                     schema
+                }
+                crate::ArgType::ResourceRef(resource) => {
+                    let template = self
+                        .resources
+                        .get(resource)
+                        .map(|decl| decl.uri.as_str())
+                        .unwrap_or_default();
+                    json!({
+                        "type": "string",
+                        "description": format!(
+                            "{} Accepts a bare id or the full URI ({template}).",
+                            arg.summary
+                        ),
+                    })
                 }
             };
             let schema = if arg.repeated {
@@ -869,6 +1256,27 @@ impl CommandRegistry {
             }
         }
 
+        // Signature-required resources bind through their carrier argument.
+        // A missing carrier is a capability failure with derived recovery
+        // edges, not a generic missing argument.
+        for resource_name in registered
+            .spec
+            .requires_resources
+            .iter()
+            .chain(&registered.spec.releases)
+        {
+            let Some(resource) = self.resources.get(resource_name) else {
+                continue;
+            };
+            if !request.args.contains_key(&resource.carrier_name()) {
+                return Err(FrameworkError::CapabilityMissing {
+                    capability: resource.name.clone(),
+                    carrier: resource.carrier_name(),
+                    providers: self.resource_granters(&resource.name),
+                });
+            }
+        }
+
         for arg_name in &referenced {
             if !request.args.contains_key(arg_name) {
                 return Err(FrameworkError::MissingArgument(arg_name.clone()));
@@ -892,7 +1300,7 @@ impl CommandRegistry {
                         workspace: workspace_name.clone(),
                         selected_root: None,
                         path: None,
-                        diagnostics: Vec::new(),
+                        diagnostics: Box::new([]),
                     });
                 }
                 let value = value.as_str().ok_or_else(|| {
@@ -938,13 +1346,13 @@ impl CommandRegistry {
                             workspace: workspace_name.clone(),
                             selected_root: Some(root.root_uri.clone()),
                             path: Some(value.to_string()),
-                            diagnostics: vec![
+                            diagnostics: Box::new([
                                 mcp_workspace_resolver::WorkspaceDiagnostic::unsupported_scheme(
                                     Some(workspace_id.clone()),
                                     err.to_string(),
                                     value.to_string(),
                                 ),
-                            ],
+                            ]),
                         });
                     }
                     (Err(_), _) => false,
@@ -955,7 +1363,7 @@ impl CommandRegistry {
                         workspace: workspace_name.clone(),
                         selected_root: Some(root.root_uri.clone()),
                         path: Some(value.to_string()),
-                        diagnostics: Vec::new(),
+                        diagnostics: Box::new([]),
                     });
                 }
                 used_workspaces.insert(workspace_name.clone());
@@ -1150,15 +1558,15 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
     ) -> Result<RunResponse> {
         let plan = self.build_plan_with_workspaces(&request, resolved)?;
-        if let Some(current_lane) = current_lane {
-            if plan.lane != current_lane {
-                let required_tool = self
-                    .required_tool_name(primary_tool_name.as_deref().unwrap_or("run"), plan.lane);
-                return Err(FrameworkError::WrongEffectLane {
-                    current_tool: current_tool.unwrap_or_else(|| current_lane.tool_name("run")),
-                    required_tool,
-                });
-            }
+        if let Some(current_lane) = current_lane
+            && plan.lane != current_lane
+        {
+            let required_tool =
+                self.required_tool_name(primary_tool_name.as_deref().unwrap_or("run"), plan.lane);
+            return Err(FrameworkError::WrongEffectLane {
+                current_tool: current_tool.unwrap_or_else(|| current_lane.tool_name("run")),
+                required_tool,
+            });
         }
 
         if matches!(request.effective_mode(), crate::RunMode::DryRun) {
@@ -1177,21 +1585,113 @@ impl CommandRegistry {
             }
         })?;
 
+        let resources = self
+            .resolve_signature_resources(&registered.spec, &plan)
+            .await?;
+
         let output = registered
             .handler
             .call(CommandContext {
                 plan: plan.clone(),
                 stdin: request.stdin,
+                resources,
             })
             .await
-            .map_err(|error| self.enrich_capability_denied(error))?
-            .apply_output_spec(&plan.output);
+            .map_err(|error| self.enrich_capability_denied(error))?;
+        let output = self.mint_output_references(&registered.spec, output)?;
+        let output = output.apply_output_spec(&plan.output);
 
         Ok(RunResponse {
             plan,
             output: Some(output),
             dry_run: false,
         })
+    }
+
+    /// Resolves every resource the handler signature requires or releases,
+    /// reading the reference from the carrier argument, normalizing URI to
+    /// id, and asking the bound resolver. A refusal short-circuits with
+    /// derived recovery edges; the handler body never runs.
+    async fn resolve_signature_resources(
+        &self,
+        spec: &CommandSpec,
+        plan: &InvocationPlan,
+    ) -> Result<crate::ResolvedResources> {
+        let mut resolved = crate::ResolvedResources::default();
+        for resource_name in spec.requires_resources.iter().chain(&spec.releases) {
+            let decl = self.resources.get(resource_name).ok_or_else(|| {
+                FrameworkError::Build(format!(
+                    "resource `{resource_name}` is not declared on the server"
+                ))
+            })?;
+            let resolver = self.resolvers.get(resource_name).ok_or_else(|| {
+                FrameworkError::Build(format!("resource `{resource_name}` has no bound resolver"))
+            })?;
+            let carrier = decl.carrier_name();
+            let reference = plan
+                .bound_args
+                .get(&carrier)
+                .and_then(|arg| arg.value.as_str())
+                .ok_or_else(|| FrameworkError::CapabilityMissing {
+                    capability: decl.name.clone(),
+                    carrier: carrier.clone(),
+                    providers: self.resource_granters(&decl.name),
+                })?;
+            let id = decl.normalize_reference(reference);
+            match resolver.resolve_erased(id, plan).await {
+                Ok(value) => resolved.insert(decl.name.clone(), value),
+                Err(refusal) => {
+                    return Err(FrameworkError::ResourceRefused {
+                        resource: decl.name.clone(),
+                        reference: reference.to_string(),
+                        detail: refusal.detail,
+                        enumerate: self.resource_enumerators(&decl.name).into(),
+                        establish: self.resource_granters(&decl.name).into(),
+                    });
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// Mints URIs for the references the handler granted or enumerated,
+    /// from the declared template. Grant ids that would not round-trip are
+    /// refused here — mint time, before the reference escapes. References
+    /// outside the command's signature-derived edges are refused too:
+    /// `CommandOutput.grants`/`listings` are public, and a hand-populated
+    /// vector must not bypass the catalog graph.
+    fn mint_output_references(
+        &self,
+        spec: &CommandSpec,
+        mut output: CommandOutput,
+    ) -> Result<CommandOutput> {
+        let command = spec.name();
+        for (reference, edge, declared) in output
+            .grants
+            .iter_mut()
+            .map(|reference| (reference, "grant", &spec.grants))
+            .chain(
+                output
+                    .listings
+                    .iter_mut()
+                    .map(|reference| (reference, "listing", &spec.enumerates)),
+            )
+        {
+            if !declared.contains(&reference.resource) {
+                return Err(FrameworkError::Handler(format!(
+                    "command `{command}` emitted a {edge} for resource `{}`, which its signature does not declare; emit resources through `Grant`/`Listing` outputs so the edge is part of the catalog",
+                    reference.resource
+                )));
+            }
+            let decl = self.resources.get(&reference.resource).ok_or_else(|| {
+                FrameworkError::Handler(format!(
+                    "command `{command}` emitted a reference to resource `{}`, which is not declared on the server",
+                    reference.resource
+                ))
+            })?;
+            reference.uri = decl.mint_uri(&reference.id)?;
+        }
+        Ok(output)
     }
 
     pub fn help(&self, request: HelpRequest) -> HelpResult {
@@ -1301,6 +1801,42 @@ impl CommandRegistry {
             lines.push("Capabilities:".to_string());
             for name in self.capabilities.keys() {
                 lines.push(format!("- {}", self.capability_help_line(name)));
+            }
+        }
+
+        if !self.resources.is_empty() {
+            lines.push(String::new());
+            lines.push("Resources:".to_string());
+            for spec in self.resource_specs() {
+                let mut line = format!("- `{}` ({}): {}", spec.name, spec.uri, spec.summary);
+                if let Some(within) = &spec.within {
+                    line.push_str(&format!(" Scoped within `{within}`."));
+                }
+                if let Some(lifetime) = &spec.lifetime {
+                    line.push_str(&format!(" Lifetime: {lifetime}."));
+                }
+                if let Some(expiry) = &spec.expiry {
+                    line.push_str(&format!(" Expiry: {expiry}."));
+                }
+                lines.push(line);
+                if !spec.granted_by.is_empty() {
+                    lines.push(format!(
+                        "  granted by {}",
+                        backticked_list(&spec.granted_by)
+                    ));
+                }
+                if !spec.enumerated_by.is_empty() {
+                    lines.push(format!(
+                        "  enumerated by {}",
+                        backticked_list(&spec.enumerated_by)
+                    ));
+                }
+                if !spec.released_by.is_empty() {
+                    lines.push(format!(
+                        "  released by {}",
+                        backticked_list(&spec.released_by)
+                    ));
+                }
             }
         }
 
@@ -1466,6 +2002,46 @@ impl CommandRegistry {
             }
             sections.push(lines.join("\n"));
         }
+        if !spec.requires_resources.is_empty() {
+            let mut lines = vec!["Requires resources:".to_string()];
+            for name in &spec.requires_resources {
+                lines.push(self.resource_requirement_line(name));
+            }
+            sections.push(lines.join("\n"));
+        }
+        if !spec.grants.is_empty() {
+            let mut lines = vec!["Grants:".to_string()];
+            for name in &spec.grants {
+                lines.push(self.resource_grant_line(name));
+            }
+            sections.push(lines.join("\n"));
+        }
+        if !spec.releases.is_empty() {
+            let mut lines = vec!["Releases:".to_string()];
+            for name in &spec.releases {
+                let summary = self
+                    .resources
+                    .get(name)
+                    .map(|decl| format!(" — {}", decl.summary))
+                    .unwrap_or_default();
+                lines.push(format!("- `{name}`{summary}"));
+            }
+            sections.push(lines.join("\n"));
+        }
+        if !spec.enumerates.is_empty() {
+            let mut lines = vec!["Enumerates:".to_string()];
+            for name in &spec.enumerates {
+                let summary = self
+                    .resources
+                    .get(name)
+                    .map(|decl| format!(" — {}", decl.summary))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "- `{name}`{summary} (the recovery path for lost references)"
+                ));
+            }
+            sections.push(lines.join("\n"));
+        }
         if !spec.provides.is_empty() {
             let mut lines = vec!["Provides:".to_string()];
             for name in &spec.provides {
@@ -1598,6 +2174,14 @@ impl CommandRegistry {
     }
 }
 
+fn backticked_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Walks the fallback-preference graph looking for a cycle. Two escape
 /// hatches preferring each other describe no ladder; registration rejects
 /// the pair.
@@ -1629,9 +2213,7 @@ fn find_fallback_cycle<'a>(
 
 fn lane_description(primary_tool_name: &str, lane: EffectLane) -> String {
     match lane {
-        EffectLane::Primary => format!(
-            "Primary execution tool. Start here for all command templates; the framework returns structured retry data when another effect lane is required."
-        ),
+        EffectLane::Primary => "Primary execution tool. Start here for all command templates; the framework returns structured retry data when another effect lane is required.".to_string(),
         EffectLane::Write => format!(
             "Write execution lane. Use this tool when `{primary_tool_name}` returns structured retry data requiring this lane."
         ),

@@ -251,6 +251,22 @@ pub struct OperationSpec {
     /// unless the stated condition holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<Fallback>,
+    /// Resources this command requires live references to (derived from
+    /// the handler signature).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_resources: Vec<String>,
+    /// Resources this command grants references to (derived from the
+    /// handler output type).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<String>,
+    /// Resources this command releases (derived from the handler
+    /// signature).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<String>,
+    /// Resources this command enumerates (derived from the handler output
+    /// type).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enumerates: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<CommandExample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -280,6 +296,10 @@ impl OperationSpec {
             use_when: spec.use_when.clone(),
             alternatives: spec.alternatives.clone(),
             fallback: spec.fallback.clone(),
+            requires_resources: spec.requires_resources.clone(),
+            grants: spec.grants.clone(),
+            releases: spec.releases.clone(),
+            enumerates: spec.enumerates.clone(),
             examples: spec.examples.clone(),
             progress: spec.progress.clone(),
             idempotent: spec.idempotent,
@@ -305,6 +325,32 @@ pub struct CatalogIdentity {
     pub help_schema_hash: String,
 }
 
+/// A declared resource projected into the catalog with its derived
+/// lifecycle edges (RFC 0012). The edges come from handler signatures;
+/// the declaration carries identity, scope, and validity prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSpec {
+    pub name: String,
+    pub summary: String,
+    pub uri: String,
+    pub carrier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expiry: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub granted_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub released_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enumerated_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_by: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandCatalog {
@@ -320,6 +366,8 @@ pub struct CommandCatalog {
     pub types: Vec<TypeDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<CapabilityDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<ResourceSpec>,
     pub identity: CatalogIdentity,
 }
 
