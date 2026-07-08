@@ -50,6 +50,7 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 - [RFC 0010: Declared Preconditions](stage-0/0010-declared-preconditions.md)
 - [RFC 0011: Guidance Decomposition](stage-0/0011-guidance-decomposition.md)
 - [RFC 0012: First-Class Resources](stage-4/0012-first-class-resources.md)
+- [RFC 0013: Conversation Identity Request Context](stage-0/0013-conversation-identity-request-context.md)
 
 ## Suggested Implementation Order
 
