@@ -859,8 +859,8 @@ async fn issue_replay_record(
             single_use: true,
         };
         let mut replay = replay.lock().await;
-        if !replay.contains_key(&token) {
-            replay.insert(token, record.clone());
+        if let std::collections::btree_map::Entry::Vacant(entry) = replay.entry(token) {
+            entry.insert(record.clone());
             return record;
         }
     }
@@ -993,7 +993,7 @@ fn envelope_result(envelope: ResponseEnvelope) -> CallToolResult {
 
 fn success_result(envelope: ResponseEnvelope, profile: ResponseProfile) -> CallToolResult {
     if matches!(profile, ResponseProfile::Text) {
-        let text = envelope
+        let mut text = envelope
             .output
             .as_ref()
             .and_then(|output| {
@@ -1005,6 +1005,19 @@ fn success_result(envelope: ResponseEnvelope, profile: ResponseProfile) -> CallT
                 })
             })
             .unwrap_or_else(|| envelope.display_text());
+        // Minted references survive the text projection: without a reader
+        // there is no resource_link content part, so this line is the only
+        // place the URI reaches a text-profile caller.
+        if let Some(output) = &envelope.output {
+            for reference in output.grants.iter().chain(&output.listings) {
+                if !reference.uri.is_empty() {
+                    text.push_str(&format!(
+                        "\n{}: {} ({})",
+                        reference.resource, reference.id, reference.uri
+                    ));
+                }
+            }
+        }
         return CallToolResult::success(vec![Content::text(text)]);
     }
     envelope_result(envelope)

@@ -631,6 +631,15 @@ impl CommandRegistry {
                     decl.name, decl.uri
                 )));
             }
+            // Minted references travel bare through MCP content and agent
+            // context; a template without a scheme mints relative strings
+            // that nothing can route back to this server.
+            if !crate::model::template_has_scheme(&decl.uri) {
+                return Err(FrameworkError::Build(format!(
+                    "resource `{}` URI template `{}` must be an absolute URI with a scheme (like `app://{{id}}`)",
+                    decl.name, decl.uri
+                )));
+            }
             for other in self.resources.values() {
                 if other.name != decl.name && other.uri == decl.uri {
                     return Err(FrameworkError::Build(format!(
@@ -638,6 +647,23 @@ impl CommandRegistry {
                         decl.name.clone().min(other.name.clone()),
                         decl.name.clone().max(other.name.clone()),
                         decl.uri
+                    )));
+                }
+                // Distinct templates can still mint colliding URIs (like
+                // `x://{id}/bar` + `x://foo/{id}`); reads of such a URI
+                // would route by map order, so refuse the pair up front.
+                if other.name != decl.name
+                    && other.uri != decl.uri
+                    && crate::model::templates_overlap(decl, other)
+                {
+                    let (first, second) = if decl.name < other.name {
+                        (decl, other)
+                    } else {
+                        (other, decl)
+                    };
+                    return Err(FrameworkError::Build(format!(
+                        "resources `{}` (`{}`) and `{}` (`{}`) have URI templates that can mint the same URI; templates must not overlap",
+                        first.name, first.uri, second.name, second.uri
                     )));
                 }
             }
@@ -1274,7 +1300,7 @@ impl CommandRegistry {
                         workspace: workspace_name.clone(),
                         selected_root: None,
                         path: None,
-                        diagnostics: Vec::new(),
+                        diagnostics: Box::new([]),
                     });
                 }
                 let value = value.as_str().ok_or_else(|| {
@@ -1320,13 +1346,13 @@ impl CommandRegistry {
                             workspace: workspace_name.clone(),
                             selected_root: Some(root.root_uri.clone()),
                             path: Some(value.to_string()),
-                            diagnostics: vec![
+                            diagnostics: Box::new([
                                 mcp_workspace_resolver::WorkspaceDiagnostic::unsupported_scheme(
                                     Some(workspace_id.clone()),
                                     err.to_string(),
                                     value.to_string(),
                                 ),
-                            ],
+                            ]),
                         });
                     }
                     (Err(_), _) => false,
@@ -1337,7 +1363,7 @@ impl CommandRegistry {
                         workspace: workspace_name.clone(),
                         selected_root: Some(root.root_uri.clone()),
                         path: Some(value.to_string()),
-                        diagnostics: Vec::new(),
+                        diagnostics: Box::new([]),
                     });
                 }
                 used_workspaces.insert(workspace_name.clone());
@@ -1532,15 +1558,15 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
     ) -> Result<RunResponse> {
         let plan = self.build_plan_with_workspaces(&request, resolved)?;
-        if let Some(current_lane) = current_lane {
-            if plan.lane != current_lane {
-                let required_tool = self
-                    .required_tool_name(primary_tool_name.as_deref().unwrap_or("run"), plan.lane);
-                return Err(FrameworkError::WrongEffectLane {
-                    current_tool: current_tool.unwrap_or_else(|| current_lane.tool_name("run")),
-                    required_tool,
-                });
-            }
+        if let Some(current_lane) = current_lane
+            && plan.lane != current_lane
+        {
+            let required_tool =
+                self.required_tool_name(primary_tool_name.as_deref().unwrap_or("run"), plan.lane);
+            return Err(FrameworkError::WrongEffectLane {
+                current_tool: current_tool.unwrap_or_else(|| current_lane.tool_name("run")),
+                required_tool,
+            });
         }
 
         if matches!(request.effective_mode(), crate::RunMode::DryRun) {
@@ -1619,8 +1645,8 @@ impl CommandRegistry {
                         resource: decl.name.clone(),
                         reference: reference.to_string(),
                         detail: refusal.detail,
-                        enumerate: self.resource_enumerators(&decl.name),
-                        establish: self.resource_granters(&decl.name),
+                        enumerate: self.resource_enumerators(&decl.name).into(),
+                        establish: self.resource_granters(&decl.name).into(),
                     });
                 }
             }
@@ -1630,14 +1656,33 @@ impl CommandRegistry {
 
     /// Mints URIs for the references the handler granted or enumerated,
     /// from the declared template. Grant ids that would not round-trip are
-    /// refused here — mint time, before the reference escapes.
+    /// refused here — mint time, before the reference escapes. References
+    /// outside the command's signature-derived edges are refused too:
+    /// `CommandOutput.grants`/`listings` are public, and a hand-populated
+    /// vector must not bypass the catalog graph.
     fn mint_output_references(
         &self,
         spec: &CommandSpec,
         mut output: CommandOutput,
     ) -> Result<CommandOutput> {
         let command = spec.name();
-        for reference in output.grants.iter_mut().chain(output.listings.iter_mut()) {
+        for (reference, edge, declared) in output
+            .grants
+            .iter_mut()
+            .map(|reference| (reference, "grant", &spec.grants))
+            .chain(
+                output
+                    .listings
+                    .iter_mut()
+                    .map(|reference| (reference, "listing", &spec.enumerates)),
+            )
+        {
+            if !declared.contains(&reference.resource) {
+                return Err(FrameworkError::Handler(format!(
+                    "command `{command}` emitted a {edge} for resource `{}`, which its signature does not declare; emit resources through `Grant`/`Listing` outputs so the edge is part of the catalog",
+                    reference.resource
+                )));
+            }
             let decl = self.resources.get(&reference.resource).ok_or_else(|| {
                 FrameworkError::Handler(format!(
                     "command `{command}` emitted a reference to resource `{}`, which is not declared on the server",
@@ -2168,9 +2213,7 @@ fn find_fallback_cycle<'a>(
 
 fn lane_description(primary_tool_name: &str, lane: EffectLane) -> String {
     match lane {
-        EffectLane::Primary => format!(
-            "Primary execution tool. Start here for all command templates; the framework returns structured retry data when another effect lane is required."
-        ),
+        EffectLane::Primary => "Primary execution tool. Start here for all command templates; the framework returns structured retry data when another effect lane is required.".to_string(),
         EffectLane::Write => format!(
             "Write execution lane. Use this tool when `{primary_tool_name}` returns structured retry data requiring this lane."
         ),

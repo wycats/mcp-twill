@@ -195,7 +195,7 @@ impl ServerBuilder {
             return Err(error);
         }
 
-        self.project_resource_signatures();
+        self.project_resource_signatures()?;
 
         let mut registry = CommandRegistry::new(self.name, self.description);
         if let Some(preamble) = self.preamble.take() {
@@ -250,7 +250,7 @@ impl ServerBuilder {
     /// as a required carrier argument of the derived reference type, and a
     /// hand-written capability edge repeating a signature-derived fact
     /// deduplicates to the derived one.
-    fn project_resource_signatures(&mut self) {
+    fn project_resource_signatures(&mut self) -> Result<()> {
         let decls = self
             .resources
             .iter()
@@ -275,19 +275,28 @@ impl ServerBuilder {
                     continue;
                 };
                 let carrier = decl.carrier_name();
-                if !spec.args.iter().any(|arg| arg.name == carrier) {
-                    spec.args.push(ArgSpec {
-                        name: carrier,
-                        value_type: ArgType::ResourceRef(resource.clone()),
-                        required: true,
-                        summary: format!(
-                            "The `{}` to operate on; accepts a bare id or its URI.",
-                            decl.name
-                        ),
-                        workspace: None,
-                        repeated: false,
-                    });
+                // A hand-written argument under the carrier name would
+                // shadow the injected one with a different type or
+                // optionality, so the advertised schema would drift from
+                // the signature-derived requirement.
+                if spec.args.iter().any(|arg| arg.name == carrier) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` hand-declares argument `{carrier}`, which is the injected carrier for resource `{}`; remove the argument or rename the carrier with `carrier` on the resource declaration",
+                        spec.name(),
+                        decl.name
+                    )));
                 }
+                spec.args.push(ArgSpec {
+                    name: carrier,
+                    value_type: ArgType::ResourceRef(resource.clone()),
+                    required: true,
+                    summary: format!(
+                        "The `{}` to operate on; accepts a bare id or its URI.",
+                        decl.name
+                    ),
+                    workspace: None,
+                    repeated: false,
+                });
             }
             let covered_requires = spec
                 .requires_resources
@@ -307,6 +316,7 @@ impl ServerBuilder {
             spec.provides
                 .retain(|capability| !covered_provides.contains(capability));
         }
+        Ok(())
     }
 }
 
@@ -601,13 +611,13 @@ impl CommandBuilder {
                     arg.name
                 )));
             }
-            if let Some(workspace) = &arg.workspace {
-                if !workspace_names.contains(workspace.as_str()) {
-                    return Err(FrameworkError::Build(format!(
-                        "command `{command_name}` argument `{}` references unknown workspace `{workspace}`",
-                        arg.name
-                    )));
-                }
+            if let Some(workspace) = &arg.workspace
+                && !workspace_names.contains(workspace.as_str())
+            {
+                return Err(FrameworkError::Build(format!(
+                    "command `{command_name}` argument `{}` references unknown workspace `{workspace}`",
+                    arg.name
+                )));
             }
         }
 

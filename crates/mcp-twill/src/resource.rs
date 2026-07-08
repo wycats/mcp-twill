@@ -275,15 +275,27 @@ impl<P: ResourceParam> ResourceParams for P {
     }
 }
 
-impl<P1: ResourceParam, P2: ResourceParam> ResourceParams for (P1, P2) {
-    fn resource_uses() -> Vec<ResourceUse> {
-        vec![P1::resource_use(), P2::resource_use()]
-    }
+macro_rules! impl_resource_params_for_tuple {
+    ($($param:ident),+) => {
+        impl<$($param: ResourceParam),+> ResourceParams for ($($param,)+) {
+            fn resource_uses() -> Vec<ResourceUse> {
+                vec![$($param::resource_use()),+]
+            }
 
-    fn extract(context: &CommandContext) -> Result<Self> {
-        Ok((P1::extract(context)?, P2::extract(context)?))
-    }
+            fn extract(context: &CommandContext) -> Result<Self> {
+                Ok(($($param::extract(context)?,)+))
+            }
+        }
+    };
 }
+
+impl_resource_params_for_tuple!(P1, P2);
+impl_resource_params_for_tuple!(P1, P2, P3);
+impl_resource_params_for_tuple!(P1, P2, P3, P4);
+impl_resource_params_for_tuple!(P1, P2, P3, P4, P5);
+impl_resource_params_for_tuple!(P1, P2, P3, P4, P5, P6);
+impl_resource_params_for_tuple!(P1, P2, P3, P4, P5, P6, P7);
+impl_resource_params_for_tuple!(P1, P2, P3, P4, P5, P6, P7, P8);
 
 /// A minted reference this call grants. Attaching one to a `CommandOutput`
 /// moves the output into a type that names the resource, so the grant edge
@@ -419,7 +431,7 @@ impl<T: Resource> ResourceOutput for Listed<T> {
 /// Marker types disambiguating the supported handler shapes. Inferred,
 /// never written by authors.
 pub struct WithResources<P, O>(PhantomData<fn() -> (P, O)>);
-pub struct WithResourcesAndArgs<P, A, O>(PhantomData<fn() -> (P, A, O)>);
+pub struct WithResourcesAndArgs<P, A, O>(PhantomData<fn(P, A) -> O>);
 pub struct ContextOnly<O>(PhantomData<fn() -> O>);
 pub struct ContextAndArgs<A, O>(PhantomData<fn() -> (A, O)>);
 

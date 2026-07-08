@@ -13,9 +13,9 @@ use std::{
 
 use mcp_twill::{
     ArgType, CapabilityDecl, CliMcpServer, CommandContext, CommandOutput, CommandRegistry,
-    CommandSpec, Field, FrameworkError, Grant, HelpRequest, InvocationPlan, Listing, ReadResource,
-    Release, Res, ResolveResource, Resource, ResourceDecl, ResourceRefusal, ResponseEnvelope,
-    RunRequest, TypeDecl, Variant, arg,
+    CommandSpec, Field, FrameworkError, Grant, HelpRequest, InvocationPlan, Listing, OutputSpec,
+    ReadResource, Release, Res, ResolveResource, Resource, ResourceDecl, ResourceRef,
+    ResourceRefusal, ResponseEnvelope, ResponseProfile, RunRequest, TypeDecl, Variant, arg,
 };
 use rmcp::{
     ClientHandler, ServiceExt,
@@ -687,6 +687,84 @@ fn within_must_form_a_tree() {
     assert!(cycle.contains("scoping cycle"), "{cycle}");
 }
 
+// Acceptance: a hand-written argument under the injected carrier name
+// fails registration instead of silently shadowing the derived schema.
+#[test]
+fn hand_declared_carrier_argument_fails_registration() {
+    let error = build_error(|server| {
+        server.resource(
+            ResourceDecl::new("session", "A live test session lease").uri("test://session/{id}"),
+        );
+        server.command("session status", |command| {
+            command
+                .summary("Inspect a session")
+                .description("Reads the session lease state.")
+                .arg(arg::string("session_id").summary("Hand-declared carrier"))
+                .handle(
+                    |session: Res<Session>, _context: CommandContext| async move {
+                        Ok(CommandOutput::structured(json!({ "id": session.id })))
+                    },
+                );
+        });
+    });
+    assert!(
+        error.contains("hand-declares argument `session_id`"),
+        "{error}"
+    );
+}
+
+// Acceptance: a URI template without a scheme fails registration — a
+// relative reference cannot route back to this server.
+#[test]
+fn schemeless_uri_template_fails_registration() {
+    let error = build_error(|server| {
+        server.resource(
+            ResourceDecl::new("session", "A live test session lease").uri("session/{id}"),
+        );
+    });
+    assert!(
+        error.contains("must be an absolute URI with a scheme"),
+        "{error}"
+    );
+}
+
+// Acceptance: distinct templates that can mint the same URI fail
+// registration; reads of the shared URI would route arbitrarily.
+#[test]
+fn overlapping_uri_templates_fail_registration() {
+    // `test://{id}/bar` with id `foo` and `test://foo/{id}` with id `bar`
+    // both mint `test://foo/bar`.
+    let error = build_error(|server| {
+        server.resource(
+            ResourceDecl::new("session", "A live test session lease").uri("test://{id}/bar"),
+        );
+        server.resource(ResourceDecl::new("tab", "An open tab").uri("test://foo/{id}"));
+    });
+    assert!(error.contains("can mint the same URI"), "{error}");
+
+    // Non-overlapping templates under one scheme still register: any id
+    // bridging `test://{id}` across `test://tab/…` would need a `/`.
+    CommandRegistry::build("resource-test", "Validation test server.", |server| {
+        server
+            .resource(ResourceDecl::new("session", "A live test session lease").uri("test://{id}"));
+        server.resource(ResourceDecl::new("tab", "An open tab").uri("test://tab/{id}"));
+    })
+    .expect("slash-separated templates cannot mint the same URI");
+}
+
+// Acceptance: parse_uri only claims ids its own template could have
+// minted, so a broad template does not capture another resource's URIs.
+#[test]
+fn parse_uri_only_accepts_mintable_ids() {
+    let decl = ResourceDecl::new("session", "A live test session lease").uri("test://{id}");
+    assert_eq!(decl.parse_uri("test://abc"), Some("abc"));
+    assert_eq!(
+        decl.parse_uri("test://tab/1"),
+        None,
+        "`tab/1` is not a mintable id"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Runtime: minting, normalization, refusal
 // ---------------------------------------------------------------------------
@@ -826,8 +904,8 @@ async fn refusal_carries_derived_recovery_edges_and_skips_handler() {
     assert_eq!(resource, "session");
     assert_eq!(reference, "sess-9");
     assert!(detail.contains("not live"), "{detail}");
-    assert_eq!(enumerate, &vec!["session list".to_string()]);
-    assert_eq!(establish, &vec!["session start".to_string()]);
+    assert_eq!(enumerate.as_ref(), ["session list".to_string()]);
+    assert_eq!(establish.as_ref(), ["session start".to_string()]);
     assert_eq!(status_runs.load(Ordering::SeqCst), 0, "handler never ran");
 
     let envelope = ResponseEnvelope::framework_error(error.clone(), None, None);
@@ -873,7 +951,7 @@ async fn root_resource_refusal_recovers_through_establisher() {
         panic!("expected ResourceRefused, got {error:?}");
     };
     assert!(enumerate.is_empty(), "no enumerator to recover through");
-    assert_eq!(establish, &vec!["session start".to_string()]);
+    assert_eq!(establish.as_ref(), ["session start".to_string()]);
 }
 
 // Acceptance: a missing carrier fails with the capability-missing shape,
@@ -918,6 +996,231 @@ async fn grant_with_unmintable_id_is_refused_at_mint_time() {
     assert!(
         error.to_string().contains("would not round-trip"),
         "{error}"
+    );
+}
+
+/// A registry whose `rogue grant`/`rogue listing` handlers hand-populate
+/// the public `CommandOutput` vectors instead of using `Grant`/`Listing`
+/// outputs, so the emissions are absent from their signatures.
+fn rogue_registry() -> CommandRegistry {
+    let store = Arc::new(SessionStore::default());
+    CommandRegistry::build("resource-test", "Rogue emission test server.", |server| {
+        server.resource(
+            ResourceDecl::new("session", "A live test session lease").uri("test://session/{id}"),
+        );
+        server.resolver::<Session>(SessionResolver {
+            store: store.clone(),
+        });
+
+        server.command("session start", |command| {
+            command
+                .summary("Start a session")
+                .description("Establishes a session lease and grants its reference.")
+                .handle({
+                    let store = store.clone();
+                    move |_context: CommandContext| {
+                        let store = store.clone();
+                        async move {
+                            let id = store.start();
+                            Ok(CommandOutput::structured(json!({ "session_id": id }))
+                                .grant(Grant::<Session>::new(id)))
+                        }
+                    }
+                });
+        });
+
+        server.command("session end", |command| {
+            command
+                .summary("End a session")
+                .description("Releases the session lease.")
+                .handle({
+                    let store = store.clone();
+                    move |session: Release<Session>, _context: CommandContext| {
+                        let store = store.clone();
+                        async move {
+                            store.end(&session.id);
+                            Ok(CommandOutput::structured(json!({ "ended": session.id })))
+                        }
+                    }
+                });
+        });
+
+        server.command("rogue grant", |command| {
+            command
+                .summary("Emit an undeclared grant")
+                .description("Hand-populates grants outside the signature.")
+                .handle(|_context: CommandContext| async move {
+                    let mut output = CommandOutput::structured(json!({}));
+                    output.grants.push(ResourceRef {
+                        resource: "session".to_string(),
+                        id: "sess-1".to_string(),
+                        uri: String::new(),
+                    });
+                    Ok(output)
+                });
+        });
+
+        server.command("rogue listing", |command| {
+            command
+                .summary("Emit an undeclared listing")
+                .description("Hand-populates listings outside the signature.")
+                .handle(|_context: CommandContext| async move {
+                    let mut output = CommandOutput::structured(json!({}));
+                    output.listings.push(ResourceRef {
+                        resource: "session".to_string(),
+                        id: "sess-1".to_string(),
+                        uri: String::new(),
+                    });
+                    Ok(output)
+                });
+        });
+    })
+    .expect("rogue registry builds")
+}
+
+// Acceptance: references hand-pushed into the public output vectors are
+// refused at mint time when the command's signature does not declare the
+// edge — the catalog graph cannot be bypassed.
+#[tokio::test]
+async fn undeclared_output_references_are_refused_at_mint_time() {
+    let registry = rogue_registry();
+
+    let grant_error = registry
+        .run(request("rogue grant", json!({})))
+        .await
+        .expect_err("undeclared grant fails");
+    assert!(
+        grant_error
+            .to_string()
+            .contains("emitted a grant for resource `session`"),
+        "{grant_error}"
+    );
+
+    let listing_error = registry
+        .run(request("rogue listing", json!({})))
+        .await
+        .expect_err("undeclared listing fails");
+    assert!(
+        listing_error
+            .to_string()
+            .contains("emitted a listing for resource `session`"),
+        "{listing_error}"
+    );
+}
+
+// Acceptance: the output spec's row limit applies to listings; the full
+// set stays recoverable by re-asking the enumerator.
+#[tokio::test]
+async fn listing_honors_output_limit() {
+    let registry = session_registry();
+    registry
+        .run(request("session start", json!({})))
+        .await
+        .expect("first grant");
+    registry
+        .run(request("session start", json!({})))
+        .await
+        .expect("second grant");
+
+    let mut limited = request("session list", json!({}));
+    limited.output = Some(OutputSpec {
+        limit: Some(1),
+        ..Default::default()
+    });
+    let response = registry.run(limited).await.expect("listing succeeds");
+    let output = response.output.expect("executed output");
+    assert_eq!(output.listings.len(), 1);
+    assert_eq!(output.listings[0].uri, "test://session/sess-1");
+}
+
+/// Extra resource type for the wide-tuple handler test (`Tab` and its
+/// always-resolving resolver already exist above).
+struct Window {
+    id: String,
+}
+
+impl Resource for Window {
+    const NAME: &'static str = "window";
+}
+
+struct AlwaysResolve;
+
+impl ResolveResource<Session> for AlwaysResolve {
+    async fn resolve(
+        &self,
+        reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Session, ResourceRefusal> {
+        Ok(Session {
+            id: reference.to_string(),
+        })
+    }
+}
+
+impl ResolveResource<Window> for AlwaysResolve {
+    async fn resolve(
+        &self,
+        reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Window, ResourceRefusal> {
+        Ok(Window {
+            id: reference.to_string(),
+        })
+    }
+}
+
+// Acceptance: handlers can require more than two resources; the tuple
+// extraction derives every edge and resolves each carrier.
+#[tokio::test]
+async fn handler_tuples_extend_past_two_resources() {
+    let registry = CommandRegistry::build("resource-test", "Tuple arity test server.", |server| {
+        server.resource(
+            ResourceDecl::new("session", "A live test session lease").uri("test://session/{id}"),
+        );
+        server.resource(ResourceDecl::new("tab", "An open tab").uri("test://tab/{id}"));
+        server.resource(ResourceDecl::new("window", "An open window").uri("test://window/{id}"));
+        server.resolver::<Session>(AlwaysResolve);
+        server.resolver::<Tab>(TabResolver);
+        server.resolver::<Window>(AlwaysResolve);
+
+        server.command("inspect", |command| {
+            command
+                .summary("Inspect a session, tab, and window")
+                .description("Requires three resources through one tuple.")
+                .handle(
+                    |(session, tab, window): (Res<Session>, Res<Tab>, Res<Window>),
+                     _context: CommandContext| async move {
+                        Ok(CommandOutput::structured(json!({
+                            "session": session.id,
+                            "tab": tab.id,
+                            "window": window.id,
+                        })))
+                    },
+                );
+        });
+    })
+    .expect("three-resource registry builds");
+
+    let spec = registry.catalog();
+    let inspect = spec
+        .operations
+        .iter()
+        .find(|operation| operation.path == vec!["inspect"])
+        .expect("inspect command in catalog");
+    let carriers: Vec<_> = inspect.args.iter().map(|arg| arg.name.as_str()).collect();
+    assert_eq!(carriers, vec!["session_id", "tab_id", "window_id"]);
+
+    let response = registry
+        .run(request(
+            "inspect --session-id $args.session_id --tab-id $args.tab_id --window-id $args.window_id",
+            json!({ "session_id": "s1", "tab_id": "t1", "window_id": "w1" }),
+        ))
+        .await
+        .expect("all three resolve");
+    let output = response.output.expect("executed output");
+    assert_eq!(
+        output.structured,
+        Some(json!({ "session": "s1", "tab": "t1", "window": "w1" }))
     );
 }
 
@@ -1031,6 +1334,43 @@ async fn mcp_grants_without_reader_emit_no_links() -> anyhow::Result<()> {
         .read_resource(ReadResourceRequestParams::new("test://session/sess-1"))
         .await;
     assert!(read.is_err(), "no reader, no resources/read");
+
+    client.cancel().await?;
+    Ok(())
+}
+
+// Acceptance: the text response profile carries minted URIs — without a
+// reader there is no resource_link, so the text line is the only place
+// the URI reaches a text-profile caller.
+#[tokio::test]
+async fn mcp_text_profile_carries_minted_uris() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(build_registry(
+        RegistryOptions {
+            reader: false,
+            ..Default::default()
+        },
+        Arc::new(AtomicUsize::new(0)),
+    )?)?;
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = NullClient.serve(client_transport).await?;
+
+    let mut text_request = request("session start", json!({}));
+    text_request.output = Some(OutputSpec {
+        profile: Some(ResponseProfile::Text),
+        ..Default::default()
+    });
+    let result = client
+        .call_tool(CallToolRequestParams::new("run").with_arguments(json_object(text_request)?))
+        .await?;
+    assert_ne!(result.is_error, Some(true));
+    assert!(result.structured_content.is_none());
+
+    let content = serde_json::to_string(&result.content)?;
+    assert!(content.contains("test://session/sess-1"), "{content}");
 
     client.cancel().await?;
     Ok(())

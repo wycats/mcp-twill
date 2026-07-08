@@ -394,16 +394,94 @@ impl ResourceDecl {
     }
 
     /// Extracts the id from a full URI matching this template, or `None`
-    /// when the value is not a URI of this resource.
+    /// when the value is not a URI of this resource. Only ids `mint_uri`
+    /// could have produced parse back: without the unreserved-character
+    /// check, a broad template like `x://{id}` would claim `x://tab/1`
+    /// (id `tab/1`) even though that URI was minted by `x://tab/{id}`.
     pub fn parse_uri<'a>(&self, value: &'a str) -> Option<&'a str> {
         let (prefix, suffix) = self.uri_parts()?;
         let id = value.strip_prefix(prefix)?.strip_suffix(suffix)?;
-        (!id.is_empty()).then_some(id)
+        (!id.is_empty() && id.bytes().all(uri_unreserved)).then_some(id)
     }
 }
 
 fn uri_unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+}
+
+fn all_unreserved(text: &str) -> bool {
+    text.bytes().all(uri_unreserved)
+}
+
+/// Whether a template starts with an RFC 3986 scheme (`ALPHA *( ALPHA /
+/// DIGIT / "+" / "-" / "." ) ":"`). Templates without one mint relative
+/// strings, not self-describing URIs.
+pub(crate) fn template_has_scheme(template: &str) -> bool {
+    let Some(colon) = template.find(':') else {
+        return false;
+    };
+    let mut bytes = template[..colon].bytes();
+    match bytes.next() {
+        Some(byte) if byte.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+}
+
+/// Whether two templates can mint the same URI from valid (unreserved)
+/// ids — like `x://{id}/bar` with id `foo` and `x://foo/{id}` with id
+/// `bar`, which both mint `x://foo/bar`. Such a URI would route to
+/// whichever declaration matches first, so registration refuses the pair.
+pub(crate) fn templates_overlap(a: &ResourceDecl, b: &ResourceDecl) -> bool {
+    let (Some(a), Some(b)) = (a.uri_parts(), b.uri_parts()) else {
+        return false;
+    };
+    overlap_directed(a, b) || overlap_directed(b, a)
+}
+
+/// Decides whether `p1 · id1 · s1 == p2 · id2 · s2` has a solution with
+/// both ids nonempty and unreserved, assuming `p1` is a prefix of `p2`
+/// (the only way two prefixes can head the same string). Cases follow
+/// from where the end of `id1` falls in the `p2·id2·s2` segmentation.
+fn overlap_directed((p1, s1): (&str, &str), (p2, s2): (&str, &str)) -> bool {
+    let Some(excess) = p2.strip_prefix(p1) else {
+        return false;
+    };
+    // id1 ends inside s2: s1 is a suffix of s2 and everything consumed by
+    // id1 (the prefix excess and the head of s2) must be mintable.
+    if let Some(head) = s2.strip_suffix(s1)
+        && !head.is_empty()
+        && all_unreserved(head)
+        && all_unreserved(excess)
+    {
+        return true;
+    }
+    // id1 ends inside id2 (or exactly at its end): s1 is s2 plus an
+    // unreserved (possibly empty) run that id2 supplies.
+    if let Some(mid) = s1.strip_suffix(s2) {
+        if all_unreserved(mid) && all_unreserved(excess) {
+            return true;
+        }
+        // id1 ends inside the prefix excess: id1 covers `excess[..cut]`,
+        // s1 must continue with the rest of the excess, then a nonempty
+        // unreserved run for id2, then s2.
+        for cut in 1..excess.len() {
+            if !excess.is_char_boundary(cut) {
+                continue;
+            }
+            let (consumed, remaining) = excess.split_at(cut);
+            if !all_unreserved(consumed) {
+                break;
+            }
+            if let Some(id2) = mid.strip_prefix(remaining)
+                && !id2.is_empty()
+                && all_unreserved(id2)
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A reference to a declared resource carried in structured output:
@@ -781,18 +859,13 @@ pub struct StdinSpec {
     pub mime_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum RunMode {
+    #[default]
     Execute,
     Preview,
     DryRun,
-}
-
-impl Default for RunMode {
-    fn default() -> Self {
-        Self::Execute
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -904,16 +977,11 @@ impl PermissionAuthorizer for DefaultPermissionAuthorizer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfirmationPolicy {
+    #[default]
     EffectDefault,
-}
-
-impl Default for ConfirmationPolicy {
-    fn default() -> Self {
-        Self::EffectDefault
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1013,6 +1081,14 @@ impl CommandOutput {
 
         if let Some(text) = self.text.take() {
             self.text = Some(limit_text(text, spec.max_bytes));
+        }
+
+        // Listings honor the row limit like any other enumeration; the
+        // full set stays recoverable by re-asking the enumerator. Grants
+        // are never truncated — dropping an acquisition record would
+        // orphan a live lease.
+        if let Some(limit) = spec.limit {
+            self.listings.truncate(limit);
         }
 
         self
