@@ -2,7 +2,7 @@
 
 # RFC 0012: First-Class Resources
 
-- Status: Draft
+- Status: Implemented
 - Area: command model, runtime, catalog, MCP adapter
 - Target milestone: v0.2
 - Depends on: RFC 0008 (named argument types and unions), RFC 0009
@@ -156,14 +156,14 @@ types:
 ```rust
 // Requiring: this handler cannot run without a live, resolved tab.
 server.command("click", |command| {
-    command.handle(|tab: Res<Tab>, args: ClickArgs| async move {
+    command.handle(|tab: Res<Tab>, context: CommandContext, args: ClickArgs| async move {
         // `tab` is proof of resolution, not a string to re-validate.
     });
 });
 
 // Granting: the output component mints a reference.
 server.command("new_tab", |command| {
-    command.handle(|session: Res<Session>, args: NewTabArgs| async move {
+    command.handle(|session: Res<Session>, context: CommandContext, args: NewTabArgs| async move {
         let id = broker.create_tab(&session, &args).await?;
         Ok(CommandOutput::structured(payload).grant(Grant::<Tab>::new(id)))
     });
@@ -171,14 +171,14 @@ server.command("new_tab", |command| {
 
 // Releasing: consuming the reference declares the teardown edge.
 server.command("close_tab", |command| {
-    command.handle(|tab: Release<Tab>| async move {
+    command.handle(|tab: Release<Tab>, _context: CommandContext| async move {
         broker.close_tab(tab.id()).await
     });
 });
 
 // Enumerating: the listing component marks the recovery path.
 server.command("list_tabs", |command| {
-    command.handle(|session: Res<Session>| async move {
+    command.handle(|session: Res<Session>, _context: CommandContext| async move {
         let tabs = broker.owned_tabs(&session).await?;
         let ids = tabs.iter().map(|tab| tab.id.clone()).collect();
         Ok(CommandOutput::structured(payload).listing(Listing::<Tab>::new(ids)))
@@ -241,14 +241,15 @@ session points at `start_session`.
 ### Per-tier binding, one catalog
 
 A `Res<Session>` parameter says nothing about *how* the session reference
-arrives. That is a binding, chosen where the server meets the transport:
-
-- **Argument binding** (bare MCP, CLI): the requirement projects as an
-  argument of the derived reference type — `agent_session_id: session-ref` —
-  exactly what vbl's surface does today.
-- **Ambient binding** (Codex `_meta`, VS Code extension flags, conversation
-  identity): the host injects the reference; the argument disappears from
-  the projected surface entirely, and the model never handles a session id.
+arrives. That is a binding, chosen where the server meets the transport.
+On a surface that has nothing but arguments — bare MCP, the CLI — the
+requirement projects as an argument of the derived reference type,
+`agent_session_id: session-ref`, exactly what vbl's surface does today. On
+a host that can identify the conversation — Codex's `_meta` handshake, a
+VS Code extension that knows its own session — the adapter binds the
+requirement ambiently: the host injects the reference, the argument
+disappears from the projected schema, and the model never handles a
+session id at all.
 
 RFC 0009 is the precedent: workspace roots are required by commands,
 resolved by hosts, invisible as arguments. Session identity gets the same
@@ -289,12 +290,11 @@ pub struct ResourceDecl {
 }
 ```
 
-Declaring a resource derives:
-
-- a named reference type `{name}-ref` (RFC 0008) accepting bare id or full
-  URI, normalizing to the id;
-- a capability `{name}` (RFC 0010), so the existing `requires`/`provides`
-  vocabulary and its projections keep working unchanged.
+Declaring a resource stakes claims on two derived names. The declaration
+derives a named reference type `{name}-ref` (RFC 0008), which accepts a
+bare id or the full URI and normalizes to the id, and a capability
+`{name}` (RFC 0010), so the existing `requires`/`provides` vocabulary and
+every projection built on it keep working unchanged.
 
 `CommandSpec` gains derived fields (never written by authors):
 
@@ -347,29 +347,47 @@ derived from types, never from observed runtime values — is fixed.
 
 ### Registration Validation
 
-Registration (and the serving path, per RFC 0009's lesson) rejects:
+Registration — and the serving path, per RFC 0009's lesson — validates the
+declarations as a whole. The checks group by what they protect.
 
-- a `uri` template that is malformed, lacks exactly one `{id}`, or collides
-  with another resource's template;
-- a derived name colliding with an explicit declaration: declaring resource
-  `tab` alongside a hand-declared `tab-ref` type or `tab` capability is
-  rejected, naming both sites — the resource owns those names, and the fix
-  is to delete the hand-written declaration;
-- `within` naming an undeclared resource, or a `within` cycle;
-- a signature referencing an undeclared resource (`Res<T>`, `Grant<T>`,
-  `Release<T>`, `Listing<T>` where `T::NAME` has no `ResourceDecl`);
-- a declared resource with no bound resolver, when any command requires or
-  releases it;
-- **an unpaired grant**: a resource some command grants but no command
-  releases and no declared `expiry` retires — the stewardship review rule
-  ("name the owner whose drop revokes it") as a structural check, the same
-  shape as RFC 0010's no-provider rule;
-- **an unenumerable grant**: a *scoped* resource (one declaring `within`)
-  that some command grants but no command enumerates —
-  enumeration-as-recovery is mandatory, not advisory. Root resources are
-  exempt: enumerating a lost session would require the very scope that was
-  lost, so a root resource's recovery edge is its establishing command,
-  which the catalog already derives.
+The URI template checks protect routing. Everything downstream assumes a
+minted URI routes back to exactly one declaration, so a template must be
+well-formed, must carry a scheme (a relative template mints strings
+nothing can route back to the server), and must contain exactly one `{id}`
+slot. No two templates on one server may be able to mint the same URI: an
+exact duplicate is rejected, and so is an *overlap* — `x://{id}/bar` and
+`x://foo/{id}` are distinct templates that both mint `x://foo/bar`, and if
+both registered, reads would resolve by declaration order.
+
+The name checks protect ownership. Declaring resource `tab` derives the
+`tab-ref` type and the `tab` capability, so a hand-declared `tab-ref` type
+or `tab` capability alongside it is rejected with a message naming both
+sites — the resource owns those names, and the fix is to delete the
+hand-written declaration. The carrier gets the same protection from the
+other direction: on a command that requires the resource, the carrier
+argument is injected with the derived reference type, so an explicitly
+declared argument with that name — which would shadow the injected one —
+is rejected.
+
+The graph checks protect coherence, the same way RFC 0010 protects the
+capability graph. `within` must name a declared resource and the scope
+relation must form a tree; self-scoping and cycles are rejected. A
+signature that names an undeclared resource — `Res<T>`, `Grant<T>`,
+`Release<T>`, or `Listing<T>` where `T::NAME` has no `ResourceDecl` — is
+rejected, and so is a declared resource that some command requires or
+releases without a bound resolver.
+
+The lifecycle checks are the stewardship review rules made structural. A
+resource some command grants but no command releases and no declared
+`expiry` retires is an unpaired grant, and it is rejected: an acquisition
+must name its release path — "name the owner whose drop revokes it" as a
+registration failure, the same shape as RFC 0010's no-provider rule. A
+*scoped* resource (one declaring `within`) that some command grants but no
+command enumerates is rejected too, because enumeration-as-recovery is
+mandatory, not advisory. Root resources are exempt from the enumeration
+rule: enumerating a lost session would require the very scope that was
+lost, so a root resource's recovery edge is its establishing command,
+which the catalog already derives.
 
 Hand-written `requires`/`provides` naming a resource-derived capability the
 signature already covers is accepted and deduplicates to one catalog fact —
@@ -409,50 +427,55 @@ teardown against its broker. Twill cannot drop what it does not own.
 
 ### Binding
 
-Each serving surface declares how each resource's references arrive:
+Each serving surface declares how each resource's references arrive. The
+default is argument binding: the requirement projects as a required
+argument of the derived `{name}-ref` type, named by the resource's
+`carrier` — declared once on the resource, defaulting to `{name}_id`. vbl
+keeps its existing `agent_session_id` by declaring it as the session's
+carrier, so every argument-bound tier projects the name the surface
+already teaches.
 
-- **Argument** (default): the requirement projects as a required argument
-  of the derived `{name}-ref` type, named by the resource's `carrier` —
-  declared once on the resource, defaulting to `{name}_id`. vbl keeps its
-  existing `agent_session_id` by declaring it as the session's carrier, so
-  every argument-bound tier projects the name the surface already teaches;
-- **Ambient**: the adapter supplies the reference from transport context
-  (RFC 0009's mechanism — Codex `_meta`, host-injected identity). The
-  argument is omitted from that tier's projected schema, and the catalog
-  hash covers the binding mode so the surfaces are visibly different.
+Ambient binding is the alternative: the adapter supplies the reference
+from transport context — RFC 0009's mechanism, whether Codex `_meta` or
+host-injected identity. The argument is omitted from that tier's projected
+schema, and the catalog hash covers the binding mode, so two tiers of one
+server are visibly different surfaces. Argument binding shipped with this
+RFC; ambient binding remains designed but unbuilt until a serving surface
+needs it, and the unresolved question on the adapter API stands.
 
 ### Projection
 
-- **Catalog.** A `resources` section carries every declaration plus the
-  derived edges (`grantedBy`, `releasedBy`, `enumeratedBy`, `requiredBy`).
-  Commands carry their derived resource fields. All hash-covered.
-- **Command help.** Requirements render with the resource summary and
-  recovery edge; grants render the URI template, validity prose, enumerator,
-  and releasers — all derived, in RFC 0010/0011's derived-edge voice.
-- **Server help.** A `Resources:` section lists each resource with its
-  scope tree and lifecycle prose.
-- **Results.** Structured output always carries grants and listings as
-  `{resource, id, uri}` objects; the text projection prints URIs.
-- **MCP adapter.** MCP defines a resource link as a resource the server is
-  capable of reading, so the enhancement ships as a pair: a server that
-  binds a *reader* for a resource gets `resources/read` served for its
-  minted URIs and a `resource_link` content part on each grant (rmcp 1.7.0
-  carries both today). No reader, no links — a link the server cannot read
-  is a dead link, and the structured payload already carries the URI as
-  data. Live enumeration through `resources/list` remains a possible future
-  extension; nothing in this RFC depends on it.
-- **Refusals.** Resource errors carry derived `recover` edges as above.
+The catalog gains a `resources` section carrying every declaration plus
+the derived edges — `grantedBy`, `releasedBy`, `enumeratedBy`,
+`requiredBy` — and each command carries its derived resource fields, all
+hash-covered. Help renders the same facts in RFC 0010 and 0011's
+derived-edge voice: a command's requirements render with the resource
+summary and recovery edge, its grants render the URI template, validity
+prose, enumerator, and releasers, and server help adds a `Resources:`
+section listing each resource with its scope tree and lifecycle prose. At
+runtime, structured output always carries grants and listings as
+`{resource, id, uri}` objects, the text projection prints the URIs, and
+refusals carry the derived `recover` edges shown above — on every
+transport, down to the text-only tier.
+
+The MCP adapter adds the one conditional projection. MCP defines a
+resource link as a resource the server is capable of reading, so the
+enhancement ships as a pair: a server that binds a *reader* for a resource
+gets `resources/read` served for its minted URIs and a `resource_link`
+content part on each grant (rmcp 1.7.0 carries both today). No reader, no
+links — a link the server cannot read is a dead link, and the structured
+payload already carries the URI as data. Live enumeration through
+`resources/list` remains a possible future extension; nothing in this RFC
+depends on it.
 
 ### Contract Checks
 
-`check_resource_projection` joins the contract suite:
-
-- every declared resource with any edge renders in server help;
-- every command with resource fields renders them in its help text;
-- every `Listing<T>` producer's structured output schema carries the
-  reference array;
-- grant URIs round-trip through the derived reference type (mint → parse →
-  same id).
+`check_resource_projection` joins the contract suite. It verifies that
+every declared resource with any edge renders in server help, that every
+command with resource fields renders them in its help text, that every
+`Listing<T>` producer's structured output schema carries the reference
+array, and that grant URIs round-trip through the derived reference type
+(mint → parse → same id).
 
 ### Required Invariants
 
@@ -460,7 +483,14 @@ Each serving surface declares how each resource's references arrive:
   template; ids and URIs are interchangeable as inputs. Granted ids must
   use URI-unreserved characters (`A–Z a–z 0–9 - . _ ~`) so substitution and
   parse-back are exact inverses; the framework refuses to mint a grant
-  whose id would not round-trip. (Every vbl mint format already conforms.)
+  whose id would not round-trip, and parse-back applies the same character
+  discipline, so a URI that could not have been minted never resolves.
+  (Every vbl mint format already conforms.)
+- Minting is bounded by the signature: a handler that emits a grant or
+  listing for a resource its type does not name is a handler bug, refused
+  at mint time rather than projected into the envelope. Listings honor the
+  command's declared output limit the way rows do — truncated with the
+  standard truncation marker, never silently dropped.
 - No resource can be granted without a release path (command or declared
   expiry) and a recovery path — an enumerator for scoped resources, the
   establishing command for root resources. Unpaired acquisition is
@@ -496,7 +526,7 @@ reliability is worth it.
 enumerator and a releaser (or declare expiry) to register at all. That is
 the point — but it is a cost a quick prototype feels.
 
-## Rationale and Alternatives
+## Rationale And Alternatives
 
 **Builder-declared lifecycle without signatures** (`.grants("tab")`,
 `.releases("tab")`) — the declaration can lie: nothing connects the string
@@ -559,10 +589,12 @@ framework.
 
 ## Unresolved Questions
 
-- **URI authority.** `vbl://tab/{id}` uses the server's short name as
-  scheme. Two servers with one name collide; a registry-level convention
-  (scheme = declared server name, checked unique per host?) wants settling
-  before Stage 2.
+- **URI authority.** *Settled during implementation.* A template must be an
+  absolute URI with a scheme, and no two templates on one server may be able
+  to mint the same URI — both checked at registration. Cross-server scheme
+  uniqueness is a host concern the server cannot check; the convention
+  (scheme = declared server name) stays advisory, and nothing in the design
+  routes by scheme alone: a reader serves only URIs its own templates mint.
 - **Cursors and other call-lived handles.** Pagination cursors die at the
   next call; making them resources would be ceremony without recovery
   value. Current line: resources are things whose references outlive one
@@ -572,13 +604,36 @@ framework.
   resource-backed capabilities eventually be rejected in favor of
   signatures, or kept as the escape hatch for handlers that cannot type
   their resources?
-- **Live enumeration over MCP `resources/list`.** A capable client could
-  list live tabs as MCP resources. Attractive, unnecessary, and unfunded by
-  evidence — deferred until a host demonstrably benefits.
 - **Ambient binding surface.** The exact adapter API for per-tier binding
   (and how the catalog hash represents "same command, different binding")
-  needs design during implementation; RFC 0009's root-resolution machinery
-  is the template.
+  still needs design; implementation shipped argument binding only. RFC
+  0009's root-resolution machinery is the template when a serving surface
+  needs it.
+
+## Future Possibilities
+
+**Live enumeration over MCP `resources/list`.** A capable client could list
+live tabs as MCP resources rather than calling the enumerating command.
+Attractive, unnecessary, and unfunded by evidence — deferred until a host
+demonstrably benefits. The catalog already knows every enumerator, so the
+adapter could grow this projection without touching any server.
+
+**Subscriptions.** MCP's `resources/subscribe` could notify a capable host
+when a granted resource is released or expires, turning the validity prose
+into a live signal. Same posture as resource links: enhancement only,
+nothing load-bearing.
+
+**Lighter reference kinds.** If revision-scoped references (element refs
+that die on navigation) turn out to deserve catalog presence, a
+"revision-scoped" lifetime kind could join the model without changing the
+grant/release/enumerate vocabulary. The cursors question above decides
+whether this is wanted.
+
+**Framework-checked enumerator output.** Today the contract suite checks
+that a `Listing<T>` producer's schema carries the reference array. A
+stronger check — that the enumerator's runtime output actually contains
+every live reference — needs broker cooperation and belongs to the eval
+harness, not registration.
 
 ## Acceptance Tests
 
@@ -594,12 +649,16 @@ framework.
 - Registration failures, each with a message naming the resource and
   command: unpaired grant (no releaser, no expiry); scoped grant with no
   enumerator; dangling `Res<T>`; missing resolver; `within` cycle;
-  malformed or colliding URI template; derived-name collision with a
-  hand-declared type or capability.
+  malformed, schemeless, colliding, or overlapping URI template;
+  derived-name collision with a hand-declared type or capability; a
+  hand-declared argument shadowing an injected carrier.
 - A root resource (no `within`) granting without an enumerator registers;
   its refusal recovery edge names the establishing command.
 - A grant with an id containing URI-reserved characters is refused at mint
-  time.
+  time; a URI whose id segment could not have been minted does not parse
+  back. A grant or listing for a resource outside the handler's signature
+  is refused at mint time. Listings truncate under the command's declared
+  output limit with the standard marker.
 - A refusing resolver produces the structured refusal with derived
   `recover` edges; the handler body never runs.
 - The MCP adapter emits `resource_link` parts for grants of resources with
