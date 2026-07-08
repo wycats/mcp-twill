@@ -11,13 +11,15 @@
 
 This RFC gives Twill commands an optional, host-supplied conversation identity. A command declares `uses_conversation_identity()`, Twill normalizes supported request metadata into one `ConversationIdentity`, and the handler reads it from `CommandContext`. The value is request context rather than a tool argument: it never enters model-visible schemas, command templates, plans, responses, previews, events, or framework-owned logs.
 
-The canonical MCP representation is a versioned value under `_meta["io.github.wycats.mcp-twill/conversation-identity"]`. Twill also recognizes Codex's existing top-level `_meta.threadId` and normalizes it to issuer `com.openai.codex`. When both observations appear, they must describe the same identity. Malformed or conflicting observations fail before handler dispatch with diagnostics that name the source and problem without disclosing the raw identifier.
+The canonical MCP representation is a versioned value under `_meta["io.github.wycats.mcp-twill/conversation-identity"]`, accepted independently of host-specific compatibility. Twill can also recognize Codex's existing top-level `_meta.threadId`, but only when the embedding server explicitly enables trusted Codex compatibility. The compatibility policy is disabled by default. When disabled, `threadId` is ignored as an identity source. When enabled, Twill normalizes it to issuer `com.openai.codex`, requires matching canonical and compatibility observations, and rejects malformed or conflicting recognized observations before handler dispatch with redacted diagnostics.
 
 Conversation identity is optional ambient context, not an authentication credential and not an application session. Applications decide how to use it. Visible Browser Lab, the motivating consumer, maps the identity to a browser session while continuing to give an explicit `agent_session_id` precedence at its application boundary. Twill owns the reusable metadata, validation, propagation, projection, and fingerprint contract; it does not own browser leases, TTLs, workspace binding, or any other consumer policy.
 
 ## Motivation
 
 Some application state belongs to a conversation even though no model-visible argument should carry the conversation handle. Agent context is an unreliable place for infrastructure identity: compaction can remove it, long workflows can lose it, and copying it through every call turns ordinary application use into bookkeeping. The hosts already possess a better fact. Codex persists a thread identity and attaches it to MCP calls; other MCP hosts can supply the canonical namespaced value directly; native adapters such as Visible Browser Lab's VS Code extension can construct the canonical value from their own host context.
+
+The canonical and compatibility carriers have different trust properties. The canonical key is Twill's generic, namespaced correlation contract and remains explicitly non-authenticating. Top-level `threadId` is an unnamespaced field whose Codex issuer is supplied by Twill during normalization. If every rmcp caller received that normalization automatically, a generic MCP client could cause its own value to be attributed to the `com.openai.codex` compatibility issuer. Only an embedding that knows it is serving a trusted Codex integration can make that host-specific attribution, so compatibility is a server-construction policy rather than a property a request can select.
 
 Twill already has the architectural precedent for ambient request facts. RFC 0009 lets a command declare `uses_workspace("project")`; the framework resolves host observations before dispatch and gives the result to the handler through `CommandContext`. Conversation identity has the same cross-cutting shape, with one important semantic difference: a declared workspace is required, while conversation identity remains optional because bare MCP clients and global tool invocations may have no conversation to report.
 
@@ -59,7 +61,17 @@ On MCP, a host that implements the canonical contract sends:
 }
 ```
 
-Codex already sends a persisted thread id as top-level `_meta.threadId`. Twill turns that observation into the same type with version `1` and issuer `com.openai.codex`. A future Codex release may send both the compatibility field and the canonical value during migration; Twill accepts the pair only when the normalized tuples are equal.
+Codex already sends a persisted thread id as top-level `_meta.threadId`. An embedding dedicated to a known Codex integration enables trusted compatibility when it constructs the Twill server:
+
+```rust
+let config = CliMcpServerConfig::default()
+    .with_conversation_identity_compatibility(
+        ConversationIdentityCompatibility::TrustedCodexThreadId,
+    );
+let server = CliMcpServer::with_config(registry, config)?;
+```
+
+That policy turns the compatibility observation into the canonical type with version `1` and issuer `com.openai.codex`. A future Codex release may send both the compatibility field and the canonical value during migration; trusted mode accepts the pair only when the normalized tuples are equal. Generic MCP embeddings retain the default `Disabled` policy: they accept canonical metadata and ignore `threadId`, whether valid or malformed.
 
 The identity is available to the handler and to the invocation fingerprint, but it is absent from the invocation plan. The fingerprint changes when a declaring command is called from a different conversation, so a permission approval or replay token cannot cross that boundary. The plan, permission preview, framework event, and response remain safe to serialize because none contains the raw value or its standalone digest.
 
@@ -199,20 +211,42 @@ impl CommandContext {
 
 ### Transport Normalization And Authority
 
-For each execution-tool call, the rmcp adapter reads two possible observations from `RequestContext.meta`:
+The rmcp adapter exposes its host-specific trust decision in server configuration:
 
-1. The value under `CONVERSATION_IDENTITY_META_KEY`.
-2. Top-level `threadId`, normalized as `{version: 1, issuer: "com.openai.codex", id: threadId}`.
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConversationIdentityCompatibility {
+    #[default]
+    Disabled,
+    TrustedCodexThreadId,
+}
 
-The canonical value is authoritative, while the compatibility value is a consistency observation when both are present. Normalization follows these rules:
+pub struct CliMcpServerConfig {
+    // ...existing fields...
+    pub conversation_identity_compatibility: ConversationIdentityCompatibility,
+}
+
+impl CliMcpServerConfig {
+    pub fn with_conversation_identity_compatibility(
+        mut self,
+        compatibility: ConversationIdentityCompatibility,
+    ) -> Self;
+}
+```
+
+`CliMcpServerConfig::default()` and therefore `CliMcpServer::new` use `Disabled`. The configuration is fixed when the embedding constructs the server. Request metadata, command arguments, command declarations, and other caller-controlled values cannot enable it. An embedding selects `TrustedCodexThreadId` only when its integration boundary establishes that calls carrying the compatibility field come from Codex.
+
+For each execution-tool call, the rmcp adapter always reads the value under `CONVERSATION_IDENTITY_META_KEY`. When compatibility is `TrustedCodexThreadId`, it also reads top-level `threadId` and normalizes it as `{version: 1, issuer: "com.openai.codex", id: threadId}`. When compatibility is `Disabled`, the adapter ignores `threadId` completely as an identity source: it does not validate the value, compare it with canonical metadata, or produce a request-context diagnostic for it.
+
+The canonical value is authoritative, while an enabled compatibility value is a consistency observation when both are present. Normalization follows these rules:
 
 1. If the canonical key is present, parse and validate it. A malformed object, unknown field, unsupported version, invalid issuer, or empty id is an error; Twill does not fall back to `threadId`.
-2. If `threadId` is present, require a non-empty string and normalize it to the Codex issuer. A present malformed value is an error.
-3. If both values are valid, require equality of the complete normalized tuples. Equality succeeds; any difference is a conflict error.
-4. If exactly one valid observation exists, use it.
-5. If neither exists, produce an empty invocation context.
+2. Under `Disabled`, ignore `threadId`. A valid canonical value is used, and absence of canonical metadata produces an empty invocation context.
+3. Under `TrustedCodexThreadId`, if `threadId` is present, require a non-empty string and normalize it to the Codex issuer. A present malformed value is an error.
+4. Under `TrustedCodexThreadId`, if both values are valid, require equality of the complete normalized tuples. Equality succeeds; any difference is a conflict error.
+5. Under `TrustedCodexThreadId`, if exactly one valid observation exists, use it. If neither exists, produce an empty invocation context.
 
-Normalization happens once for every execution-tool call, before planning and before permission checks. A malformed or conflicting observation therefore fails an execution call even when the selected command does not declare conversation identity. This treats a present value under Twill's owned namespace as a request-integrity claim rather than silently ignoring invalid metadata. A valid identity still reaches and fingerprints only declaring commands. Task-augmented execution clones the same context into its queued work. Help, resource, and prompt requests do not consume conversation identity because they do not dispatch a declared command.
+Normalization happens once for every execution-tool call, before planning and before permission checks. A malformed canonical observation, or a malformed or conflicting enabled compatibility observation, therefore fails an execution call even when the selected command does not declare conversation identity. This treats a present value under Twill's owned namespace and any compatibility source trusted by the embedding as request-integrity claims. An ignored `threadId` has no effect on dispatch. A valid normalized identity still reaches and fingerprints only declaring commands. Task-augmented execution clones the same context into its queued work. Help, resource, and prompt requests do not consume conversation identity because they do not dispatch a declared command.
 
 No model-visible argument is an identity observation. Twill does not reserve an argument name, widen schemas, strip pre-validation fields, inspect `agent_session_id`, or derive identity from a process id, MCP connection, stdio lifetime, workspace root, or server `RuntimeIdentity`.
 
@@ -243,7 +277,7 @@ pub enum DiagnosticLocation {
 }
 ```
 
-It serializes as `{ "type": "requestContext", "key": "..." }`. An invalid observation names `CONVERSATION_IDENTITY_META_KEY` or `threadId`. A conflict uses `CONVERSATION_IDENTITY_META_KEY` as the location and names both source keys in redacted error details.
+It serializes as `{ "type": "requestContext", "key": "..." }`. An invalid canonical observation names `CONVERSATION_IDENTITY_META_KEY`; an invalid compatibility observation names `threadId` only when `TrustedCodexThreadId` is enabled. A conflict under trusted compatibility uses `CONVERSATION_IDENTITY_META_KEY` as the location and names both source keys in redacted error details.
 
 The stable subreason lives in `ErrorBody.details`, while the diagnostic carries the common `InvalidRequestContext` code and request-context location. An invalid value produces:
 
@@ -279,10 +313,11 @@ Visible Browser Lab's coordinated RFC 00011 defines its application order as exp
 ### Required Invariants
 
 - The canonical key and version-1 payload round-trip through `ConversationIdentity` with exact tuple equality.
-- Canonical metadata and Codex `threadId` are the only rmcp observations; arguments, processes, connections, workspaces, and runtime identity never become conversation identity.
-- A malformed canonical value or malformed Codex compatibility value fails before permission checks and handler dispatch.
-- Malformed or conflicting identity metadata fails every execution-tool call, including calls to non-declaring commands; non-execution surfaces ignore the metadata.
-- Matching canonical and Codex observations succeed; conflicting observations fail without disclosing either id.
+- Canonical metadata is the generic rmcp observation. Codex `threadId` becomes an observation only under the server-configured `TrustedCodexThreadId` policy; arguments, processes, connections, workspaces, and runtime identity never become conversation identity.
+- `Disabled` is the default compatibility policy. It ignores `threadId` without validation, equality checking, diagnostics, handler visibility, or fingerprint effects.
+- A malformed canonical value always fails before permission checks and handler dispatch. A malformed Codex compatibility value fails at the same boundary only when trusted compatibility is enabled.
+- Malformed or conflicting recognized identity metadata fails every execution-tool call, including calls to non-declaring commands; non-execution surfaces ignore the metadata.
+- Under trusted compatibility, matching canonical and Codex observations succeed; conflicting observations fail without disclosing either id.
 - Absence is valid for every command, including one that declares `uses_conversation_identity`.
 - A declaring command receives identity through `CommandContext` and binds its presence or digest into the invocation fingerprint.
 - A non-declaring command receives `None` and has the same fingerprint whether metadata is present or absent.
@@ -293,22 +328,23 @@ Visible Browser Lab's coordinated RFC 00011 defines its application order as exp
 ### Implementation Phases
 
 1. **Canonical model and declaration.** Add the constant, validated/redacted `ConversationIdentity`, `InvocationContext`, `CommandSpec` and builder declarations, catalog projection, help, and catalog-hash coverage.
-2. **Normalization and diagnostics.** Parse canonical and Codex observations in the rmcp adapter, enforce equality and validation rules, and add redacted request-context diagnostics.
+2. **Normalization and diagnostics.** Add the disabled-by-default compatibility policy, parse canonical observations in every rmcp embedding, parse Codex observations only for trusted embeddings, enforce the applicable equality and validation rules, and add redacted request-context diagnostics.
 3. **Planning and dispatch.** Thread one invocation context through preview, dry run, replay, tasks, and execution; expose the handler accessor; bind a private digest into declaring-command fingerprints.
 4. **Contracts and acceptance.** Add `conversation_identity.rs`, extend the generated contract macro, and verify serialization boundaries across every framework projection.
 
 ### Acceptance Tests
 
 - Canonical metadata produces the exact version, issuer, and id in a declaring handler.
-- Codex `threadId` produces version `1`, issuer `com.openai.codex`, and the original opaque id.
-- Matching canonical and Codex observations reach the handler once; conflicting observations return `InvalidRequestContext` at request-context key `CONVERSATION_IDENTITY_META_KEY` before the handler, authorizer, or resource resolver runs.
-- Canonical objects with missing or unknown fields, unsupported versions, invalid issuers, or empty ids fail with redacted diagnostics, including when `threadId` is valid; a present non-string or empty `threadId` fails even when canonical metadata is valid.
+- Default server configuration ignores valid, empty, and non-string `threadId` values. With no canonical observation, a declaring handler sees `None`; with valid canonical metadata, the handler sees the canonical tuple even when `threadId` is malformed or conflicts.
+- `TrustedCodexThreadId` turns a valid `threadId` into version `1`, issuer `com.openai.codex`, and the original opaque id.
+- Under trusted compatibility, matching canonical and Codex observations reach the handler once; conflicting observations return `InvalidRequestContext` at request-context key `CONVERSATION_IDENTITY_META_KEY` before the handler, authorizer, or resource resolver runs.
+- Canonical objects with missing or unknown fields, unsupported versions, invalid issuers, or empty ids fail with redacted diagnostics under both policies, including when `threadId` is valid. Under trusted compatibility, a present non-string or empty `threadId` fails even when canonical metadata is valid.
 - Invalid-request-context responses assert the stable JSON details (`source`, `key`, optional `field`, and `reason`), request-context location, and absence of the raw identity.
 - An opted-in command with no observation runs and sees `None`; direct registry execution and `CommandContext::new` are identity-free by default, while explicit `InvocationContext` injection reaches the handler.
 - A command without the declaration sees `None` and has identical fingerprints with and without injected identity.
-- A non-declaring execution command still rejects malformed or conflicting transport metadata before dispatch, while valid metadata remains unavailable to its handler.
+- A non-declaring execution command still rejects malformed canonical metadata and malformed or conflicting enabled compatibility metadata before dispatch, while valid normalized metadata remains unavailable to its handler. With compatibility disabled, ignored `threadId` never blocks dispatch.
 - Malformed conversation metadata does not affect `help`, resource, or prompt requests because those non-execution surfaces do not normalize it.
-- Two otherwise identical calls to a declaring command with different identities have different fingerprints; present and absent identity also differ; the same identity is stable across canonical-only, Codex-only, and matching-dual observations.
+- Two otherwise identical calls to a declaring command with different identities have different fingerprints; present and absent identity also differ. Under trusted compatibility, the same identity is stable across canonical-only, Codex-only, and matching-dual observations. Under the default policy, a `threadId`-only call fingerprints as absent and canonical metadata fingerprints identically whether an ignored `threadId` is absent, malformed, matching, or conflicting.
 - Catalog JSON and help project the optional declaration, the catalog hash changes when it is added, and generated input schemas and examples contain no identity field.
 - Serializing plans, run and preview envelopes, replay records, events, help, catalog, and diagnostics never contains the raw identity or the identity-specific digest; `Debug` output redacts the issuer and id.
 - Serializing a populated `CommandContext` and generating its `JsonSchema` both exclude the private invocation-context field and the raw id.
@@ -321,9 +357,11 @@ The framework gains a second ambient context concept alongside workspaces, plus 
 
 Adding a private invocation-context field closes external `CommandContext` struct-literal construction. Twill already constructs handler contexts internally, and the implementation will add a public constructor for tests and integrations that need an identity-free context, but this is still a source-level compatibility change for pre-1.0 callers that used literals.
 
-Codex compatibility gives one host-specific field first-class normalization behavior. That is intentional migration support for an observation already shipped by a primary host, but it creates maintenance work if Codex changes the field. Keeping the canonical value authoritative and testing matching dual observations gives that migration a bounded exit.
+Codex compatibility gives one host-specific field first-class normalization behavior. That is intentional migration support for an observation already shipped by a primary host, but it creates maintenance work if Codex changes the field. Requiring an explicit trusted-host policy limits that behavior to known Codex embeddings; keeping the canonical value authoritative and testing matching dual observations gives the migration a bounded exit.
 
-Conversation identity is forgeable metadata for clients that control `_meta`. It is suitable for correlation and application tenancy within a host integration, not as authentication. Consumers that mistake it for an unforgeable principal could create a security boundary Twill never promised.
+An embedding that enables `TrustedCodexThreadId` is asserting a real integration trust boundary. Enabling it for a generic MCP endpoint would let arbitrary callers select the compatibility identity. The default and variant name make that deployment responsibility explicit, but Twill cannot prove that the embedding's trust assertion is correct.
+
+Conversation identity is forgeable metadata for clients that control `_meta`. Canonical metadata remains a generic correlation claim even when its issuer is `com.openai.codex`; the compatibility policy does not authenticate canonical issuers. Conversation identity is suitable for correlation and application tenancy within a host integration, not as authentication. Consumers that mistake it for an unforgeable principal could create a security boundary Twill never promised.
 
 Fingerprint binding also means a permission approval created in one conversation cannot be reused after a host changes or loses identity. That is the desired safety property, but it can surface as a new approval request after host recovery even when command arguments are unchanged.
 
@@ -343,11 +381,13 @@ Fingerprint binding also means a permission approval created in one conversation
 
 **Silently prefer canonical metadata on conflict.** Authority defines which source would win, but a disagreement between two host observations is evidence of a broken adapter or stale injection. Failing before dispatch keeps one call from entering the wrong conversation while making the integration bug observable.
 
+**Normalize every `threadId` automatically.** This would let a generic MCP caller opt itself into a host-specific attribution chosen by Twill. A disabled-by-default server policy preserves compatibility for embeddings that know they are behind Codex while keeping generic endpoints on the namespaced contract.
+
 ## Prior Art
 
 Distributed tracing separates transport-specific extraction from canonical request context. W3C Trace Context and OpenTelemetry propagate correlation outside application parameters, normalize at process boundaries, and make conflicts or malformed carrier data an infrastructure concern. Conversation identity uses the same shape while explicitly declining the authentication semantics that tracing identifiers also lack.
 
-MCP `_meta` is the protocol-level carrier intended for implementation metadata outside tool schemas. Codex's `threadId` is deployed prior art for attaching a persisted host conversation fact at that boundary.
+MCP `_meta` is the protocol-level carrier intended for implementation metadata outside tool schemas. Codex's `threadId` is deployed prior art for attaching a persisted host conversation fact at that boundary. Because its legacy key does not carry provenance, the embedding's trusted-host configuration supplies the authority to interpret it as Codex compatibility metadata.
 
 Twill RFC 0009 is the closest framework precedent. It turns workspace observations into declared, handler-visible context and binds the resolved fact into invocation fingerprints. This RFC reuses that declaration-to-context path while defining optionality and a non-serializing privacy boundary for a correlation identifier.
 
@@ -355,7 +395,7 @@ Visible Browser Lab RFC 00011 is the first consumer contract. It demonstrates th
 
 ## Unresolved Questions
 
-No design question blocks Stage 1. Cross-project review must confirm that the canonical key, Codex normalization, optional declaration, redaction boundary, and application-owned explicit precedence match VBL RFC 00011 before either RFC advances. New issuers self-assign stable reverse-DNS names; Twill maintains no issuer registry.
+No design question blocks Stage 1. Cross-project review has aligned the canonical key, disabled-by-default trusted Codex compatibility, optional declaration, redaction boundary, and application-owned explicit precedence with VBL RFC 00011. New issuers self-assign stable reverse-DNS names; Twill maintains no issuer registry.
 
 ## Future Possibilities
 
