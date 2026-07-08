@@ -2,7 +2,7 @@
 
 # RFC 0012: First-Class Resources
 
-- Status: Draft
+- Status: Implemented
 - Area: command model, runtime, catalog, MCP adapter
 - Target milestone: v0.2
 - Depends on: RFC 0008 (named argument types and unions), RFC 0009
@@ -156,14 +156,14 @@ types:
 ```rust
 // Requiring: this handler cannot run without a live, resolved tab.
 server.command("click", |command| {
-    command.handle(|tab: Res<Tab>, args: ClickArgs| async move {
+    command.handle(|tab: Res<Tab>, context: CommandContext, args: ClickArgs| async move {
         // `tab` is proof of resolution, not a string to re-validate.
     });
 });
 
 // Granting: the output component mints a reference.
 server.command("new_tab", |command| {
-    command.handle(|session: Res<Session>, args: NewTabArgs| async move {
+    command.handle(|session: Res<Session>, context: CommandContext, args: NewTabArgs| async move {
         let id = broker.create_tab(&session, &args).await?;
         Ok(CommandOutput::structured(payload).grant(Grant::<Tab>::new(id)))
     });
@@ -171,14 +171,14 @@ server.command("new_tab", |command| {
 
 // Releasing: consuming the reference declares the teardown edge.
 server.command("close_tab", |command| {
-    command.handle(|tab: Release<Tab>| async move {
+    command.handle(|tab: Release<Tab>, _context: CommandContext| async move {
         broker.close_tab(tab.id()).await
     });
 });
 
 // Enumerating: the listing component marks the recovery path.
 server.command("list_tabs", |command| {
-    command.handle(|session: Res<Session>| async move {
+    command.handle(|session: Res<Session>, _context: CommandContext| async move {
         let tabs = broker.owned_tabs(&session).await?;
         let ids = tabs.iter().map(|tab| tab.id.clone()).collect();
         Ok(CommandOutput::structured(payload).listing(Listing::<Tab>::new(ids)))
@@ -349,8 +349,16 @@ derived from types, never from observed runtime values — is fixed.
 
 Registration (and the serving path, per RFC 0009's lesson) rejects:
 
-- a `uri` template that is malformed, lacks exactly one `{id}`, or collides
-  with another resource's template;
+- a `uri` template that is malformed, lacks exactly one `{id}`, has no
+  scheme (a relative template mints strings nothing can route back to the
+  server), matches another resource's template exactly, or *overlaps*
+  another template — two distinct templates that can mint the same URI
+  (like `x://{id}/bar` and `x://foo/{id}`) would make reads route by
+  declaration order;
+- an explicitly declared argument whose name collides with a resource's
+  carrier on a command that requires that resource — the carrier is
+  injected with the derived reference type, and a hand-written duplicate
+  would shadow it;
 - a derived name colliding with an explicit declaration: declaring resource
   `tab` alongside a hand-declared `tab-ref` type or `tab` capability is
   rejected, naming both sites — the resource owns those names, and the fix
@@ -420,6 +428,9 @@ Each serving surface declares how each resource's references arrive:
   (RFC 0009's mechanism — Codex `_meta`, host-injected identity). The
   argument is omitted from that tier's projected schema, and the catalog
   hash covers the binding mode so the surfaces are visibly different.
+  *Implementation status:* argument binding shipped with this RFC; ambient
+  binding remains designed-but-unbuilt until a serving surface needs it
+  (the unresolved question on the adapter API stands).
 
 ### Projection
 
@@ -460,7 +471,14 @@ Each serving surface declares how each resource's references arrive:
   template; ids and URIs are interchangeable as inputs. Granted ids must
   use URI-unreserved characters (`A–Z a–z 0–9 - . _ ~`) so substitution and
   parse-back are exact inverses; the framework refuses to mint a grant
-  whose id would not round-trip. (Every vbl mint format already conforms.)
+  whose id would not round-trip, and parse-back applies the same character
+  discipline, so a URI that could not have been minted never resolves.
+  (Every vbl mint format already conforms.)
+- Minting is bounded by the signature: a handler that emits a grant or
+  listing for a resource its type does not name is a handler bug, refused
+  at mint time rather than projected into the envelope. Listings honor the
+  command's declared output limit the way rows do — truncated with the
+  standard truncation marker, never silently dropped.
 - No resource can be granted without a release path (command or declared
   expiry) and a recovery path — an enumerator for scoped resources, the
   establishing command for root resources. Unpaired acquisition is
@@ -496,7 +514,7 @@ reliability is worth it.
 enumerator and a releaser (or declare expiry) to register at all. That is
 the point — but it is a cost a quick prototype feels.
 
-## Rationale and Alternatives
+## Rationale And Alternatives
 
 **Builder-declared lifecycle without signatures** (`.grants("tab")`,
 `.releases("tab")`) — the declaration can lie: nothing connects the string
@@ -559,10 +577,12 @@ framework.
 
 ## Unresolved Questions
 
-- **URI authority.** `vbl://tab/{id}` uses the server's short name as
-  scheme. Two servers with one name collide; a registry-level convention
-  (scheme = declared server name, checked unique per host?) wants settling
-  before Stage 2.
+- **URI authority.** *Settled during implementation.* A template must be an
+  absolute URI with a scheme, and no two templates on one server may be able
+  to mint the same URI — both checked at registration. Cross-server scheme
+  uniqueness is a host concern the server cannot check; the convention
+  (scheme = declared server name) stays advisory, and nothing in the design
+  routes by scheme alone: a reader serves only URIs its own templates mint.
 - **Cursors and other call-lived handles.** Pagination cursors die at the
   next call; making them resources would be ceremony without recovery
   value. Current line: resources are things whose references outlive one
@@ -572,13 +592,36 @@ framework.
   resource-backed capabilities eventually be rejected in favor of
   signatures, or kept as the escape hatch for handlers that cannot type
   their resources?
-- **Live enumeration over MCP `resources/list`.** A capable client could
-  list live tabs as MCP resources. Attractive, unnecessary, and unfunded by
-  evidence — deferred until a host demonstrably benefits.
 - **Ambient binding surface.** The exact adapter API for per-tier binding
   (and how the catalog hash represents "same command, different binding")
-  needs design during implementation; RFC 0009's root-resolution machinery
-  is the template.
+  still needs design; implementation shipped argument binding only. RFC
+  0009's root-resolution machinery is the template when a serving surface
+  needs it.
+
+## Future Possibilities
+
+**Live enumeration over MCP `resources/list`.** A capable client could list
+live tabs as MCP resources rather than calling the enumerating command.
+Attractive, unnecessary, and unfunded by evidence — deferred until a host
+demonstrably benefits. The catalog already knows every enumerator, so the
+adapter could grow this projection without touching any server.
+
+**Subscriptions.** MCP's `resources/subscribe` could notify a capable host
+when a granted resource is released or expires, turning the validity prose
+into a live signal. Same posture as resource links: enhancement only,
+nothing load-bearing.
+
+**Lighter reference kinds.** If revision-scoped references (element refs
+that die on navigation) turn out to deserve catalog presence, a
+"revision-scoped" lifetime kind could join the model without changing the
+grant/release/enumerate vocabulary. The cursors question above decides
+whether this is wanted.
+
+**Framework-checked enumerator output.** Today the contract suite checks
+that a `Listing<T>` producer's schema carries the reference array. A
+stronger check — that the enumerator's runtime output actually contains
+every live reference — needs broker cooperation and belongs to the eval
+harness, not registration.
 
 ## Acceptance Tests
 
@@ -594,12 +637,16 @@ framework.
 - Registration failures, each with a message naming the resource and
   command: unpaired grant (no releaser, no expiry); scoped grant with no
   enumerator; dangling `Res<T>`; missing resolver; `within` cycle;
-  malformed or colliding URI template; derived-name collision with a
-  hand-declared type or capability.
+  malformed, schemeless, colliding, or overlapping URI template;
+  derived-name collision with a hand-declared type or capability; a
+  hand-declared argument shadowing an injected carrier.
 - A root resource (no `within`) granting without an enumerator registers;
   its refusal recovery edge names the establishing command.
 - A grant with an id containing URI-reserved characters is refused at mint
-  time.
+  time; a URI whose id segment could not have been minted does not parse
+  back. A grant or listing for a resource outside the handler's signature
+  is refused at mint time. Listings truncate under the command's declared
+  output limit with the standard marker.
 - A refusing resolver produces the structured refusal with derived
   `recover` edges; the handler body never runs.
 - The MCP adapter emits `resource_link` parts for grants of resources with
