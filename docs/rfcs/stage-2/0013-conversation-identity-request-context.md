@@ -2,7 +2,7 @@
 
 # RFC 0013: Conversation Identity Request Context
 
-- Status: Accepted
+- Status: Implemented
 - Area: request metadata, command planning, handler context, catalog projection
 - Target milestone: v0.2
 - Depends on: RFC 0002 (diagnostics and response profiles), RFC 0003 (preview and replay), RFC 0009 (handler-visible workspace roots)
