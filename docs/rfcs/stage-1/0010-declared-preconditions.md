@@ -2,7 +2,7 @@
 
 # RFC 0010: Declared Preconditions
 
-- Status: Draft
+- Status: Accepted
 - Area: command model, catalog, help, diagnostics
 - Target milestone: v0.4
 - Depends on: RFC 0001 (authoritative command surface), RFC 0002 (diagnostics and steering)
