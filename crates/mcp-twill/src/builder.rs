@@ -332,6 +332,7 @@ pub struct CommandBuilder {
     progress: Vec<ProgressPhaseSpec>,
     idempotent: bool,
     workspaces: Vec<String>,
+    optional_workspaces: Vec<String>,
     uses_conversation_identity: bool,
     requires: Vec<String>,
     provides: Vec<String>,
@@ -360,6 +361,7 @@ impl CommandBuilder {
             progress: Vec::new(),
             idempotent: false,
             workspaces: Vec::new(),
+            optional_workspaces: Vec::new(),
             uses_conversation_identity: false,
             requires: Vec::new(),
             provides: Vec::new(),
@@ -417,6 +419,13 @@ impl CommandBuilder {
     /// caller-supplied. Planning fails when the workspace does not resolve.
     pub fn uses_workspace(&mut self, name: impl Into<String>) -> &mut Self {
         self.workspaces.push(name.into());
+        self
+    }
+
+    /// Declares that the handler can consume the named host workspace when
+    /// available. Planning and dispatch remain valid when it is absent.
+    pub fn uses_optional_workspace(&mut self, name: impl Into<String>) -> &mut Self {
+        self.optional_workspaces.push(name.into());
         self
     }
 
@@ -637,9 +646,19 @@ impl CommandBuilder {
                     "command `{command_name}` uses workspace `{workspace}`, which is not declared on the server"
                 )));
             }
-            if !declared_workspaces.insert(workspace.as_str()) {
+            declared_workspaces.insert(workspace.as_str());
+        }
+        let mut optional_workspaces = BTreeSet::new();
+        for workspace in &self.optional_workspaces {
+            if !workspace_names.contains(workspace.as_str()) {
                 return Err(FrameworkError::Build(format!(
-                    "command `{command_name}` declares workspace `{workspace}` more than once"
+                    "command `{command_name}` optionally uses workspace `{workspace}`, which is not declared on the server"
+                )));
+            }
+            optional_workspaces.insert(workspace.as_str());
+            if declared_workspaces.contains(workspace.as_str()) {
+                return Err(FrameworkError::Build(format!(
+                    "command `{command_name}` declares workspace `{workspace}` as both required and optional"
                 )));
             }
         }
@@ -668,6 +687,9 @@ impl CommandBuilder {
         }
         for workspace in self.workspaces {
             spec = spec.uses_workspace(workspace);
+        }
+        for workspace in self.optional_workspaces {
+            spec = spec.uses_optional_workspace(workspace);
         }
         if self.uses_conversation_identity {
             spec = spec.uses_conversation_identity();

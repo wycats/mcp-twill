@@ -75,6 +75,7 @@ impl<'de> Deserialize<'de> for ConversationIdentity {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InvocationContext {
     conversation_identity: Option<ConversationIdentity>,
+    host_workspace_roots: Option<mcp_workspace_resolver::HostWorkspaceRootsObservation>,
 }
 
 impl InvocationContext {
@@ -89,6 +90,20 @@ impl InvocationContext {
 
     pub fn conversation_identity(&self) -> Option<&ConversationIdentity> {
         self.conversation_identity.as_ref()
+    }
+
+    pub fn with_host_workspace_roots(
+        mut self,
+        roots: mcp_workspace_resolver::HostWorkspaceRootsObservation,
+    ) -> Self {
+        self.host_workspace_roots = Some(roots);
+        self
+    }
+
+    pub(crate) fn host_workspace_roots(
+        &self,
+    ) -> Option<&mcp_workspace_resolver::HostWorkspaceRootsObservation> {
+        self.host_workspace_roots.as_ref()
     }
 }
 

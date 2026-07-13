@@ -2,7 +2,7 @@
 
 # RFC 0009: Handler-Visible Workspace Roots
 
-- Status: Draft
+- Status: Accepted
 - Area: command model, planning, handler context, request metadata, projection surfaces
 - Target milestone: v0.4
 - Depends on: RFC 0004 (runtime and workspace contracts), RFC 0007 (workspace resolution crate)

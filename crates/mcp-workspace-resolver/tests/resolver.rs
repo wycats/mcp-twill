@@ -2,9 +2,10 @@
 
 use mcp_workspace_resolver::{
     AMBIGUOUS_WORKSPACE_ROOT, CodexSandboxObservation, DeclaredWorkspaceRoot, DerivedRootKind,
-    McpRoot, McpRootsObservation, RootDerivationPolicy, UNRESOLVED_WORKSPACE_REQUIREMENT,
-    UNSUPPORTED_ROOT_SCHEME, WorkspaceObservationSet, WorkspaceRequirement, WorkspaceSelection,
-    WorkspaceSelectionReason, WorkspaceSource, resolve_workspaces, resolve_workspaces_with_policy,
+    HostWorkspaceRoot, HostWorkspaceRootsObservation, McpRoot, McpRootsObservation,
+    RootDerivationPolicy, UNRESOLVED_WORKSPACE_REQUIREMENT, UNSUPPORTED_ROOT_SCHEME,
+    WorkspaceObservationSet, WorkspaceRequirement, WorkspaceSelection, WorkspaceSelectionReason,
+    WorkspaceSource, resolve_workspaces, resolve_workspaces_with_policy,
 };
 
 fn requirement(id: &str) -> WorkspaceRequirement {
@@ -295,6 +296,91 @@ fn explicit_uri_selection_matches_equivalent_path() {
     assert_eq!(
         root.selection_reason,
         WorkspaceSelectionReason::MatchedByUri
+    );
+}
+
+#[test]
+fn trusted_host_roots_resolve_by_name_and_preserve_issuer() {
+    let requirements = [requirement("repo")];
+    let observations =
+        WorkspaceObservationSet::new().with_host_roots(HostWorkspaceRootsObservation::new([
+            HostWorkspaceRoot::named("com.example.editor", "docs", "file:///workspace/docs")
+                .unwrap(),
+            HostWorkspaceRoot::named("com.example.editor", "repo", "file:///workspace/repo")
+                .unwrap(),
+        ]));
+
+    let resolved = resolve_workspaces(&requirements, &observations);
+    let root = resolved.root(&"repo".into()).expect("resolved");
+    assert_eq!(root.root_uri, "file:///workspace/repo");
+    assert_eq!(root.source, WorkspaceSource::TrustedHost);
+    assert_eq!(root.source_issuer.as_deref(), Some("com.example.editor"));
+    assert_eq!(
+        root.selection_reason,
+        WorkspaceSelectionReason::MatchedByName
+    );
+}
+
+#[test]
+fn single_trusted_host_root_uses_registry_primary_rule() {
+    let requirements =
+        [requirement("repo").with_selection(WorkspaceSelection::PrimaryWhenSingleRoot)];
+    let observations =
+        WorkspaceObservationSet::new().with_host_roots(HostWorkspaceRootsObservation::new([
+            HostWorkspaceRoot::new("com.example.editor", "file:///workspace/project").unwrap(),
+        ]));
+
+    let resolved = resolve_workspaces(&requirements, &observations);
+    let root = resolved.root(&"repo".into()).expect("resolved");
+    assert_eq!(root.root_uri, "file:///workspace/project");
+    assert_eq!(
+        root.selection_reason,
+        WorkspaceSelectionReason::SingleRootPrimary
+    );
+}
+
+#[test]
+fn present_empty_trusted_host_roots_block_declared_fallback() {
+    let requirements = [requirement("repo")
+        .with_fallback(DeclaredWorkspaceRoot::new("repo", "file:///declared/repo"))];
+    let observations = WorkspaceObservationSet::new()
+        .with_host_roots(HostWorkspaceRootsObservation::default())
+        .with_declared(DeclaredWorkspaceRoot::new("repo", "file:///declared/repo"));
+
+    let resolved = resolve_workspaces(&requirements, &observations);
+    assert!(resolved.roots.is_empty());
+    assert_eq!(
+        resolved.diagnostics[0].code,
+        UNRESOLVED_WORKSPACE_REQUIREMENT
+    );
+}
+
+#[test]
+fn codex_and_mcp_authority_remain_above_trusted_host() {
+    let requirements = [requirement("repo")];
+    let host = HostWorkspaceRootsObservation::new([HostWorkspaceRoot::named(
+        "com.example.editor",
+        "repo",
+        "file:///host/repo",
+    )
+    .unwrap()]);
+
+    let mcp = WorkspaceObservationSet::new()
+        .with_mcp_roots(McpRootsObservation::new(vec![
+            McpRoot::new("file:///mcp/repo").with_name("repo"),
+        ]))
+        .with_host_roots(host.clone());
+    assert_eq!(
+        resolve_workspaces(&requirements, &mcp).roots[0].source,
+        WorkspaceSource::McpRoots
+    );
+
+    let codex = WorkspaceObservationSet::new()
+        .with_codex_sandbox(CodexSandboxObservation::new("/codex/repo"))
+        .with_host_roots(host);
+    assert_eq!(
+        resolve_workspaces(&requirements, &codex).roots[0].source,
+        WorkspaceSource::CodexSandboxMeta
     );
 }
 

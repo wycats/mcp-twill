@@ -411,6 +411,7 @@ name = "mcp-workspace-resolver"
 version = "0.1.0"
 dependencies = [
  "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

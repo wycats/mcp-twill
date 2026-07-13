@@ -502,6 +502,8 @@ pub struct PlanWorkspaceRoot {
     pub id: String,
     pub root_uri: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_issuer: Option<String>,
     pub selection_reason: Value,
 }
 
@@ -550,6 +552,7 @@ impl From<&ResolvedWorkspaceRoot> for PlanWorkspaceRoot {
             id: root.id.as_str().to_string(),
             root_uri: root.root_uri.clone(),
             source,
+            source_issuer: root.source_issuer.clone(),
             selection_reason: serde_json::to_value(&root.selection_reason).unwrap_or(Value::Null),
         }
     }
@@ -626,6 +629,10 @@ pub struct CommandSpec {
     /// never caller-supplied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<String>,
+    /// Workspaces delivered to the handler when resolution succeeds. An
+    /// unresolved optional workspace does not prevent dispatch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_workspaces: Vec<String>,
     /// Whether the handler can consume optional host-supplied conversation
     /// identity through `CommandContext`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -684,6 +691,7 @@ impl CommandSpec {
             progress: Vec::new(),
             idempotent: false,
             workspaces: Vec::new(),
+            optional_workspaces: Vec::new(),
             uses_conversation_identity: false,
             requires: Vec::new(),
             provides: Vec::new(),
@@ -747,6 +755,16 @@ impl CommandSpec {
         let name = name.into();
         if !self.workspaces.contains(&name) {
             self.workspaces.push(name);
+        }
+        self
+    }
+
+    /// Declares that the handler can consume the named workspace when the
+    /// host supplies one. Absence remains valid.
+    pub fn uses_optional_workspace(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        if !self.optional_workspaces.contains(&name) {
+            self.optional_workspaces.push(name);
         }
         self
     }

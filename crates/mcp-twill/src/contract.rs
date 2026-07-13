@@ -507,6 +507,81 @@ pub fn check_workspace_projection(registry: &CommandRegistry) -> Vec<ContractVio
             }
         }
     }
+
+    let operations = registry.operation_specs();
+    for command in registry.command_specs() {
+        let operation_id = command.path.join(".");
+        let Some(operation) = operations
+            .iter()
+            .find(|operation| operation.id == operation_id)
+        else {
+            violations.push(violation(
+                Some(&command.name()),
+                "workspaces",
+                "command has no operation projection",
+            ));
+            continue;
+        };
+        if command.workspaces != operation.workspaces
+            || command.optional_workspaces != operation.optional_workspaces
+        {
+            violations.push(violation(
+                Some(&command.name()),
+                "workspaces",
+                "command and operation workspace declarations disagree",
+            ));
+        }
+
+        let help = registry.help(crate::HelpRequest {
+            command: Some(command.name()),
+            topic: Some(crate::HelpTopic::Usage),
+            detail: None,
+        });
+        for name in &command.workspaces {
+            if !help.text.lines().any(|line| {
+                line.contains(&format!("`{name}`:"))
+                    && line.contains("(required, supplied by host)")
+            }) {
+                violations.push(violation(
+                    Some(&command.name()),
+                    "help",
+                    format!("required workspace `{name}` has no required help projection"),
+                ));
+            }
+        }
+        for name in &command.optional_workspaces {
+            if !help.text.lines().any(|line| {
+                line.contains(&format!("`{name}`:"))
+                    && line.contains("(optional, supplied by host)")
+            }) {
+                violations.push(violation(
+                    Some(&command.name()),
+                    "help",
+                    format!("optional workspace `{name}` has no optional help projection"),
+                ));
+            }
+        }
+
+        let schema = registry.arg_schema(command);
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
+        for workspace in command
+            .workspaces
+            .iter()
+            .chain(&command.optional_workspaces)
+        {
+            if command.arg(workspace).is_none()
+                && properties.is_some_and(|properties| properties.contains_key(workspace))
+            {
+                violations.push(violation(
+                    Some(&command.name()),
+                    "schema",
+                    format!("workspace `{workspace}` appears as an undeclared input property"),
+                ));
+            }
+        }
+    }
     violations
 }
 
