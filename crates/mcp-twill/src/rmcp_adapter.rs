@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -7,9 +8,7 @@ use std::{
 };
 
 use chrono::Utc;
-use mcp_workspace_resolver::{
-    CodexSandboxObservation, McpRootsObservation, ResolvedWorkspaceSet, resolve_workspaces,
-};
+use mcp_workspace_resolver::{CodexSandboxObservation, McpRootsObservation, ResolvedWorkspaceSet};
 use rand::{RngCore, rngs::OsRng};
 use rmcp::{
     Peer, RoleServer, ServerHandler,
@@ -44,11 +43,21 @@ pub enum ConversationIdentityCompatibility {
     TrustedCodexThreadId,
 }
 
+/// Whether the rmcp adapter may interpret Codex's legacy sandbox metadata as
+/// a trusted workspace observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkspaceMetadataCompatibility {
+    #[default]
+    Disabled,
+    TrustedCodexSandboxState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliMcpServerConfig {
     pub execution_tool_name: String,
     pub replay_ttl_ms: i64,
     pub conversation_identity_compatibility: ConversationIdentityCompatibility,
+    pub workspace_metadata_compatibility: WorkspaceMetadataCompatibility,
 }
 
 impl Default for CliMcpServerConfig {
@@ -57,6 +66,7 @@ impl Default for CliMcpServerConfig {
             execution_tool_name: "run".to_string(),
             replay_ttl_ms: 10 * 60 * 1000,
             conversation_identity_compatibility: ConversationIdentityCompatibility::Disabled,
+            workspace_metadata_compatibility: WorkspaceMetadataCompatibility::Disabled,
         }
     }
 }
@@ -79,6 +89,46 @@ impl CliMcpServerConfig {
         self.conversation_identity_compatibility = compatibility;
         self
     }
+
+    pub fn with_workspace_metadata_compatibility(
+        mut self,
+        compatibility: WorkspaceMetadataCompatibility,
+    ) -> Self {
+        self.workspace_metadata_compatibility = compatibility;
+        self
+    }
+}
+
+/// Per-call application metadata after request-over-context merging and
+/// removal of protocol-owned control keys. This wrapper intentionally has no
+/// serialization or schema implementation.
+#[derive(Clone, Default)]
+struct EffectiveApplicationMeta(Meta);
+
+impl EffectiveApplicationMeta {
+    fn get(&self, key: &str) -> Option<&Value> {
+        self.0.0.get(key)
+    }
+}
+
+impl fmt::Debug for EffectiveApplicationMeta {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("EffectiveApplicationMeta")
+            .field(&"<redacted>")
+            .finish()
+    }
+}
+
+fn effective_application_meta(request: Option<&Meta>, context: &Meta) -> EffectiveApplicationMeta {
+    let mut merged = context.clone();
+    if let Some(request) = request {
+        merged.0.extend(request.0.clone());
+    }
+    merged
+        .0
+        .retain(|key, _| key != "progressToken" && !key.starts_with("io.modelcontextprotocol/"));
+    EffectiveApplicationMeta(merged)
 }
 
 #[derive(Clone)]
@@ -269,12 +319,15 @@ impl CliMcpServer {
     async fn execute_run_tool(
         self,
         tool_name: String,
-        meta: Meta,
+        request_meta: Option<Meta>,
+        context_meta: Meta,
         client: Peer<RoleServer>,
         request: RunRequest,
     ) -> CallToolResult {
         let profile = response_profile(&request);
-        let outcome = self.run_tool_flow(tool_name, meta, client, request).await;
+        let outcome = self
+            .run_tool_flow(tool_name, request_meta, context_meta, client, request)
+            .await;
         if self.events.enabled() {
             self.events.record(
                 FrameworkEvent::from_envelope(&outcome.envelope, outcome.plan.as_ref())
@@ -320,7 +373,8 @@ impl CliMcpServer {
     async fn run_tool_flow(
         &self,
         tool_name: String,
-        meta: Meta,
+        request_meta: Option<Meta>,
+        context_meta: Meta,
         client: Peer<RoleServer>,
         request: RunRequest,
     ) -> RunOutcome {
@@ -330,18 +384,39 @@ impl CliMcpServer {
         let authorizer = &self.authorizer;
         let profile = response_profile(&request);
         let mode = request.effective_mode();
-        let invocation_context =
-            match invocation_context_from_meta(&meta, config.conversation_identity_compatibility) {
-                Ok(context) => context,
-                Err(error) => {
-                    return RunOutcome::envelope(
-                        ResponseEnvelope::framework_error(error, Some(request), None),
-                        None,
-                    );
-                }
-            };
-        let resolved = Self::resolve_workspaces_for_call(registry, &meta, &client).await;
-        Self::notify_progress(&meta, &client, 1.0, 4.0, "Parsing command template").await;
+        // rmcp's transfer-object serde extracts wire `params._meta` into the
+        // request extensions exposed as `RequestContext.meta`. Direct handler
+        // calls may retain it on `CallToolRequestParams.meta`, so prefer that
+        // representation when present and otherwise use the transport-owned
+        // context representation for protocol controls such as progress.
+        let protocol_meta = request_meta.as_ref().unwrap_or(&context_meta);
+        let effective_meta = effective_application_meta(request_meta.as_ref(), &context_meta);
+        let invocation_context = match invocation_context_from_meta(
+            &effective_meta,
+            config.conversation_identity_compatibility,
+        ) {
+            Ok(context) => context,
+            Err(error) => {
+                return RunOutcome::envelope(
+                    ResponseEnvelope::framework_error(error, Some(request), None),
+                    None,
+                );
+            }
+        };
+        let codex = match codex_sandbox_observation(
+            &effective_meta,
+            config.workspace_metadata_compatibility,
+        ) {
+            Ok(observation) => observation,
+            Err(error) => {
+                return RunOutcome::envelope(
+                    ResponseEnvelope::framework_error(error, Some(request), None),
+                    None,
+                );
+            }
+        };
+        let resolved = Self::resolve_workspaces_for_call(registry, codex, &client).await;
+        Self::notify_progress(protocol_meta, &client, 1.0, 4.0, "Parsing command template").await;
         let plan = match registry.build_plan_with_workspaces_and_context(
             &request,
             &resolved,
@@ -357,7 +432,7 @@ impl CliMcpServer {
         };
         let plan_for_event = PlanFacts::from(&plan);
 
-        Self::notify_progress(&meta, &client, 2.0, 4.0, "Invocation plan ready").await;
+        Self::notify_progress(protocol_meta, &client, 2.0, 4.0, "Invocation plan ready").await;
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
             return RunOutcome::envelope(
                 ResponseEnvelope::framework_error(
@@ -405,7 +480,7 @@ impl CliMcpServer {
                     );
                 }
             };
-            Self::notify_progress(&meta, &client, 4.0, 4.0, "Preview ready").await;
+            Self::notify_progress(protocol_meta, &client, 4.0, 4.0, "Preview ready").await;
             return RunOutcome::envelope(
                 ResponseEnvelope::preview(plan, requires_confirmation),
                 Some(plan_for_event),
@@ -447,7 +522,14 @@ impl CliMcpServer {
                     let record =
                         issue_replay_record(config, replay, &plan, Utc::now().timestamp_millis())
                             .await;
-                    Self::notify_progress(&meta, &client, 4.0, 4.0, "Confirmation required").await;
+                    Self::notify_progress(
+                        protocol_meta,
+                        &client,
+                        4.0,
+                        4.0,
+                        "Confirmation required",
+                    )
+                    .await;
                     return RunOutcome::envelope(
                         ResponseEnvelope::permission_required(plan, record, request, tool_name),
                         Some(plan_for_event),
@@ -469,7 +551,14 @@ impl CliMcpServer {
             }
         }
 
-        Self::notify_progress(&meta, &client, 3.0, 4.0, "Dispatching command handler").await;
+        Self::notify_progress(
+            protocol_meta,
+            &client,
+            3.0,
+            4.0,
+            "Dispatching command handler",
+        )
+        .await;
         let result = registry
             .run_in_lane_with_workspaces_and_context(
                 request.clone(),
@@ -482,7 +571,7 @@ impl CliMcpServer {
             .await;
         match result {
             Ok(response) => {
-                Self::notify_progress(&meta, &client, 4.0, 4.0, "Command complete").await;
+                Self::notify_progress(protocol_meta, &client, 4.0, 4.0, "Command complete").await;
                 RunOutcome::output(
                     ResponseEnvelope::success(response, profile),
                     Some(plan_for_event),
@@ -504,7 +593,7 @@ impl CliMcpServer {
     /// Declared workspace roots always participate.
     async fn resolve_workspaces_for_call(
         registry: &CommandRegistry,
-        meta: &Meta,
+        codex: Option<CodexSandboxObservation>,
         client: &Peer<RoleServer>,
     ) -> ResolvedWorkspaceSet {
         let mut observations = registry.declared_observations();
@@ -523,11 +612,11 @@ impl CliMcpServer {
             observations = observations.with_mcp_roots(roots);
         }
 
-        if let Some(codex) = codex_sandbox_observation(meta) {
+        if let Some(codex) = codex {
             observations = observations.with_codex_sandbox(codex);
         }
 
-        resolve_workspaces(&registry.workspace_requirements(), &observations)
+        registry.resolve_workspaces(&observations)
     }
 
     fn parse_arguments<T: DeserializeOwned>(
@@ -618,11 +707,13 @@ impl ServerHandler for CliMcpServer {
             ));
         }
 
+        let request_meta = request.meta.clone();
         let run_request = self.parse_run_request(request.arguments)?;
         Ok(self
             .clone()
             .execute_run_tool(
                 tool_name,
+                request_meta,
                 context.meta.clone(),
                 context.peer.clone(),
                 run_request,
@@ -753,6 +844,7 @@ impl ServerHandler for CliMcpServer {
                 None,
             ));
         }
+        let request_meta = request.meta.clone();
         let run_request = self.parse_run_request(request.arguments)?;
 
         let task_id = format!(
@@ -780,11 +872,11 @@ impl ServerHandler for CliMcpServer {
 
         let tasks = self.tasks.clone();
         let server = self.clone();
-        let meta = context.meta.clone();
+        let context_meta = context.meta.clone();
         let client = context.peer.clone();
         tokio::spawn(async move {
             let result = server
-                .execute_run_tool(tool_name, meta, client, run_request)
+                .execute_run_tool(tool_name, request_meta, context_meta, client, run_request)
                 .await;
             let is_error = result.is_error.unwrap_or(false);
             let mut tasks = tasks.lock().await;
@@ -972,31 +1064,92 @@ fn effect_label(effect: &crate::EffectSpec) -> String {
     }
 }
 
-/// Parses `codex/sandbox-state-meta` from request meta into a Codex sandbox
-/// observation. Accepts `sandboxCwd` (camelCase) or `sandbox_cwd`.
-fn codex_sandbox_observation(meta: &Meta) -> Option<CodexSandboxObservation> {
-    let state = meta.0.get("codex/sandbox-state-meta")?;
-    let cwd = state
-        .get("sandboxCwd")
-        .or_else(|| state.get("sandbox_cwd"))?
-        .as_str()?;
+const CODEX_SANDBOX_META_KEY: &str = "codex/sandbox-state-meta";
+
+/// Parses the trusted Codex workspace compatibility payload after effective
+/// application-context merging. Disabled compatibility ignores every shape.
+fn codex_sandbox_observation(
+    meta: &EffectiveApplicationMeta,
+    compatibility: WorkspaceMetadataCompatibility,
+) -> crate::Result<Option<CodexSandboxObservation>> {
+    if matches!(compatibility, WorkspaceMetadataCompatibility::Disabled) {
+        return Ok(None);
+    }
+    let Some(state) = meta.get(CODEX_SANDBOX_META_KEY) else {
+        return Ok(None);
+    };
+    let object = state.as_object().ok_or_else(|| {
+        invalid_workspace_metadata(None, crate::WorkspaceMetadataProblem::ExpectedObject)
+    })?;
+
+    let cwd = aliased_string(object, "sandboxCwd", "sandbox_cwd", true)?.ok_or_else(|| {
+        invalid_workspace_metadata(
+            Some("sandboxCwd"),
+            crate::WorkspaceMetadataProblem::MissingSandboxCwd,
+        )
+    })?;
+    if cwd.is_empty() {
+        return Err(invalid_workspace_metadata(
+            Some("sandboxCwd"),
+            crate::WorkspaceMetadataProblem::InvalidSandboxCwd,
+        ));
+    }
+
     let mut observation = CodexSandboxObservation::new(cwd);
-    if let Some(profile) = state
-        .get("permissionProfile")
-        .or_else(|| state.get("permission_profile"))
-        .and_then(Value::as_str)
+    if let Some(profile) = aliased_string(object, "permissionProfile", "permission_profile", false)?
     {
         observation = observation.with_permission_profile(profile);
     }
-    Some(observation)
+    Ok(Some(observation))
+}
+
+fn aliased_string<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    canonical: &'static str,
+    alias: &'static str,
+    cwd: bool,
+) -> crate::Result<Option<&'a str>> {
+    let canonical_value = object.get(canonical);
+    let alias_value = object.get(alias);
+    if let (Some(left), Some(right)) = (canonical_value, alias_value)
+        && left != right
+    {
+        return Err(invalid_workspace_metadata(
+            Some(canonical),
+            crate::WorkspaceMetadataProblem::ConflictingAliases,
+        ));
+    }
+    let Some(value) = canonical_value.or(alias_value) else {
+        return Ok(None);
+    };
+    value.as_str().map(Some).ok_or_else(|| {
+        invalid_workspace_metadata(
+            Some(canonical),
+            if cwd {
+                crate::WorkspaceMetadataProblem::InvalidSandboxCwd
+            } else {
+                crate::WorkspaceMetadataProblem::InvalidPermissionProfile
+            },
+        )
+    })
+}
+
+fn invalid_workspace_metadata(
+    field: Option<&str>,
+    reason: crate::WorkspaceMetadataProblem,
+) -> FrameworkError {
+    FrameworkError::InvalidWorkspaceMetadata {
+        key: CODEX_SANDBOX_META_KEY.to_string(),
+        field: field.map(str::to_string),
+        reason,
+    }
 }
 
 fn invocation_context_from_meta(
-    meta: &Meta,
+    meta: &EffectiveApplicationMeta,
     compatibility: ConversationIdentityCompatibility,
 ) -> crate::Result<InvocationContext> {
     let canonical = meta
-        .0
         .get(crate::CONVERSATION_IDENTITY_META_KEY)
         .map(crate::conversation_identity::parse_canonical_identity)
         .transpose()?;
@@ -1008,7 +1161,6 @@ fn invocation_context_from_meta(
     }
 
     let codex = meta
-        .0
         .get("threadId")
         .map(crate::conversation_identity::codex_thread_identity)
         .transpose()?;
@@ -1149,5 +1301,91 @@ impl NoAnnotation for RawResource {
             raw: self,
             annotations: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Meta {
+        Meta(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn effective_application_metadata_merges_per_key_and_filters_protocol_controls() {
+        let context = meta([
+            ("contextOnly", json!("kept")),
+            ("shared", json!("context")),
+            ("progressToken", json!("context-token")),
+            (
+                "io.modelcontextprotocol/related-task",
+                json!("context-task"),
+            ),
+        ]);
+        let request = meta([
+            ("requestOnly", json!("kept")),
+            ("shared", json!("request")),
+            ("progressToken", json!("request-token")),
+            ("io.modelcontextprotocol/version", json!(1)),
+        ]);
+
+        let effective = effective_application_meta(Some(&request), &context);
+        assert_eq!(effective.get("contextOnly"), Some(&json!("kept")));
+        assert_eq!(effective.get("requestOnly"), Some(&json!("kept")));
+        assert_eq!(effective.get("shared"), Some(&json!("request")));
+        assert_eq!(effective.get("progressToken"), None);
+        assert_eq!(effective.get("io.modelcontextprotocol/related-task"), None);
+        assert_eq!(effective.get("io.modelcontextprotocol/version"), None);
+
+        let debug = format!("{effective:?}");
+        assert_eq!(debug, "EffectiveApplicationMeta(\"<redacted>\")");
+        assert!(!debug.contains("contextOnly"));
+    }
+
+    #[test]
+    fn trusted_codex_workspace_metadata_is_strict_and_default_disabled() {
+        let malformed = effective_application_meta(
+            Some(&meta([(CODEX_SANDBOX_META_KEY, json!({"sandboxCwd": 7}))])),
+            &Meta::default(),
+        );
+        assert_eq!(
+            codex_sandbox_observation(&malformed, WorkspaceMetadataCompatibility::Disabled)
+                .unwrap(),
+            None
+        );
+        assert!(matches!(
+            codex_sandbox_observation(
+                &malformed,
+                WorkspaceMetadataCompatibility::TrustedCodexSandboxState
+            ),
+            Err(FrameworkError::InvalidWorkspaceMetadata {
+                reason: crate::WorkspaceMetadataProblem::InvalidSandboxCwd,
+                ..
+            })
+        ));
+
+        let conflicting = effective_application_meta(
+            Some(&meta([(
+                CODEX_SANDBOX_META_KEY,
+                json!({"sandboxCwd": "/a", "sandbox_cwd": "/b"}),
+            )])),
+            &Meta::default(),
+        );
+        assert!(matches!(
+            codex_sandbox_observation(
+                &conflicting,
+                WorkspaceMetadataCompatibility::TrustedCodexSandboxState
+            ),
+            Err(FrameworkError::InvalidWorkspaceMetadata {
+                reason: crate::WorkspaceMetadataProblem::ConflictingAliases,
+                ..
+            })
+        ));
     }
 }

@@ -1,6 +1,47 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::fmt;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, FrameworkError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMetadataProblem {
+    ExpectedObject,
+    MissingSandboxCwd,
+    InvalidSandboxCwd,
+    InvalidPermissionProfile,
+    ConflictingAliases,
+}
+
+impl fmt::Display for WorkspaceMetadataProblem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ExpectedObject => "expected_object",
+            Self::MissingSandboxCwd => "missing_sandbox_cwd",
+            Self::InvalidSandboxCwd => "invalid_sandbox_cwd",
+            Self::InvalidPermissionProfile => "invalid_permission_profile",
+            Self::ConflictingAliases => "conflicting_aliases",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreResolvedWorkspaceProblem {
+    DuplicateWorkspace,
+    UnknownWorkspace,
+}
+
+impl fmt::Display for PreResolvedWorkspaceProblem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::DuplicateWorkspace => "duplicate_workspace",
+            Self::UnknownWorkspace => "unknown_workspace",
+        })
+    }
+}
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum FrameworkError {
@@ -110,6 +151,19 @@ pub enum FrameworkError {
     },
     #[error("conflicting conversation identity request context observations")]
     ConflictingConversationIdentity,
+    #[error("invalid workspace request context at `{key}` ({reason})")]
+    InvalidWorkspaceMetadata {
+        key: String,
+        field: Option<String>,
+        reason: WorkspaceMetadataProblem,
+    },
+    #[error("raw host workspace observations cannot be combined with pre-resolved workspaces")]
+    ConflictingWorkspaceInputs,
+    #[error("invalid pre-resolved workspace set ({reason})")]
+    InvalidPreResolvedWorkspaceSet {
+        workspace: Option<String>,
+        reason: PreResolvedWorkspaceProblem,
+    },
     #[error("stdin mismatch: {0}")]
     StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]

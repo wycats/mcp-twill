@@ -1,10 +1,12 @@
 //! Serde round-trips for the public vocabulary types.
 
 use mcp_workspace_resolver::{
-    CodexSandboxObservation, DeclaredWorkspaceRoot, McpRoot, McpRootsObservation,
-    ResolvedWorkspaceSet, WorkspaceDiagnostic, WorkspaceObservationSet, WorkspaceRequirement,
-    WorkspaceSelection, resolve_workspaces,
+    CodexSandboxObservation, DeclaredWorkspaceRoot, HostWorkspaceRoot, HostWorkspaceRootError,
+    HostWorkspaceRootsObservation, McpRoot, McpRootsObservation, ResolvedWorkspaceSet,
+    WorkspaceDiagnostic, WorkspaceObservationSet, WorkspaceRequirement, WorkspaceSelection,
+    resolve_workspaces,
 };
+use schemars::schema_for;
 
 #[test]
 fn requirement_round_trips() {
@@ -53,6 +55,26 @@ fn resolved_set_serializes_with_stable_diagnostic_codes() {
 }
 
 #[test]
+fn legacy_resolved_root_defaults_source_issuer_to_absent() {
+    let root: mcp_workspace_resolver::ResolvedWorkspaceRoot =
+        serde_json::from_value(serde_json::json!({
+            "id": "repo",
+            "root_uri": "file:///repo",
+            "source": "declared",
+            "selection_reason": "declared_fallback",
+            "capabilities": { "read": true, "write": false }
+        }))
+        .unwrap();
+    assert_eq!(root.source_issuer, None);
+    assert!(
+        serde_json::to_value(root)
+            .unwrap()
+            .get("source_issuer")
+            .is_none()
+    );
+}
+
+#[test]
 fn diagnostic_round_trips() {
     let diagnostic = WorkspaceDiagnostic::ambiguous(
         "repo".into(),
@@ -63,4 +85,84 @@ fn diagnostic_round_trips() {
     let json = serde_json::to_string(&diagnostic).expect("serialize");
     let back: WorkspaceDiagnostic = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, diagnostic);
+}
+
+#[test]
+fn trusted_host_root_wire_form_round_trips_and_schema_is_closed() {
+    let root =
+        HostWorkspaceRoot::named("com.example.editor", "repo", "file:///workspace/repo").unwrap();
+    let json = serde_json::to_value(&root).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "issuer": "com.example.editor",
+            "name": "repo",
+            "uri": "file:///workspace/repo"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<HostWorkspaceRoot>(json).unwrap(),
+        root
+    );
+    assert!(
+        serde_json::from_value::<HostWorkspaceRoot>(serde_json::json!({
+            "issuer": "com.example.editor",
+            "uri": "file:///workspace/repo",
+            "extra": true
+        }))
+        .is_err()
+    );
+
+    let schema = serde_json::to_value(schema_for!(HostWorkspaceRoot)).unwrap();
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["properties"]["issuer"]["type"], "string");
+    assert_eq!(schema["properties"]["uri"]["type"], "string");
+
+    let collection_schema =
+        serde_json::to_value(schema_for!(HostWorkspaceRootsObservation)).unwrap();
+    assert_eq!(collection_schema["type"], "array");
+    assert_eq!(
+        collection_schema["items"]["$ref"],
+        "#/$defs/HostWorkspaceRoot"
+    );
+}
+
+#[test]
+fn trusted_host_observation_preserves_absent_and_present_empty() {
+    let absent = WorkspaceObservationSet::new();
+    let present =
+        WorkspaceObservationSet::new().with_host_roots(HostWorkspaceRootsObservation::default());
+    assert_ne!(absent, present);
+    assert_eq!(
+        serde_json::from_value::<WorkspaceObservationSet>(serde_json::to_value(&present).unwrap())
+            .unwrap(),
+        present
+    );
+}
+
+#[test]
+fn trusted_host_root_validation_and_debug_are_redacted() {
+    assert_eq!(
+        HostWorkspaceRoot::new("Example.COM", "file:///workspace/repo").unwrap_err(),
+        HostWorkspaceRootError::InvalidIssuer
+    );
+    assert_eq!(
+        HostWorkspaceRoot::named("com.example.editor", "", "file:///workspace/repo").unwrap_err(),
+        HostWorkspaceRootError::InvalidName
+    );
+    assert_eq!(
+        HostWorkspaceRoot::new("com.example.editor", "relative/path").unwrap_err(),
+        HostWorkspaceRootError::InvalidUri
+    );
+
+    let roots = HostWorkspaceRootsObservation::new([HostWorkspaceRoot::new(
+        "com.example.editor",
+        "file:///private/project",
+    )
+    .unwrap()]);
+    let debug = format!("{roots:?}");
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("com.example.editor"));
+    assert!(!debug.contains("private"));
+    assert!(!debug.contains('1'));
 }

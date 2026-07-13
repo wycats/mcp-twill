@@ -95,6 +95,7 @@ fn explicit_registry() -> CommandRegistry {
             "List issues",
             "Lists open issues with structured output.",
         )
+        .uses_optional_workspace("repo")
         .with_permission(PermissionSpec::read("issues", "Reads issue records"))
         .with_example(CommandExample::new(
             "issues list",
@@ -174,6 +175,7 @@ fn builder_registry() -> CommandRegistry {
                 command
                     .summary("List issues")
                     .description("Lists open issues with structured output.")
+                    .uses_optional_workspace("repo")
                     .read("issues", "Reads issue records")
                     .example("issues list", "List issues without shell pipelines or jq")
                     .handle(|_context| async {

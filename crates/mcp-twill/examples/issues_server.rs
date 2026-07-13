@@ -225,10 +225,16 @@ pub fn registry() -> Result<CommandRegistry> {
             server.command("issues list", |command| {
                 command
                     .summary("List issues")
-                    .description("Lists open issues with structured output.")
+                    .description(
+                        "Lists open issues with structured output and observes the host repo when available.",
+                    )
+                    .uses_optional_workspace("repo")
                     .read("issues", "Reads issue records")
                     .example("issues list", "List issues without shell pipelines or jq")
-                    .handle(|_context| async {
+                    .handle(|context: CommandContext| async move {
+                        // Optional ambient context is available for application
+                        // policy but never becomes a command argument.
+                        let _repo = context.workspace_root("repo");
                         Ok(CommandOutput::structured(json!([
                             { "id": 1, "title": "Crash on launch", "status": "open" },
                             { "id": 2, "title": "Improve help text", "status": "open" }

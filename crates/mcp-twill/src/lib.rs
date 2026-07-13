@@ -20,9 +20,12 @@ pub use contract::{ContractViolation, verify_catalog_coverage};
 pub use conversation_identity::{
     CONVERSATION_IDENTITY_META_KEY, ConversationIdentity, InvocationContext,
 };
-pub use error::{FrameworkError, Result};
+pub use error::{FrameworkError, PreResolvedWorkspaceProblem, Result, WorkspaceMetadataProblem};
 pub use event::{EventSink, FrameworkEvent, InMemoryEventSink, NoopEventSink, PlanFacts};
 pub use help::{HelpDetail, HelpRequest, HelpResult, HelpTopic};
+pub use mcp_workspace_resolver::{
+    HostWorkspaceRoot, HostWorkspaceRootError, HostWorkspaceRootsObservation,
+};
 pub use model::*;
 pub use registry::{CommandHandler, CommandRegistry, HandlerFuture};
 pub use resource::{
@@ -30,7 +33,10 @@ pub use resource::{
     ResolvedResources, Resource, ResourceOutput, ResourceRefusal,
 };
 pub use response::*;
-pub use rmcp_adapter::{CliMcpServer, CliMcpServerConfig, ConversationIdentityCompatibility};
+pub use rmcp_adapter::{
+    CliMcpServer, CliMcpServerConfig, ConversationIdentityCompatibility,
+    WorkspaceMetadataCompatibility,
+};
 pub use runtime::RuntimeIdentity;
 pub use template::{CommandTemplate, TemplateToken};
 pub use types::{Field, FieldShape, TypeDecl, Variant};

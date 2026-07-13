@@ -80,7 +80,10 @@ impl ErrorCode {
             FrameworkError::CapabilityDenied { .. } => Self::CapabilityDenied,
             FrameworkError::ResourceRefused { .. } => Self::ResourceRefused,
             FrameworkError::InvalidConversationIdentity { .. }
-            | FrameworkError::ConflictingConversationIdentity => Self::InvalidRequestContext,
+            | FrameworkError::ConflictingConversationIdentity
+            | FrameworkError::InvalidWorkspaceMetadata { .. }
+            | FrameworkError::ConflictingWorkspaceInputs
+            | FrameworkError::InvalidPreResolvedWorkspaceSet { .. } => Self::InvalidRequestContext,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
@@ -535,6 +538,28 @@ fn error_details(error: &FrameworkError) -> Value {
             "reason": "conflicting_observations",
             "sources": [crate::CONVERSATION_IDENTITY_META_KEY, "threadId"],
         }),
+        FrameworkError::InvalidWorkspaceMetadata { key, field, reason } => {
+            let mut details = serde_json::Map::new();
+            details.insert("key".to_string(), json!(key));
+            if let Some(field) = field {
+                details.insert("field".to_string(), json!(field));
+            }
+            details.insert("reason".to_string(), json!(reason));
+            Value::Object(details)
+        }
+        FrameworkError::ConflictingWorkspaceInputs => json!({
+            "key": "hostWorkspaceRoots",
+            "reason": "conflicting_workspace_inputs",
+        }),
+        FrameworkError::InvalidPreResolvedWorkspaceSet { workspace, reason } => {
+            let mut details = serde_json::Map::new();
+            details.insert("key".to_string(), json!("preResolvedWorkspaces"));
+            details.insert("reason".to_string(), json!(reason));
+            if let Some(workspace) = workspace {
+                details.insert("workspace".to_string(), json!(workspace));
+            }
+            Value::Object(details)
+        }
         FrameworkError::StdinMismatch(reason) => json!({ "reason": reason }),
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
@@ -638,6 +663,17 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
         FrameworkError::ConflictingConversationIdentity => {
             Some(DiagnosticLocation::RequestContext {
                 key: crate::CONVERSATION_IDENTITY_META_KEY.to_string(),
+            })
+        }
+        FrameworkError::InvalidWorkspaceMetadata { key, .. } => {
+            Some(DiagnosticLocation::RequestContext { key: key.clone() })
+        }
+        FrameworkError::ConflictingWorkspaceInputs => Some(DiagnosticLocation::RequestContext {
+            key: "hostWorkspaceRoots".to_string(),
+        }),
+        FrameworkError::InvalidPreResolvedWorkspaceSet { .. } => {
+            Some(DiagnosticLocation::RequestContext {
+                key: "preResolvedWorkspaces".to_string(),
             })
         }
         _ => None,

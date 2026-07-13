@@ -213,10 +213,14 @@ impl CommandRegistry {
         &self.guidance
     }
 
-    pub fn register<H>(mut self, spec: CommandSpec, handler: H) -> Self
+    pub fn register<H>(mut self, mut spec: CommandSpec, handler: H) -> Self
     where
         H: CommandHandler,
     {
+        spec.workspaces.sort();
+        spec.workspaces.dedup();
+        spec.optional_workspaces.sort();
+        spec.optional_workspaces.dedup();
         self.commands.insert(
             spec.path.clone(),
             RegisteredCommand {
@@ -409,12 +413,11 @@ impl CommandRegistry {
         crate::types::validate_types(&self.types, &arg_references)
     }
 
-    /// Validates command-declared workspace requirements: every name passed
-    /// to `uses_workspace` must match a server-declared workspace, and a
-    /// command must not declare the same workspace twice.
+    /// Validates command-declared workspace requirements: every required or
+    /// optional name must match a server declaration, and one command cannot
+    /// declare the same workspace in both modes.
     pub fn validate_workspaces(&self) -> Result<()> {
         for command in self.commands.values() {
-            let mut seen = std::collections::BTreeSet::new();
             for workspace_name in &command.spec.workspaces {
                 if !self.workspaces.contains_key(workspace_name) {
                     return Err(FrameworkError::Build(format!(
@@ -422,9 +425,17 @@ impl CommandRegistry {
                         command.spec.name()
                     )));
                 }
-                if !seen.insert(workspace_name) {
+            }
+            for workspace_name in &command.spec.optional_workspaces {
+                if !self.workspaces.contains_key(workspace_name) {
                     return Err(FrameworkError::Build(format!(
-                        "command `{}` declares workspace `{workspace_name}` more than once",
+                        "command `{}` optionally uses workspace `{workspace_name}`, which is not declared on the server",
+                        command.spec.name()
+                    )));
+                }
+                if command.spec.workspaces.contains(workspace_name) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` declares workspace `{workspace_name}` as both required and optional",
                         command.spec.name()
                     )));
                 }
@@ -1152,11 +1163,8 @@ impl CommandRegistry {
         request: &RunRequest,
         context: &crate::InvocationContext,
     ) -> Result<InvocationPlan> {
-        self.build_plan_with_workspaces_and_context(
-            request,
-            &self.resolve_declared_workspaces(),
-            context,
-        )
+        let resolved = self.resolve_context_workspaces(context);
+        self.build_plan_prepared(request, &resolved, context)
     }
 
     /// Projects every declared workspace into a resolver requirement. The
@@ -1187,10 +1195,58 @@ impl CommandRegistry {
     /// contribute; declared roots resolve through the resolver's
     /// declared-roots path.
     pub fn resolve_declared_workspaces(&self) -> ResolvedWorkspaceSet {
-        resolve_workspaces(
-            &self.workspace_requirements(),
-            &self.declared_observations(),
-        )
+        self.resolve_workspaces(&self.declared_observations())
+    }
+
+    /// Resolves the registry's complete workspace requirement set against the
+    /// supplied observations and returns roots in canonical workspace-id
+    /// order.
+    pub fn resolve_workspaces(
+        &self,
+        observations: &WorkspaceObservationSet,
+    ) -> ResolvedWorkspaceSet {
+        let mut resolved = resolve_workspaces(&self.workspace_requirements(), observations);
+        resolved.roots.sort_by(|left, right| left.id.cmp(&right.id));
+        resolved
+    }
+
+    fn resolve_context_workspaces(
+        &self,
+        context: &crate::InvocationContext,
+    ) -> ResolvedWorkspaceSet {
+        let mut observations = self.declared_observations();
+        if let Some(host_roots) = context.host_workspace_roots() {
+            observations = observations.with_host_roots(host_roots.clone());
+        }
+        self.resolve_workspaces(&observations)
+    }
+
+    fn validate_pre_resolved_workspaces(
+        &self,
+        resolved: &ResolvedWorkspaceSet,
+    ) -> Result<ResolvedWorkspaceSet> {
+        let mut seen = BTreeSet::new();
+        for root in &resolved.roots {
+            let workspace = root.id.as_str();
+            if !self.workspaces.contains_key(workspace) {
+                return Err(FrameworkError::InvalidPreResolvedWorkspaceSet {
+                    workspace: None,
+                    reason: crate::PreResolvedWorkspaceProblem::UnknownWorkspace,
+                });
+            }
+            if !seen.insert(workspace.to_string()) {
+                return Err(FrameworkError::InvalidPreResolvedWorkspaceSet {
+                    workspace: Some(workspace.to_string()),
+                    reason: crate::PreResolvedWorkspaceProblem::DuplicateWorkspace,
+                });
+            }
+        }
+
+        let mut canonical = resolved.clone();
+        canonical
+            .roots
+            .sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(canonical)
     }
 
     /// Builds an invocation plan against pre-resolved workspace roots.
@@ -1212,6 +1268,19 @@ impl CommandRegistry {
     /// host invocation context. The context affects only declared private
     /// fingerprint facts and is never stored on the returned plan.
     pub fn build_plan_with_workspaces_and_context(
+        &self,
+        request: &RunRequest,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
+    ) -> Result<InvocationPlan> {
+        if context.host_workspace_roots().is_some() {
+            return Err(FrameworkError::ConflictingWorkspaceInputs);
+        }
+        let resolved = self.validate_pre_resolved_workspaces(resolved)?;
+        self.build_plan_prepared(request, &resolved, context)
+    }
+
+    fn build_plan_prepared(
         &self,
         request: &RunRequest,
         resolved: &ResolvedWorkspaceSet,
@@ -1465,6 +1534,15 @@ impl CommandRegistry {
             used_workspaces.insert(workspace_name.clone());
         }
 
+        // Optional workspace use contributes a selected execution fact when
+        // resolution succeeds and remains absent otherwise.
+        for workspace_name in &registered.spec.optional_workspaces {
+            let workspace_id = mcp_workspace_resolver::WorkspaceId::from(workspace_name.as_str());
+            if resolved.root(&workspace_id).is_some() {
+                used_workspaces.insert(workspace_name.clone());
+            }
+        }
+
         let tokens = template
             .tokens
             .iter()
@@ -1557,15 +1635,9 @@ impl CommandRegistry {
         request: RunRequest,
         context: crate::InvocationContext,
     ) -> Result<RunResponse> {
-        self.run_with_lane(
-            request,
-            None,
-            None,
-            None,
-            &self.resolve_declared_workspaces(),
-            &context,
-        )
-        .await
+        let resolved = self.resolve_context_workspaces(&context);
+        self.run_with_lane_prepared(request, None, None, None, &resolved, &context)
+            .await
     }
 
     pub async fn run_in_lane(
@@ -1575,7 +1647,7 @@ impl CommandRegistry {
         lane: EffectLane,
         primary_tool_name: impl AsRef<str>,
     ) -> Result<RunResponse> {
-        self.run_with_lane(
+        self.run_with_lane_prepared(
             request,
             Some(current_tool.into()),
             Some(lane),
@@ -1619,18 +1691,22 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
     ) -> Result<RunResponse> {
-        self.run_with_lane(
+        if context.host_workspace_roots().is_some() {
+            return Err(FrameworkError::ConflictingWorkspaceInputs);
+        }
+        let resolved = self.validate_pre_resolved_workspaces(resolved)?;
+        self.run_with_lane_prepared(
             request,
             Some(current_tool.into()),
             Some(lane),
             Some(primary_tool_name.as_ref().to_string()),
-            resolved,
+            &resolved,
             context,
         )
         .await
     }
 
-    async fn run_with_lane(
+    async fn run_with_lane_prepared(
         &self,
         request: RunRequest,
         current_tool: Option<String>,
@@ -1639,7 +1715,7 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
     ) -> Result<RunResponse> {
-        let plan = self.build_plan_with_workspaces_and_context(&request, resolved, context)?;
+        let plan = self.build_plan_prepared(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
             && plan.lane != current_lane
         {
@@ -2074,7 +2150,7 @@ impl CommandRegistry {
                     .to_string(),
             );
         }
-        if !spec.workspaces.is_empty() {
+        if !spec.workspaces.is_empty() || !spec.optional_workspaces.is_empty() {
             let mut lines = vec!["Workspaces:".to_string()];
             for name in &spec.workspaces {
                 let description = self
@@ -2084,7 +2160,18 @@ impl CommandRegistry {
                     .map(|text| format!("{text} "))
                     .unwrap_or_default();
                 lines.push(format!(
-                    "- `{name}`: {description}Resolved by the server; not a command argument."
+                    "- `{name}`: {description}(required, supplied by host)"
+                ));
+            }
+            for name in &spec.optional_workspaces {
+                let description = self
+                    .workspaces
+                    .get(name)
+                    .and_then(|decl| decl.description.as_deref())
+                    .map(|text| format!("{text} "))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "- `{name}`: {description}(optional, supplied by host)"
                 ));
             }
             sections.push(lines.join("\n"));

@@ -1,13 +1,13 @@
 //! Deterministic workspace resolution.
 //!
 //! Observations are processed in authority order: MCP roots, then Codex
-//! sandbox metadata, then declared roots. Presence blocks fall-through: a
+//! sandbox metadata, then trusted host roots, then declared roots. Presence blocks fall-through: a
 //! present higher-authority observation (even an empty MCP roots list) means
 //! lower-authority sources do not participate.
 
 use crate::codex::{DerivedRoot, DerivedRootKind, RootDerivationPolicy, derive_root};
 use crate::diagnostics::WorkspaceDiagnostic;
-use crate::observation::{McpRoot, WorkspaceObservationSet};
+use crate::observation::{HostWorkspaceRoot, McpRoot, WorkspaceObservationSet};
 use crate::path::{NormalizedPath, normalize_file_uri, paths_equal};
 use crate::requirement::{
     DeclaredWorkspaceRoot, WorkspaceCapabilities, WorkspaceId, WorkspaceRequirement,
@@ -22,6 +22,7 @@ use std::path::Path;
 pub enum WorkspaceSource {
     McpRoots,
     CodexSandboxMeta,
+    TrustedHost,
     Declared,
 }
 
@@ -52,6 +53,8 @@ pub struct ResolvedWorkspaceRoot {
     pub id: WorkspaceId,
     pub root_uri: String,
     pub source: WorkspaceSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_issuer: Option<String>,
     pub selection_reason: WorkspaceSelectionReason,
     pub capabilities: WorkspaceCapabilities,
 }
@@ -82,7 +85,7 @@ pub fn resolve_workspaces(
 /// Resolves each requirement against the observation set.
 ///
 /// Sources apply in authority order: MCP roots, Codex sandbox metadata,
-/// declared roots. A present observation blocks fall-through to every
+/// trusted host roots, declared roots. A present observation blocks fall-through to every
 /// lower-authority source, even when it resolves nothing.
 pub fn resolve_workspaces_with_policy(
     requirements: &[WorkspaceRequirement],
@@ -99,6 +102,11 @@ pub fn resolve_workspaces_with_policy(
     if let Some(codex) = observations.codex_sandbox() {
         let derived = derive_root(&codex.sandbox_cwd, derivation);
         resolve_from_codex(requirements, &derived, &mut set);
+        return set;
+    }
+
+    if let Some(host) = observations.host_roots() {
+        resolve_from_host_roots(requirements, host.roots(), &mut set);
         return set;
     }
 
@@ -170,6 +178,7 @@ fn resolve_requirement_from_roots(
                 id: requirement.id.clone(),
                 root_uri: file_root.root.uri.clone(),
                 source: WorkspaceSource::McpRoots,
+                source_issuer: None,
                 selection_reason: reason,
                 capabilities: WorkspaceCapabilities::default(),
             });
@@ -183,6 +192,7 @@ fn resolve_requirement_from_roots(
                     id: requirement.id.clone(),
                     root_uri: file_root.root.uri.clone(),
                     source: WorkspaceSource::McpRoots,
+                    source_issuer: None,
                     selection_reason: WorkspaceSelectionReason::SingleRootPrimary,
                     capabilities: WorkspaceCapabilities::default(),
                 });
@@ -306,11 +316,127 @@ fn resolve_from_codex(
             id: requirement.id.clone(),
             root_uri: root_uri.clone(),
             source: WorkspaceSource::CodexSandboxMeta,
+            source_issuer: None,
             selection_reason: WorkspaceSelectionReason::CodexDerived {
                 kind: derived.kind.clone(),
             },
             capabilities: WorkspaceCapabilities::default(),
         });
+    }
+}
+
+struct FileHostRoot<'a> {
+    root: &'a HostWorkspaceRoot,
+    path: NormalizedPath,
+}
+
+fn resolve_from_host_roots(
+    requirements: &[WorkspaceRequirement],
+    roots: &[HostWorkspaceRoot],
+    set: &mut ResolvedWorkspaceSet,
+) {
+    let file_roots: Vec<FileHostRoot<'_>> = roots
+        .iter()
+        .map(|root| FileHostRoot {
+            path: normalize_file_uri(root.uri()).expect("host roots are validated"),
+            root,
+        })
+        .collect();
+
+    for requirement in requirements {
+        let matches: Vec<(&FileHostRoot<'_>, WorkspaceSelectionReason)> =
+            match &requirement.selection {
+                WorkspaceSelection::ByNameOrAlias | WorkspaceSelection::PrimaryWhenSingleRoot => {
+                    file_roots
+                        .iter()
+                        .filter_map(|root| {
+                            let name = root.root.name()?;
+                            if requirement.id == name {
+                                Some((root, WorkspaceSelectionReason::MatchedByName))
+                            } else {
+                                requirement.aliases.iter().find(|alias| *alias == name).map(
+                                    |alias| {
+                                        (
+                                            root,
+                                            WorkspaceSelectionReason::MatchedByAlias {
+                                                alias: alias.clone(),
+                                            },
+                                        )
+                                    },
+                                )
+                            }
+                        })
+                        .collect()
+                }
+                WorkspaceSelection::ExplicitUri { uri } => match normalize_file_uri(uri) {
+                    Ok(configured) => file_roots
+                        .iter()
+                        .filter(|root| paths_equal(&root.path, &configured))
+                        .map(|root| (root, WorkspaceSelectionReason::MatchedByUri))
+                        .collect(),
+                    Err(err) => {
+                        set.diagnostics
+                            .push(WorkspaceDiagnostic::unsupported_scheme(
+                                Some(requirement.id.clone()),
+                                err.to_string(),
+                                uri.clone(),
+                            ));
+                        set.diagnostics.push(WorkspaceDiagnostic::unresolved(
+                            requirement.id.clone(),
+                            format!(
+                                "workspace requirement `{}` has a non-file configured URI",
+                                requirement.id
+                            ),
+                        ));
+                        continue;
+                    }
+                },
+            };
+
+        let match_count = matches.len();
+        let selected = if match_count == 1 {
+            matches
+                .first()
+                .map(|(root, reason)| (*root, reason.clone()))
+        } else if match_count == 0
+            && requirement.selection == WorkspaceSelection::PrimaryWhenSingleRoot
+            && file_roots.len() == 1
+        {
+            Some((&file_roots[0], WorkspaceSelectionReason::SingleRootPrimary))
+        } else {
+            None
+        };
+
+        if let Some((root, reason)) = selected {
+            set.roots.push(ResolvedWorkspaceRoot {
+                id: requirement.id.clone(),
+                root_uri: root.root.uri().to_string(),
+                source: WorkspaceSource::TrustedHost,
+                source_issuer: Some(root.root.issuer().to_string()),
+                selection_reason: reason,
+                capabilities: WorkspaceCapabilities::default(),
+            });
+        } else if match_count == 0 {
+            set.diagnostics.push(WorkspaceDiagnostic::unresolved(
+                requirement.id.clone(),
+                format!(
+                    "no trusted host root matches workspace requirement `{}`; lower-authority sources do not apply while trusted host roots are present",
+                    requirement.id
+                ),
+            ));
+        } else {
+            set.diagnostics.push(WorkspaceDiagnostic::ambiguous(
+                requirement.id.clone(),
+                format!(
+                    "multiple trusted host roots match workspace requirement `{}`",
+                    requirement.id
+                ),
+                // Trusted-host roots are private invocation inputs. Their
+                // candidate URIs are intentionally omitted from failure
+                // diagnostics; only a successfully selected root is public.
+                Vec::new(),
+            ));
+        }
     }
 }
 
@@ -354,6 +480,7 @@ fn resolve_from_declared(
                     id: requirement.id.clone(),
                     root_uri: root.uri.clone(),
                     source: WorkspaceSource::Declared,
+                    source_issuer: None,
                     selection_reason: WorkspaceSelectionReason::DeclaredObservation,
                     capabilities: root.capabilities,
                 });
@@ -380,6 +507,7 @@ fn resolve_from_declared(
                         id: requirement.id.clone(),
                         root_uri: fallback.uri.clone(),
                         source: WorkspaceSource::Declared,
+                        source_issuer: None,
                         selection_reason: WorkspaceSelectionReason::DeclaredFallback,
                         capabilities: fallback.capabilities,
                     });

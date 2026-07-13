@@ -4,12 +4,12 @@
 //! A server describes the workspaces its commands need as
 //! [`WorkspaceRequirement`]s. The runtime supplies a
 //! [`WorkspaceObservationSet`] built from MCP roots, Codex sandbox metadata,
-//! and server-declared roots. [`resolve_workspaces`] applies a deterministic
+//! trusted host roots, and server-declared roots. [`resolve_workspaces`] applies a deterministic
 //! policy and returns a [`ResolvedWorkspaceSet`] with the selected root for
 //! each requirement plus structured [`WorkspaceDiagnostic`]s.
 //!
 //! Observations apply in authority order: MCP roots, then Codex sandbox
-//! metadata, then declared roots. Presence blocks fall-through — a present
+//! metadata, then trusted host roots, then declared roots. Presence blocks fall-through — a present
 //! higher-authority observation (even an empty MCP roots list) prevents
 //! lower-authority sources from participating, so server configuration can
 //! never widen filesystem access beyond the boundaries a client declared.
@@ -29,7 +29,8 @@ pub use diagnostics::{
     WorkspaceDiagnostic,
 };
 pub use observation::{
-    CodexSandboxObservation, McpRoot, McpRootsObservation, WorkspaceObservationSet,
+    CodexSandboxObservation, HostWorkspaceRoot, HostWorkspaceRootError,
+    HostWorkspaceRootsObservation, McpRoot, McpRootsObservation, WorkspaceObservationSet,
 };
 pub use path::{
     NormalizedPath, UnsupportedRootScheme, normalize_file_uri, normalize_path, path_has_prefix,
