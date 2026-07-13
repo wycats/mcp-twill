@@ -415,43 +415,57 @@ fn normalize_public_capability_denial(error: FrameworkError) -> FrameworkError {
 fn encode_capability_denial_detail(detail: &str) -> String {
     const LIMIT: usize = 512;
 
-    let mut chunks = Vec::new();
-    let mut width = 0;
-    let mut truncated = false;
-    for scalar in detail.chars() {
-        let chunk = match scalar {
-            '"' => "\\\"".to_string(),
-            '\\' => "\\\\".to_string(),
-            '\u{0008}' => "\\b".to_string(),
-            '\u{000C}' => "\\f".to_string(),
-            '\n' => "\\n".to_string(),
-            '\r' => "\\r".to_string(),
-            '\t' => "\\t".to_string(),
-            scalar if capability_denial_uses_unicode_escape(scalar) => {
-                format!("\\u{:04X}", scalar as u32)
+    let mut output = String::with_capacity(LIMIT);
+    let mut rendered_width = 0;
+    let mut scalars = detail.chars().peekable();
+    while let Some(scalar) = scalars.next() {
+        let mut unicode_escape = [0_u8; 6];
+        let mut utf8_scalar = [0_u8; 4];
+        let (chunk, chunk_width) = match scalar {
+            '"' => ("\\\"", 2),
+            '\\' => ("\\\\", 2),
+            '\u{0008}' => ("\\b", 2),
+            '\u{000C}' => ("\\f", 2),
+            '\n' => ("\\n", 2),
+            '\r' => ("\\r", 2),
+            '\t' => ("\\t", 2),
+            scalar if capability_denial_uses_unicode_escape(scalar) => (
+                capability_denial_unicode_escape(scalar, &mut unicode_escape),
+                6,
+            ),
+            scalar => {
+                let chunk: &str = scalar.encode_utf8(&mut utf8_scalar);
+                (chunk, 1)
             }
-            scalar => scalar.to_string(),
         };
-        let chunk_width = chunk.chars().count();
-        if width + chunk_width > LIMIT {
-            truncated = true;
+
+        // When more input remains, reserve the final rendered scalar for the
+        // truncation marker. The last input scalar may use the full bound.
+        let available = if scalars.peek().is_some() {
+            LIMIT - 1
+        } else {
+            LIMIT
+        };
+        if rendered_width + chunk_width > available {
+            output.push('…');
             break;
         }
-        width += chunk_width;
-        chunks.push(chunk);
+        output.push_str(chunk);
+        rendered_width += chunk_width;
     }
+    output
+}
 
-    if truncated {
-        while width > LIMIT - 1 {
-            if let Some(chunk) = chunks.pop() {
-                width -= chunk.chars().count();
-            } else {
-                break;
-            }
-        }
-        chunks.push("…".to_string());
+fn capability_denial_unicode_escape(scalar: char, buffer: &mut [u8; 6]) -> &str {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    buffer[0] = b'\\';
+    buffer[1] = b'u';
+    let value = scalar as u32;
+    for (index, shift) in [12, 8, 4, 0].into_iter().enumerate() {
+        buffer[index + 2] = HEX[((value >> shift) & 0xF) as usize];
     }
-    chunks.concat()
+    std::str::from_utf8(buffer).expect("Unicode escape buffer is ASCII")
 }
 
 fn capability_denial_uses_unicode_escape(scalar: char) -> bool {

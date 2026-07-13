@@ -262,7 +262,7 @@ impl ServerBuilder {
             .find(|resource| hand_declared_capabilities.contains(resource.name.as_str()))
         {
             return Err(FrameworkError::Build(format!(
-                "resource `{}` derives capability `{}`, which is also declared with `declare_capability`; the resource owns that name",
+                "resource `{}` derives capability `{}`, which is also declared explicitly; the resource owns that name",
                 resource.name, resource.name
             )));
         }

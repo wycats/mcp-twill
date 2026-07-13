@@ -742,7 +742,7 @@ impl CommandRegistry {
                 && !self.resource_capabilities.contains(&decl.name)
             {
                 return Err(FrameworkError::Build(format!(
-                    "resource `{}` derives capability `{}`, which is also declared with `declare_capability`; the resource owns that name",
+                    "resource `{}` derives capability `{}`, which is also declared explicitly; the resource owns that name",
                     decl.name, decl.name
                 )));
             }
