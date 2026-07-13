@@ -595,7 +595,8 @@ impl CliMcpServer {
     /// capability; a failed `roots/list` call degrades to an absent
     /// observation rather than failing the tool call. Codex sandbox metadata
     /// is parsed from `codex/sandbox-state-meta` request meta when present.
-    /// Declared workspace roots always participate.
+    /// Server-declared roots are included as the lowest-authority observation;
+    /// a present higher-authority observation can block that fall-through.
     async fn resolve_workspaces_for_call(
         registry: &CommandRegistry,
         codex: Option<CodexSandboxObservation>,
