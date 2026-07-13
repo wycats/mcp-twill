@@ -131,6 +131,12 @@ fn effective_application_meta(request: Option<&Meta>, context: &Meta) -> Effecti
     EffectiveApplicationMeta(merged)
 }
 
+fn progress_meta<'a>(request: Option<&'a Meta>, context: &'a Meta) -> Option<&'a Meta> {
+    request
+        .filter(|meta| meta.get_progress_token().is_some())
+        .or_else(|| context.get_progress_token().map(|_| context))
+}
+
 #[derive(Clone)]
 pub struct CliMcpServer {
     registry: Arc<CommandRegistry>,
@@ -386,10 +392,10 @@ impl CliMcpServer {
         let mode = request.effective_mode();
         // rmcp's transfer-object serde extracts wire `params._meta` into the
         // request extensions exposed as `RequestContext.meta`. Direct handler
-        // calls may retain it on `CallToolRequestParams.meta`, so prefer that
-        // representation when present and otherwise use the transport-owned
-        // context representation for protocol controls such as progress.
-        let protocol_meta = request_meta.as_ref().unwrap_or(&context_meta);
+        // calls may retain it on `CallToolRequestParams.meta`. Progress uses
+        // the params representation when it owns a token, then falls back to
+        // the transport-owned context representation.
+        let progress_meta = progress_meta(request_meta.as_ref(), &context_meta);
         let effective_meta = effective_application_meta(request_meta.as_ref(), &context_meta);
         let invocation_context = match invocation_context_from_meta(
             &effective_meta,
@@ -416,7 +422,9 @@ impl CliMcpServer {
             }
         };
         let resolved = Self::resolve_workspaces_for_call(registry, codex, &client).await;
-        Self::notify_progress(protocol_meta, &client, 1.0, 4.0, "Parsing command template").await;
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 1.0, 4.0, "Parsing command template").await;
+        }
         let plan = match registry.build_plan_with_workspaces_and_context(
             &request,
             &resolved,
@@ -432,7 +440,9 @@ impl CliMcpServer {
         };
         let plan_for_event = PlanFacts::from(&plan);
 
-        Self::notify_progress(protocol_meta, &client, 2.0, 4.0, "Invocation plan ready").await;
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 2.0, 4.0, "Invocation plan ready").await;
+        }
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
             return RunOutcome::envelope(
                 ResponseEnvelope::framework_error(
@@ -480,7 +490,9 @@ impl CliMcpServer {
                     );
                 }
             };
-            Self::notify_progress(protocol_meta, &client, 4.0, 4.0, "Preview ready").await;
+            if let Some(meta) = progress_meta {
+                Self::notify_progress(meta, &client, 4.0, 4.0, "Preview ready").await;
+            }
             return RunOutcome::envelope(
                 ResponseEnvelope::preview(plan, requires_confirmation),
                 Some(plan_for_event),
@@ -522,14 +534,10 @@ impl CliMcpServer {
                     let record =
                         issue_replay_record(config, replay, &plan, Utc::now().timestamp_millis())
                             .await;
-                    Self::notify_progress(
-                        protocol_meta,
-                        &client,
-                        4.0,
-                        4.0,
-                        "Confirmation required",
-                    )
-                    .await;
+                    if let Some(meta) = progress_meta {
+                        Self::notify_progress(meta, &client, 4.0, 4.0, "Confirmation required")
+                            .await;
+                    }
                     return RunOutcome::envelope(
                         ResponseEnvelope::permission_required(plan, record, request, tool_name),
                         Some(plan_for_event),
@@ -551,14 +559,9 @@ impl CliMcpServer {
             }
         }
 
-        Self::notify_progress(
-            protocol_meta,
-            &client,
-            3.0,
-            4.0,
-            "Dispatching command handler",
-        )
-        .await;
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 3.0, 4.0, "Dispatching command handler").await;
+        }
         let result = registry
             .run_in_lane_with_workspaces_and_context(
                 request.clone(),
@@ -571,7 +574,9 @@ impl CliMcpServer {
             .await;
         match result {
             Ok(response) => {
-                Self::notify_progress(protocol_meta, &client, 4.0, 4.0, "Command complete").await;
+                if let Some(meta) = progress_meta {
+                    Self::notify_progress(meta, &client, 4.0, 4.0, "Command complete").await;
+                }
                 RunOutcome::output(
                     ResponseEnvelope::success(response, profile),
                     Some(plan_for_event),
@@ -1346,6 +1351,23 @@ mod tests {
         let debug = format!("{effective:?}");
         assert_eq!(debug, "EffectiveApplicationMeta(\"<redacted>\")");
         assert!(!debug.contains("contextOnly"));
+    }
+
+    #[test]
+    fn progress_uses_the_first_metadata_representation_that_owns_a_token() {
+        let request_without_token = meta([("applicationKey", json!("request"))]);
+        let context_with_token = meta([("progressToken", json!("transport-token"))]);
+        assert_eq!(
+            progress_meta(Some(&request_without_token), &context_with_token),
+            Some(&context_with_token)
+        );
+
+        let request_with_token = meta([("progressToken", json!("params-token"))]);
+        assert_eq!(
+            progress_meta(Some(&request_with_token), &context_with_token),
+            Some(&request_with_token)
+        );
+        assert_eq!(progress_meta(None, &Meta::default()), None);
     }
 
     #[test]
