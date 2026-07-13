@@ -4,9 +4,10 @@ use std::{
 };
 
 use mcp_twill::{
-    CommandContext, CommandOutput, CommandRegistry, EventSink, Field, FrameworkEvent, Grant,
-    InvocationPlan, Listing, ReadResource, Release, Res, ResolveResource, Resource, ResourceDecl,
-    ResourceRefusal, Result, TypeDecl, Variant, WorkspaceDecl, arg,
+    CapabilityDecl, CommandContext, CommandOutput, CommandRegistry, EventSink, Field,
+    FrameworkError, FrameworkEvent, Grant, InvocationPlan, Listing, ReadResource, Release, Res,
+    ResolveResource, Resource, ResourceDecl, ResourceRefusal, Result, TypeDecl, Variant,
+    WorkspaceDecl, arg,
 };
 use rmcp::{ServiceExt, transport::stdio};
 use serde::Deserialize;
@@ -16,6 +17,26 @@ use serde_json::{Value, json};
 struct CreateIssueArgs {
     title: String,
     body: String,
+}
+
+const VALIDATION_RECEIPT: &str = "receipt-current-build";
+
+#[derive(Debug, Deserialize)]
+struct PublishArgs {
+    validation_token: String,
+}
+
+async fn publish_build(_context: CommandContext, args: PublishArgs) -> Result<CommandOutput> {
+    if args.validation_token != VALIDATION_RECEIPT {
+        return Err(FrameworkError::capability_denied(
+            "validated-build",
+            "the validation receipt does not match the current build",
+        ));
+    }
+    Ok(CommandOutput::structured(json!({
+        "published": true,
+        "build": "current"
+    })))
 }
 
 async fn create_issue(_context: CommandContext, args: CreateIssueArgs) -> Result<CommandOutput> {
@@ -144,6 +165,18 @@ pub fn registry() -> Result<CommandRegistry> {
                 WorkspaceDecl::file("repo", repo_root).with_description("Example repository root"),
             );
 
+            // An explicit non-resource proof (RFC 0010): the provider returns
+            // an opaque receipt under an application-owned field name. The
+            // caller explicitly passes it through the declared carrier; Twill
+            // derives discovery and recovery edges but never stores the proof.
+            server.capability(
+                CapabilityDecl::new(
+                    "validated-build",
+                    "Proof that the current build passed validation",
+                )
+                .carried_by("validation_token"),
+            );
+
             // A first-class resource (RFC 0012): declaring it derives the
             // `session-ref` argument type and the `session` capability. The
             // lifecycle edges derive from the handler signatures below.
@@ -192,6 +225,44 @@ pub fn registry() -> Result<CommandRegistry> {
                         }),
                     )
                     .handle_typed(create_issue);
+            });
+
+            server.command("build validate", |command| {
+                command
+                    .summary("Validate the current build")
+                    .description(
+                        "Validates the current build and returns an opaque receipt for later deployment.",
+                    )
+                    .provides("validated-build")
+                    .read("build", "Reads the current build inputs")
+                    .example("build validate", "Validate the current build")
+                    .handle(|_context: CommandContext| async {
+                        Ok(CommandOutput::structured(json!({
+                            "receipt": VALIDATION_RECEIPT,
+                            "validated": true
+                        })))
+                    });
+            });
+
+            server.command("deploy publish", |command| {
+                command
+                    .summary("Publish the validated build")
+                    .description(
+                        "Publishes only when application code accepts the explicitly supplied validation receipt.",
+                    )
+                    .arg(
+                        arg::string("validation_token")
+                            .summary("Opaque receipt returned by build validate"),
+                    )
+                    .requires("validated-build")
+                    .write("deployment", "Publishes the current build")
+                    .idempotent()
+                    .example_with_args(
+                        "deploy publish --validation-token $args.validation_token",
+                        "Publish using an explicitly supplied validation receipt",
+                        json!({ "validation_token": VALIDATION_RECEIPT }),
+                    )
+                    .handle_typed(publish_build);
             });
 
             server.command("issues close", |command| {

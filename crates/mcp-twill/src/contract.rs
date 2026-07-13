@@ -828,41 +828,173 @@ pub fn check_resource_projection(registry: &CommandRegistry) -> Vec<ContractViol
 /// provided, consumed, carried by a required argument) and every command
 /// that requires a capability names it in its rendered help.
 pub fn check_capability_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    check_capability_projection_with_help(registry, |command| {
+        registry
+            .help(crate::HelpRequest {
+                command: command.map(ToString::to_string),
+                topic: None,
+                detail: None,
+            })
+            .text
+    })
+}
+
+fn check_capability_projection_with_help(
+    registry: &CommandRegistry,
+    render_help: impl Fn(Option<&str>) -> String,
+) -> Vec<ContractViolation> {
     let mut violations = Vec::new();
     if let Err(error) = registry.validate_capabilities() {
         violations.push(violation(None, "capabilities", error.to_string()));
         return violations;
     }
     let catalog = registry.catalog();
-    for command in registry.command_specs() {
-        if command.requires.is_empty() {
+    let declarations = registry.capabilities().cloned().collect::<Vec<_>>();
+    if catalog.capabilities != declarations {
+        violations.push(violation(
+            None,
+            "capabilities",
+            "catalog does not project the registry's capability declarations",
+        ));
+    }
+    let server_help = render_help(None);
+    for capability in &catalog.capabilities {
+        if !server_help.contains(&format!("`{}`", capability.name)) {
+            violations.push(violation(
+                None,
+                "capabilities",
+                format!(
+                    "server help does not render capability `{}`",
+                    capability.name
+                ),
+            ));
+        }
+        if let Some(resource) = catalog
+            .resources
+            .iter()
+            .find(|resource| resource.name == capability.name)
+        {
+            if capability.summary != resource.summary || capability.carrier != resource.carrier {
+                violations.push(violation(
+                    None,
+                    "capabilities",
+                    format!(
+                        "resource-derived capability `{}` does not match its resource declaration",
+                        capability.name
+                    ),
+                ));
+            }
+            for operation in &catalog.operations {
+                let name = operation.name();
+                let should_require =
+                    resource.required_by.contains(&name) || resource.released_by.contains(&name);
+                let requires = operation.requires.contains(&capability.name);
+                if should_require != requires {
+                    violations.push(violation(
+                        Some(&name),
+                        "capabilities",
+                        format!(
+                            "resource-derived `requires` edge for `{}` disagrees with the resource graph",
+                            capability.name
+                        ),
+                    ));
+                }
+                let should_provide = resource.granted_by.contains(&name);
+                let provides = operation.provides.contains(&capability.name);
+                if should_provide != provides {
+                    violations.push(violation(
+                        Some(&name),
+                        "capabilities",
+                        format!(
+                            "resource-derived `provides` edge for `{}` disagrees with the resource graph",
+                            capability.name
+                        ),
+                    ));
+                }
+            }
             continue;
         }
+
+        let capability_help = server_help
+            .lines()
+            .find(|line| line.starts_with(&format!("- `{}`:", capability.name)))
+            .unwrap_or_default();
+        if !capability_help.contains(&format!("`{}`", capability.carrier)) {
+            violations.push(violation(
+                None,
+                "capabilities",
+                format!(
+                    "server help omits carrier `{}` for capability `{}`",
+                    capability.carrier, capability.name
+                ),
+            ));
+        }
+
+        let mut bootstrap = Vec::new();
+        let mut refresh = Vec::new();
+        for operation in &catalog.operations {
+            if !operation.provides.contains(&capability.name) {
+                continue;
+            }
+            if operation.requires.contains(&capability.name) {
+                refresh.push((operation.id.clone(), operation.name()));
+            } else {
+                bootstrap.push((operation.id.clone(), operation.name()));
+            }
+        }
+        bootstrap.sort_by(|left, right| left.0.cmp(&right.0));
+        refresh.sort_by(|left, right| left.0.cmp(&right.0));
+        for (_, provider) in &bootstrap {
+            if !capability_help.contains(&format!("`{provider}`")) {
+                violations.push(violation(
+                    None,
+                    "capabilities",
+                    format!(
+                        "server help omits bootstrap provider `{provider}` for `{}`",
+                        capability.name
+                    ),
+                ));
+            }
+        }
+        for (_, provider) in &refresh {
+            if !capability_help.contains(&format!("`{provider}`"))
+                || !capability_help.contains("refresh with")
+            {
+                violations.push(violation(
+                    None,
+                    "capabilities",
+                    format!(
+                        "server help omits refresh provider `{provider}` for `{}`",
+                        capability.name
+                    ),
+                ));
+            }
+        }
+    }
+    for command in registry.command_specs() {
         let name = command.path.join(" ");
-        let help = registry.help(crate::HelpRequest {
-            command: Some(name.clone()),
-            topic: None,
-            detail: None,
-        });
-        for capability in &command.requires {
-            if !help.text.contains(capability.as_str()) {
+        let help = render_help(Some(&name));
+        for capability in command.requires.iter().chain(&command.provides) {
+            if !help.contains(&format!("`{capability}`")) {
                 violations.push(violation(
                     Some(&name),
                     "capabilities",
-                    format!("command help does not mention required capability `{capability}`"),
+                    format!("command help does not mention capability `{capability}`"),
                 ));
             }
         }
         let operation = catalog
             .operations
             .iter()
-            .find(|operation| operation.id == name.replace(' ', "."));
+            .find(|operation| operation.id == command.path.join("."));
         match operation {
-            Some(operation) if operation.requires == command.requires => {}
+            Some(operation)
+                if operation.requires == command.requires
+                    && operation.provides == command.provides => {}
             Some(_) => violations.push(violation(
                 Some(&name),
                 "capabilities",
-                "catalog operation does not project this command's `requires` declarations",
+                "catalog operation does not project this command's capability edges",
             )),
             None => violations.push(violation(
                 Some(&name),
@@ -1115,4 +1247,55 @@ macro_rules! contract_tests {
             ));
         }
     };
+}
+
+#[cfg(test)]
+mod capability_projection_tests {
+    use super::*;
+    use crate::{ArgSpec, CapabilityDecl, CommandOutput, CommandSpec};
+    use serde_json::json;
+
+    fn registry() -> CommandRegistry {
+        CommandRegistry::new("contract", "Contract")
+            .declare_capability(
+                CapabilityDecl::new("validated-build", "Validated build")
+                    .carried_by("validation_token"),
+            )
+            .register(
+                CommandSpec::new(["build", "validate"], "Validate build", "Validate build")
+                    .provides("validated-build"),
+                |_context| async { Ok(CommandOutput::structured(json!({}))) },
+            )
+            .register(
+                CommandSpec::new(["deploy", "publish"], "Publish", "Publish validated build")
+                    .with_arg(ArgSpec::string("validation_token", "Validation receipt"))
+                    .requires("validated-build"),
+                |_context| async { Ok(CommandOutput::structured(json!({}))) },
+            )
+    }
+
+    #[test]
+    fn missing_capability_help_is_a_contract_violation() {
+        let registry = registry();
+        let violations = check_capability_projection_with_help(&registry, |command| {
+            let help = registry
+                .help(crate::HelpRequest {
+                    command: command.map(ToString::to_string),
+                    topic: None,
+                    detail: None,
+                })
+                .text;
+            if command == Some("deploy publish") {
+                help.replace("`validated-build`", "`omitted-capability`")
+            } else {
+                help
+            }
+        });
+        assert!(
+            violations.iter().any(|violation| violation
+                .message
+                .contains("does not mention capability `validated-build`")),
+            "violations: {violations:?}"
+        );
+    }
 }

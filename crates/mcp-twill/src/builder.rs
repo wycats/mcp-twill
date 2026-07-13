@@ -251,6 +251,21 @@ impl ServerBuilder {
     /// hand-written capability edge repeating a signature-derived fact
     /// deduplicates to the derived one.
     fn project_resource_signatures(&mut self) -> Result<()> {
+        let hand_declared_capabilities = self
+            .capabilities
+            .iter()
+            .map(|capability| capability.name.as_str())
+            .collect::<BTreeSet<_>>();
+        if let Some(resource) = self
+            .resources
+            .iter()
+            .find(|resource| hand_declared_capabilities.contains(resource.name.as_str()))
+        {
+            return Err(FrameworkError::Build(format!(
+                "resource `{}` derives capability `{}`, which is also declared with `declare_capability`; the resource owns that name",
+                resource.name, resource.name
+            )));
+        }
         let decls = self
             .resources
             .iter()
@@ -306,7 +321,8 @@ impl ServerBuilder {
                 .cloned()
                 .collect::<BTreeSet<_>>();
             spec.requires
-                .retain(|capability| !covered_requires.contains(capability));
+                .retain(|capability| !decls.contains_key(capability));
+            spec.requires.extend(covered_requires);
             let covered_provides = spec
                 .grants
                 .iter()
@@ -314,7 +330,8 @@ impl ServerBuilder {
                 .cloned()
                 .collect::<BTreeSet<_>>();
             spec.provides
-                .retain(|capability| !covered_provides.contains(capability));
+                .retain(|capability| !decls.contains_key(capability));
+            spec.provides.extend(covered_provides);
         }
         Ok(())
     }

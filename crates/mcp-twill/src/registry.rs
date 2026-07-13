@@ -528,11 +528,10 @@ impl CommandRegistry {
                     capability.name
                 )));
             }
-            let has_bootstrap_provider = self.commands.values().any(|command| {
-                command.spec.provides.contains(&capability.name)
-                    && !command.spec.requires.contains(&capability.name)
-            });
-            if !has_bootstrap_provider {
+            if self
+                .capability_bootstrap_providers(&capability.name)
+                .is_empty()
+            {
                 return Err(FrameworkError::Build(format!(
                     "capability `{}` has only providers that also require it; declare `provides` on a command that can establish it without an existing `{}`",
                     capability.name, capability.name
@@ -556,7 +555,33 @@ impl CommandRegistry {
     /// declarations. Steering and help name these commands so guidance can
     /// never drift from the declarations.
     pub fn capability_providers(&self, capability: &str) -> Vec<String> {
-        self.commands
+        self.capability_provider_specs(capability, |_| true)
+    }
+
+    /// Commands that can establish a capability from absence. Recovery
+    /// paths use only this set: a refresh provider cannot run without the
+    /// proof it would replace.
+    fn capability_bootstrap_providers(&self, capability: &str) -> Vec<String> {
+        self.capability_provider_specs(capability, |spec| {
+            !spec.requires.iter().any(|required| required == capability)
+        })
+    }
+
+    /// Commands that replace an already-held proof. Help renders these as a
+    /// distinct role and never offers them as recovery from missing proof.
+    fn capability_refresh_providers(&self, capability: &str) -> Vec<String> {
+        self.capability_provider_specs(capability, |spec| {
+            spec.requires.iter().any(|required| required == capability)
+        })
+    }
+
+    fn capability_provider_specs(
+        &self,
+        capability: &str,
+        role: impl Fn(&CommandSpec) -> bool,
+    ) -> Vec<String> {
+        let mut providers = self
+            .commands
             .values()
             .filter(|command| {
                 command
@@ -564,9 +589,20 @@ impl CommandRegistry {
                     .provides
                     .iter()
                     .any(|provided| provided == capability)
+                    && role(&command.spec)
             })
-            .map(|command| command.spec.name())
-            .collect()
+            .map(|command| (command.spec.path.join("."), command.spec.name()))
+            .collect::<Vec<_>>();
+        providers.sort_by(|left, right| left.0.cmp(&right.0));
+        providers.into_iter().map(|(_, name)| name).collect()
+    }
+
+    fn capability_recovery_providers(&self, capability: &str) -> Vec<String> {
+        if self.resource_capabilities.contains(capability) {
+            self.resource_granters(capability)
+        } else {
+            self.capability_bootstrap_providers(capability)
+        }
     }
 
     /// The escape hatches that prefer this command, derived from `fallback`
@@ -802,13 +838,32 @@ impl CommandRegistry {
         let Some(decl) = self.capabilities.get(capability) else {
             return format!("`{capability}`");
         };
-        let providers = self.capability_providers(capability);
-        let establish = if providers.is_empty() {
+        if self.resource_capabilities.contains(capability) {
+            return format!(
+                "`{}`: {} (derived from resource `{}`; see Resources for lifecycle and recovery)",
+                decl.name, decl.summary, decl.name
+            );
+        }
+        let bootstrap = self.capability_bootstrap_providers(capability);
+        let refresh = self.capability_refresh_providers(capability);
+        let establish = if bootstrap.is_empty() {
             String::new()
         } else {
             format!(
                 "; establish with {}",
-                providers
+                bootstrap
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let refresh = if refresh.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; refresh with {}",
+                refresh
                     .iter()
                     .map(|name| format!("`{name}`"))
                     .collect::<Vec<_>>()
@@ -816,7 +871,7 @@ impl CommandRegistry {
             )
         };
         format!(
-            "`{}`: {} (carried by `{}`{establish})",
+            "`{}`: {} (carried by `{}`{establish}{refresh})",
             decl.name, decl.summary, decl.carrier
         )
     }
@@ -875,36 +930,37 @@ impl CommandRegistry {
         line
     }
 
-    /// Fills in the carrier argument and establishing commands on a
-    /// handler-raised `CapabilityDenied` so the response layer can locate
-    /// the failure and derive establishment steering from declarations.
-    /// Values the handler already set are preserved; only missing pieces
-    /// are filled from the declarations.
-    fn enrich_capability_denied(&self, error: FrameworkError) -> FrameworkError {
+    /// Replaces every compatibility field on a legacy capability denial from
+    /// the selected command's declaration graph. A handler cannot invent
+    /// steering or use the legacy channel for resources or unrelated proof.
+    fn normalize_capability_denied(
+        &self,
+        spec: &CommandSpec,
+        error: FrameworkError,
+    ) -> FrameworkError {
         let FrameworkError::CapabilityDenied {
-            capability,
-            detail,
-            carrier,
-            providers,
+            capability, detail, ..
         } = error
         else {
             return error;
         };
-        let carrier = carrier.or_else(|| {
-            self.capabilities
-                .get(&capability)
-                .map(|decl| decl.carrier.clone())
-        });
-        let providers = if providers.is_empty() {
-            self.capability_providers(&capability)
-        } else {
-            providers
+        let Some(decl) = self.capabilities.get(&capability) else {
+            return FrameworkError::Handler(
+                "legacy handler returned invalid capability denial".to_string(),
+            );
         };
+        if self.resource_capabilities.contains(&capability)
+            || !spec.requires.iter().any(|required| required == &capability)
+        {
+            return FrameworkError::Handler(
+                "legacy handler returned invalid capability denial".to_string(),
+            );
+        }
         FrameworkError::CapabilityDenied {
             capability,
             detail,
-            carrier,
-            providers,
+            carrier: Some(decl.carrier.clone()),
+            providers: self.capability_bootstrap_providers(&decl.name),
         }
     }
 
@@ -1348,7 +1404,7 @@ impl CommandRegistry {
                 return Err(FrameworkError::CapabilityMissing {
                     capability: capability.name.clone(),
                     carrier: capability.carrier.clone(),
-                    providers: self.capability_providers(&capability.name),
+                    providers: self.capability_recovery_providers(&capability.name),
                 });
             }
         }
@@ -1761,7 +1817,7 @@ impl CommandRegistry {
                 handler_context,
             ))
             .await
-            .map_err(|error| self.enrich_capability_denied(error))?;
+            .map_err(|error| self.normalize_capability_denied(&registered.spec, error))?;
         let output = self.mint_output_references(&registered.spec, output)?;
         let output = output.apply_output_spec(&plan.output);
 
@@ -2178,10 +2234,16 @@ impl CommandRegistry {
         }
         if !spec.requires.is_empty() {
             let mut lines = vec!["Requires:".to_string()];
-            for name in &spec.requires {
+            for name in spec
+                .requires
+                .iter()
+                .filter(|name| !self.resource_capabilities.contains(name.as_str()))
+            {
                 lines.push(format!("- {}", self.capability_help_line(name)));
             }
-            sections.push(lines.join("\n"));
+            if lines.len() > 1 {
+                sections.push(lines.join("\n"));
+            }
         }
         if !spec.requires_resources.is_empty() {
             let mut lines = vec!["Requires resources:".to_string()];
@@ -2225,15 +2287,26 @@ impl CommandRegistry {
         }
         if !spec.provides.is_empty() {
             let mut lines = vec!["Provides:".to_string()];
-            for name in &spec.provides {
+            for name in spec
+                .provides
+                .iter()
+                .filter(|name| !self.resource_capabilities.contains(name.as_str()))
+            {
                 let summary = self
                     .capabilities
                     .get(name)
                     .map(|decl| format!(": {}", decl.summary))
                     .unwrap_or_default();
-                lines.push(format!("- `{name}`{summary}"));
+                let role = if spec.requires.iter().any(|required| required == name) {
+                    format!(" (refresh provider; requires existing `{name}`)")
+                } else {
+                    " (bootstrap provider)".to_string()
+                };
+                lines.push(format!("- `{name}`{summary}{role}"));
             }
-            sections.push(lines.join("\n"));
+            if lines.len() > 1 {
+                sections.push(lines.join("\n"));
+            }
         }
         if let Some(stdin) = &spec.stdin {
             sections.push(format!("Stdin: {} ({}).", stdin.summary, stdin.mime_type));

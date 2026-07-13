@@ -43,8 +43,7 @@ pub enum ErrorCode {
     UnsupportedRootScheme,
     /// A required capability's carrier argument was not bound at plan time.
     CapabilityMissing,
-    /// The handler judged a presented capability invalid (stale lease,
-    /// foreign resource).
+    /// The application judged a presented explicit proof invalid.
     CapabilityDenied,
     /// A resource reference did not resolve to a live value (stale lease,
     /// foreign tab, expired session).
@@ -341,6 +340,7 @@ impl ResponseEnvelope {
         request: Option<RunRequest>,
         plan: Option<InvocationPlan>,
     ) -> Self {
+        let error = normalize_public_capability_denial(error);
         let code = ErrorCode::from_framework_error(&error);
         let status = status_for_error(&error);
         let message = error.to_string();
@@ -389,6 +389,83 @@ impl ResponseEnvelope {
             .or_else(|| self.error.as_ref().map(|error| error.message.clone()))
             .unwrap_or_else(|| "Command result".to_string())
     }
+}
+
+/// Produces the display-safe compatibility detail promised by RFC 0010.
+/// The bound counts rendered Unicode scalars, including escape sequences and
+/// the truncation marker, and truncation never splits one encoded input scalar.
+fn normalize_public_capability_denial(error: FrameworkError) -> FrameworkError {
+    let FrameworkError::CapabilityDenied {
+        capability,
+        detail,
+        carrier,
+        providers,
+    } = error
+    else {
+        return error;
+    };
+    FrameworkError::CapabilityDenied {
+        capability,
+        detail: encode_capability_denial_detail(&detail),
+        carrier,
+        providers,
+    }
+}
+
+fn encode_capability_denial_detail(detail: &str) -> String {
+    const LIMIT: usize = 512;
+
+    let mut chunks = Vec::new();
+    let mut width = 0;
+    let mut truncated = false;
+    for scalar in detail.chars() {
+        let chunk = match scalar {
+            '"' => "\\\"".to_string(),
+            '\\' => "\\\\".to_string(),
+            '\u{0008}' => "\\b".to_string(),
+            '\u{000C}' => "\\f".to_string(),
+            '\n' => "\\n".to_string(),
+            '\r' => "\\r".to_string(),
+            '\t' => "\\t".to_string(),
+            scalar if capability_denial_uses_unicode_escape(scalar) => {
+                format!("\\u{:04X}", scalar as u32)
+            }
+            scalar => scalar.to_string(),
+        };
+        let chunk_width = chunk.chars().count();
+        if width + chunk_width > LIMIT {
+            truncated = true;
+            break;
+        }
+        width += chunk_width;
+        chunks.push(chunk);
+    }
+
+    if truncated {
+        while width > LIMIT - 1 {
+            if let Some(chunk) = chunks.pop() {
+                width -= chunk.chars().count();
+            } else {
+                break;
+            }
+        }
+        chunks.push("…".to_string());
+    }
+    chunks.concat()
+}
+
+fn capability_denial_uses_unicode_escape(scalar: char) -> bool {
+    matches!(scalar,
+        '\u{0000}'..='\u{0007}'
+        | '\u{000B}'
+        | '\u{000E}'..='\u{001F}'
+        | '\u{007F}'..='\u{009F}'
+        | '\u{061C}'
+        | '\u{200E}'..='\u{200F}'
+        | '\u{2028}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}'
+        | '\u{FEFF}'
+    )
 }
 
 fn status_for_error(error: &FrameworkError) -> ResponseStatus {
