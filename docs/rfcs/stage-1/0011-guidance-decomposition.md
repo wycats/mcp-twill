@@ -2,7 +2,7 @@
 
 # RFC 0011: Guidance Decomposition
 
-- Status: Draft
+- Status: Accepted
 - Area: command model, catalog, help
 - Target milestone: v0.4
 - Depends on: RFC 0001 (authoritative command surface), RFC 0008 (named argument types), RFC 0010 (declared preconditions)
