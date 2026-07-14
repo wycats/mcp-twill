@@ -727,9 +727,29 @@ impl CommandBuilder {
     where
         H: DynamicApplicationDialect<M>;
 }
+
+impl CommandRegistry {
+    pub fn register_result<M, H>(
+        self,
+        spec: CommandSpec,
+        handler: H,
+    ) -> Self
+    where
+        H: ApplicationResultDialect<M>;
+
+    pub fn register_dynamic<M, H>(
+        self,
+        spec: CommandSpec,
+        handler: H,
+    ) -> Self
+    where
+        H: DynamicApplicationDialect<M>;
+}
 ```
 
 `ApplicationResultDialect` is the typed result-aware analogue of RFC 0012's `ResourceDialect`; its marker parameter is inferred and never written by authors. For example, the resources-plus-context-plus-arguments implementation selects `WithResourcesAndArgs<P, A, ApplicationOutputResult<O, E, S>>`. `DynamicApplicationDialect` selects the same public marker shape with `DynamicApplicationResult<O>`. The private supertrait is generic over that marker: Twill implements `private::Sealed<M>` and the public dialect for each supported closure shape. This distinguishes otherwise overlapping blanket closure implementations while preventing an external crate from implementing either dialect and forging extraction or erasure hooks. A non-generic private supertrait cannot represent the same boundary: shape-specific blanket implementations may overlap, while implementing it for every type would let external types satisfy the supposed seal. The dialect implementations derive input resource uses from `P: ResourceParams`, derive grant/listing edges from `O: ApplicationOutput<Value = serde_json::Value>`, and check the public dynamic error against the explicit contract stored on the completed builder. Applications construct only `ApplicationSuccess<Value>`, its sealed resource wrappers, `DynamicApplicationError`, or an outer `FrameworkError`.
+
+`CommandRegistry::register_result` and `register_dynamic` are the explicit/generated-server counterparts of the two builder handler paths. They retain `CommandRegistry::register`'s consuming receiver convention and compile through the same private erased-handler and registry-validation path as the builder. `register_result` derives the sole application contract from `H` and rejects a `CommandSpec` whose present `output` already contains an `application` contract, exactly like `CommandBuilder::handle_result`. `register_dynamic` requires `spec.output` to contain exactly one explicit `application` contract and treats its absence as a registration error, exactly like `CommandBuilder::handle_dynamic` plus `result_contract`. The existing `CommandRegistry::register(CommandSpec, handler)` remains the source-compatible legacy success/framework-only path; pairing it with an application-bearing spec remains invalid because `CommandHandler` cannot emit that contract.
 
 Builder call order is not a second contract. Finalization requires exactly one effective handler. A dynamic registration additionally requires exactly one explicit result contract, regardless of whether `result_contract` or `handle_dynamic` was called first, and rejects replacement or absence. Every handler-installing method—legacy `handle`/`handle_typed`, RFC 0017 `handle_constrained`, `handle_result`, and `handle_dynamic`—shares one installation slot and records a build error when any second method targets it; the existing builder's incidental last-write behavior is not retained as hidden authority. Repeating `result_contract` likewise fails even when the two values normalize equally. A typed result handler derives its sole application contract at registry finalization and rejects every explicit application contract, including a semantically identical one; equality testing is contract-test work rather than a second authoring path. Legacy and constrained non-result handlers likewise reject an application contract they cannot emit. Failed finalization invokes no runtime handler or producer method; pure declaration functions retain the construction semantics defined below.
 
@@ -830,11 +850,21 @@ pub enum FrameworkError {
     },
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq,
+    Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
 pub enum ResultContractBoundary {
     Success,
     ApplicationError,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq,
+    Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
 pub enum ResultContractReason {
     SerializationFailed,
     SchemaMismatch,
@@ -851,6 +881,8 @@ pub struct FrameworkEvent {
     pub application_error_code: Option<String>,
 }
 ```
+
+`ResultContractBoundary` serializes as `"success"` or `"applicationError"`. `ResultContractReason` serializes as `"serializationFailed"`, `"schemaMismatch"`, `"undeclaredCode"`, `"invalidMessage"`, `"invalidDetails"`, `"undeclaredRecovery"`, or `"invalidRecoverySelection"`. JSON Schema uses those same stable spellings.
 
 On CLI-shaped surfaces, an application failure uses `ResponseStatus::Failed`, `ErrorCode::ApplicationError`, and details containing the application code, validated details, and canonical recovery entries:
 
@@ -990,6 +1022,7 @@ Acceptance lives in `crates/mcp-twill/tests/results.rs`, with shared schema-dial
 - An external-crate fixture calls every context/argument/resource form of `handle_result` and `handle_dynamic` without naming a marker. Inference resolves through RFC 0012's public marker family and passes warning-denied clippy; an equivalent crate-private marker fixture fails externally, preventing an implementation from accidentally narrowing the documented callability. Compile-fail coverage also proves an external type cannot implement either dialect because it cannot implement the matching `private::Sealed<M>`, while Twill's marker-keyed blanket implementations remain non-overlapping.
 - A dynamic broker closure can construct success, declared application failure, and outer framework failure through `DynamicApplicationResult` without access to `HandlerOutcome`. Resource-parameter and sealed grant/listing variants derive the same static edges as typed handlers; compile-fail coverage rejects an explicit mutable resource-edge list or an application implementation of the sealed dialect/output traits.
 - Dynamic builder fixtures set `result_contract` before and after `handle_dynamic` and compile to the same command contract. Missing or repeated contracts fail finalization without invoking application code; every pairwise combination of legacy, constrained, typed-result, and dynamic handler installers rejects the second installation rather than silently replacing the first. Typed result handlers reject any explicit application contract, including a semantically identical `result_contract` or application-bearing `output`; legacy and constrained non-result handlers reject the same impossible pairing.
+- Low-level `CommandRegistry::register_result` and `register_dynamic` fixtures compile to the same command spec, catalog, hash, validation result, and runtime outcome as their `CommandBuilder::handle_result` and `handle_dynamic` counterparts. The typed low-level path rejects an explicit application contract, the dynamic low-level path rejects a missing contract, and legacy `register` rejects an application-bearing spec without changing existing `CommandHandler` source compatibility.
 - Builder fixtures set application-free `output` and `result_contract` in both orders around `handle_dynamic` and compile to the same `OutputContract`. An application-bearing `output` is the same explicit slot, duplicate application contracts and repeated output presentation fail, a typed result handler combines only application-free presentation with its derived contract, and a later application-free output call never clears a stored explicit contract.
 - A typed value with deliberately inconsistent custom `Serialize` and `JsonSchema` implementations becomes the same redacted `ResultContractViolation`, proving derivation alone cannot bypass runtime truthfulness.
 - A declared application error returns `ApplicationError` in the CLI envelope with exact application code, validated details, and internally tagged declaration-derived recovery entries. Each operation entry also yields one ordered RFC 0002 help-steering action for its catalog operation; actions remain non-callable and yield no steering request. Empty, operation, action, and mixed recovery fixtures round-trip through JSON and JSON Schema with no alternate `recoverWith` spelling.
