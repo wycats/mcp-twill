@@ -586,7 +586,11 @@ fn cargo_output(archive: &Path, target_dir: &Path, arguments: &[&str]) -> Result
         .stderr(Stdio::inherit())
         .output()
         .with_context(|| format!("run archived cargo {}", arguments.join(" ")))?;
-    ensure!(output.status.success(), "archived cargo command failed");
+    ensure!(
+        output.status.success(),
+        "archived cargo command failed: cargo {}",
+        arguments.join(" ")
+    );
     Ok(output.stdout)
 }
 
@@ -597,7 +601,12 @@ fn git_output(repository: &Path, arguments: &[&str]) -> Result<String> {
         .args(arguments)
         .output()
         .context("run Git")?;
-    ensure!(output.status.success(), "Git command failed");
+    ensure!(
+        output.status.success(),
+        "Git command failed: git -C {} {}",
+        repository.display(),
+        arguments.join(" ")
+    );
     String::from_utf8(output.stdout).context("Git produced non-UTF-8 output")
 }
 
