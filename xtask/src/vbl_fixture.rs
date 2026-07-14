@@ -384,20 +384,20 @@ pub fn validate_bundle(directory: &Path) -> Result<()> {
             "{} has no source provenance",
             entry.path
         );
-        let sorted_sources = entry
+        let source_paths = entry
             .sources
             .iter()
             .map(|source| source.path.as_str())
             .collect::<Vec<_>>();
-        let mut expected_sources = sorted_sources.clone();
-        expected_sources.sort_unstable();
+        let mut sorted_source_paths = source_paths.clone();
+        sorted_source_paths.sort_unstable();
         ensure!(
-            sorted_sources == expected_sources,
+            source_paths == sorted_source_paths,
             "{} source paths are not sorted",
             entry.path
         );
         ensure!(
-            sorted_sources.windows(2).all(|pair| pair[0] != pair[1]),
+            source_paths.windows(2).all(|pair| pair[0] != pair[1]),
             "{} contains duplicate source paths",
             entry.path
         );
