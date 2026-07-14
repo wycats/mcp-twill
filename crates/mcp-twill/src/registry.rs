@@ -2454,10 +2454,10 @@ impl CommandRegistry {
 }
 
 fn validate_guidance_text(text: &str, subject: &str) -> Result<()> {
-    let scalar_count = text.chars().count();
+    let scalar_count = text.chars().take(MAX_GUIDANCE_SCALARS + 1).count();
     if scalar_count > MAX_GUIDANCE_SCALARS {
         return Err(FrameworkError::Build(format!(
-            "{subject} exceeds the 1,024 Unicode scalar limit ({scalar_count})"
+            "{subject} exceeds the 1,024 Unicode scalar limit ({scalar_count} or more)"
         )));
     }
     if let Some(scalar) = text
