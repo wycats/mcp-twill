@@ -1,0 +1,128 @@
+{
+  "confirmation": [
+    {
+      "input": {
+        "target_id": "target-1"
+      },
+      "method": "claim_tab",
+      "output": {
+        "message": "Claim target target-1 for this agent session.",
+        "title": "Claim browser tab?"
+      }
+    },
+    {
+      "input": {},
+      "method": "claim_tab",
+      "output": {
+        "message": "Claim target (unknown target) for this agent session.",
+        "title": "Claim browser tab?"
+      }
+    },
+    {
+      "input": {
+        "tab_id": "tab-1"
+      },
+      "method": "close_tab",
+      "output": {
+        "message": "Close owned tab tab-1.",
+        "title": "Close browser tab?"
+      }
+    },
+    {
+      "input": {
+        "leave_visible": false,
+        "tab_id": "tab-1"
+      },
+      "method": "release_tab",
+      "output": {
+        "message": "Release owned tab tab-1; a VBL-created target remains eligible for expiry cleanup.",
+        "title": "Release browser tab?"
+      }
+    },
+    {
+      "input": {
+        "leave_visible": true,
+        "tab_id": "tab-1",
+        "user_instruction": " Keep this open "
+      },
+      "method": "release_tab",
+      "output": {
+        "message": "Release owned tab tab-1 and preserve it after this session expires. User instruction: \"Keep this open\".",
+        "title": "Leave browser tab visible?"
+      }
+    },
+    {
+      "input": {
+        "leave_visible": true,
+        "tab_id": "tab-1"
+      },
+      "method": "release_tab",
+      "output": {
+        "message": "Release owned tab tab-1 and preserve it after this session expires. User instruction: (missing; this request will be rejected).",
+        "title": "Leave browser tab visible?"
+      }
+    },
+    {
+      "input": {
+        "tab_id": "tab-1"
+      },
+      "method": "focus_tab",
+      "output": {
+        "message": "Focus owned tab tab-1 for manual inspection or handoff.",
+        "title": "Bring Chrome forward?"
+      }
+    },
+    {
+      "input": {},
+      "method": "snapshot",
+      "output": null
+    }
+  ],
+  "invocation": [
+    {
+      "displayName": "Start session",
+      "method": "start_session",
+      "output": "Starting a visible browser session"
+    },
+    {
+      "displayName": "Snapshot",
+      "method": "snapshot",
+      "output": "Capturing a browser snapshot"
+    },
+    {
+      "displayName": "Screenshot",
+      "method": "screenshot",
+      "output": "Capturing a browser screenshot"
+    },
+    {
+      "displayName": "Navigate",
+      "method": "navigate",
+      "output": "Navigating the owned browser tab"
+    },
+    {
+      "displayName": "Click",
+      "method": "click",
+      "output": "Clicking a browser element"
+    },
+    {
+      "displayName": "Fill",
+      "method": "fill",
+      "output": "Filling browser form controls"
+    },
+    {
+      "displayName": "Fill form",
+      "method": "fill_form",
+      "output": "Filling browser form controls"
+    },
+    {
+      "displayName": "Wait",
+      "method": "wait_for",
+      "output": "Waiting for browser state"
+    },
+    {
+      "displayName": "Console",
+      "method": "console",
+      "output": "Running Console"
+    }
+  ]
+}

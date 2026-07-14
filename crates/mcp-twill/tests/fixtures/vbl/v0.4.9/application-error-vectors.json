@@ -1,0 +1,286 @@
+{
+  "errorCodes": [
+    "chrome_unavailable",
+    "invalid_request_context",
+    "session_required",
+    "unknown_session",
+    "session_expired",
+    "unknown_tab",
+    "tab_not_owned",
+    "tab_not_active",
+    "target_missing",
+    "target_owned",
+    "invalid_input",
+    "operation_timeout",
+    "focus_required",
+    "element_not_found",
+    "element_ambiguous",
+    "element_stale",
+    "element_not_actionable",
+    "artifact_not_found",
+    "artifact_error",
+    "workspace_unavailable",
+    "workspace_context_conflict",
+    "path_outside_workspace"
+  ],
+  "recoveryActions": [
+    "start_session",
+    "list_tabs",
+    "new_tab",
+    "claim_existing_tab",
+    "release_tab",
+    "focus_tab",
+    "start_chrome",
+    "snapshot",
+    "wait_for"
+  ],
+  "serializationVectors": [
+    {
+      "constructor": "invalid_input",
+      "error": {
+        "code": "invalid_input",
+        "message": "invalid input example"
+      },
+      "input": {
+        "message": "invalid input example"
+      }
+    },
+    {
+      "constructor": "chrome_unavailable",
+      "error": {
+        "code": "chrome_unavailable",
+        "message": "Chrome unavailable example",
+        "recovery": "start_chrome"
+      },
+      "input": {
+        "message": "Chrome unavailable example"
+      }
+    },
+    {
+      "constructor": "invalid_request_context",
+      "error": {
+        "code": "invalid_request_context",
+        "message": "invalid request context example"
+      },
+      "input": {
+        "message": "invalid request context example"
+      }
+    },
+    {
+      "constructor": "session_required",
+      "error": {
+        "code": "session_required",
+        "message": "this host supplied no conversation identity; call start_session and pass its agent_session_id",
+        "recovery": "start_session"
+      },
+      "input": {}
+    },
+    {
+      "constructor": "workspace_context_conflict",
+      "error": {
+        "code": "workspace_context_conflict",
+        "message": "the current host workspace conflicts with the workspace bound to this browser session"
+      },
+      "input": {}
+    },
+    {
+      "constructor": "unknown_session",
+      "error": {
+        "code": "unknown_session",
+        "message": "unknown agent session `session-example`",
+        "recovery": "start_session"
+      },
+      "input": {
+        "sessionId": "session-example"
+      }
+    },
+    {
+      "constructor": "session_expired",
+      "error": {
+        "code": "session_expired",
+        "message": "agent session `session-example` expired after 30s of inactivity; 1 VBL-created browser target closed and 2 targets still being closed; any other tabs were released and are claimable",
+        "recovery": "start_session"
+      },
+      "input": {
+        "closedTargets": 1,
+        "idleSeconds": 30,
+        "pendingCloseTargets": 2,
+        "sessionId": "session-example"
+      }
+    },
+    {
+      "constructor": "unknown_tab",
+      "error": {
+        "code": "unknown_tab",
+        "message": "unknown tab `tab-example`",
+        "recovery": "list_tabs"
+      },
+      "input": {
+        "tabId": "tab-example"
+      }
+    },
+    {
+      "constructor": "tab_not_owned",
+      "error": {
+        "code": "tab_not_owned",
+        "message": "tab `tab-example` is not owned by this session",
+        "recovery": "list_tabs"
+      },
+      "input": {
+        "tabId": "tab-example"
+      }
+    },
+    {
+      "constructor": "tab_not_active",
+      "error": {
+        "code": "tab_not_active",
+        "message": "tab `tab-example` is `Released`, not `active`",
+        "recovery": "list_tabs"
+      },
+      "input": {
+        "state": "released",
+        "tabId": "tab-example"
+      }
+    },
+    {
+      "constructor": "target_missing",
+      "error": {
+        "code": "target_missing",
+        "message": "tab `tab-example` no longer has a visible Chrome target; release it and choose another tab",
+        "recovery": "release_tab"
+      },
+      "input": {
+        "tabId": "tab-example"
+      }
+    },
+    {
+      "constructor": "target_missing_for_target",
+      "error": {
+        "code": "target_missing",
+        "message": "Chrome target `target-example` is not a visible page target",
+        "recovery": "list_tabs"
+      },
+      "input": {
+        "targetId": "target-example"
+      }
+    },
+    {
+      "constructor": "target_owned",
+      "error": {
+        "code": "target_owned",
+        "message": "Chrome target `target-example` is already leased",
+        "recovery": "list_tabs"
+      },
+      "input": {
+        "targetId": "target-example"
+      }
+    },
+    {
+      "constructor": "element_not_found",
+      "error": {
+        "code": "element_not_found",
+        "message": "no element matched `ref=e1`",
+        "recovery": "snapshot"
+      },
+      "input": {
+        "target": "ref=e1"
+      }
+    },
+    {
+      "constructor": "element_ambiguous",
+      "error": {
+        "code": "element_ambiguous",
+        "message": "element target `button` matched 2 nodes",
+        "recovery": "snapshot"
+      },
+      "input": {
+        "count": 2,
+        "target": "button"
+      }
+    },
+    {
+      "constructor": "element_stale",
+      "error": {
+        "code": "element_stale",
+        "message": "element reference `e1` is not valid for the active document",
+        "recovery": "snapshot"
+      },
+      "input": {
+        "reference": "e1"
+      }
+    },
+    {
+      "constructor": "element_not_actionable",
+      "error": {
+        "code": "element_not_actionable",
+        "message": "element is covered",
+        "recovery": "wait_for"
+      },
+      "input": {
+        "message": "element is covered"
+      }
+    },
+    {
+      "constructor": "operation_timeout",
+      "error": {
+        "code": "operation_timeout",
+        "message": "operation timed out",
+        "recovery": "list_tabs"
+      },
+      "input": {
+        "message": "operation timed out"
+      }
+    },
+    {
+      "constructor": "focus_required",
+      "error": {
+        "code": "focus_required",
+        "message": "tab `tab-example` must have browser focus before dispatching native input",
+        "recovery": "focus_tab"
+      },
+      "input": {
+        "tabId": "tab-example"
+      }
+    },
+    {
+      "constructor": "artifact_not_found",
+      "error": {
+        "code": "artifact_not_found",
+        "message": "artifact `artifact-example` is not owned by this session"
+      },
+      "input": {
+        "artifactId": "artifact-example"
+      }
+    },
+    {
+      "constructor": "artifact_error",
+      "error": {
+        "code": "artifact_error",
+        "message": "artifact error example"
+      },
+      "input": {
+        "message": "artifact error example"
+      }
+    },
+    {
+      "constructor": "workspace_unavailable",
+      "error": {
+        "code": "workspace_unavailable",
+        "message": "workspace unavailable example"
+      },
+      "input": {
+        "message": "workspace unavailable example"
+      }
+    },
+    {
+      "constructor": "path_outside_workspace",
+      "error": {
+        "code": "path_outside_workspace",
+        "message": "artifact export path `/outside/example` is outside the session workspace"
+      },
+      "input": {
+        "path": "/outside/example"
+      }
+    }
+  ]
+}

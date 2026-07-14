@@ -1,0 +1,6011 @@
+{
+  "server_instructions": "Call browser operations directly. Conversation-aware hosts select the browser session automatically. Omit agent_session_id unless this conversation first received session_required, then called start_session, and is reusing the exact returned handle; never invent, request, or substitute a placeholder session ID. Use only tab_id values owned by the selected session. Inspect an unfamiliar page with snapshot, then act through its element references. Use fill for one ordinary field. Use fill_form for two or more controls, including combined select and checkbox updates. Use type_text for contenteditable controls and insertion at an established caret. Use press_key with a target for named keys or shortcuts against a resolved element. Use targetless press_key and interact click_at only after focus_tab has focused the owned document. Use wait_for for asynchronous state and screenshot for visual appearance. Use console and network for runtime diagnosis. Use help to select an operation in a specialized domain. Routine click, targeted key, and referenced pointer actions attach to the owned target, prepare the resolved element, and preserve the user's active application. Target activation, including CDP `Target.activateTarget`, is reserved for focus_tab and focus: true tab creation when the user asks to bring Chrome forward for manual inspection or handoff. Ordinary release makes a target claimable but leaves VBL-created targets eligible for session-expiry cleanup; use leave_visible with the user's non-empty instruction only when the user explicitly requests a durable handoff. CSS and evaluate are escape hatches only when snapshot and the named semantic tools cannot represent the required state; do not use them to verify a semantic action.",
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Start Session"
+      },
+      "description": "Start one lease-scoped browser session and optionally create its first background tab.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "focus": {
+            "type": "boolean"
+          },
+          "label": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "start_url": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "start_session",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "ambient",
+              "explicit"
+            ],
+            "type": "string"
+          },
+          "tab": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "focused": {
+                "type": "boolean"
+              },
+              "state": {
+                "enum": [
+                  "active",
+                  "missing"
+                ],
+                "type": "string"
+              },
+              "tab_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "target_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "updated_at_ms": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id",
+              "target_id",
+              "title",
+              "url",
+              "state",
+              "focused",
+              "created_at_ms",
+              "updated_at_ms"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "agent_session_id",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "title": "Start Session"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "List Tabs"
+      },
+      "description": "List caller-owned tab leases, or request the read-only target inventory without foreign action handles.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "owned",
+              "global_readonly"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "list_tabs",
+      "outputSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "const": "owned",
+                "type": "string"
+              },
+              "tabs": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at_ms": {
+                      "type": "integer"
+                    },
+                    "focused": {
+                      "type": "boolean"
+                    },
+                    "state": {
+                      "enum": [
+                        "active",
+                        "missing"
+                      ],
+                      "type": "string"
+                    },
+                    "tab_id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "target_id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "updated_at_ms": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tab_id",
+                    "target_id",
+                    "title",
+                    "url",
+                    "state",
+                    "focused",
+                    "created_at_ms",
+                    "updated_at_ms"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "scope",
+              "tabs"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "groups": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner_display_id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "owner_label": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "tabs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "caller_tab_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "claimable": {
+                            "type": "boolean"
+                          },
+                          "focused": {
+                            "type": "boolean"
+                          },
+                          "owned_by_caller": {
+                            "type": "boolean"
+                          },
+                          "owner_display_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "owner_label": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "target_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "target_id",
+                          "title",
+                          "url",
+                          "owned_by_caller",
+                          "claimable",
+                          "focused"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "tabs"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "const": "global_readonly",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "groups"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "title": "List Tabs"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "New Tab"
+      },
+      "description": "Create a background browser tab and lease it to the caller's session.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "focus": {
+            "type": "boolean"
+          },
+          "url": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "new_tab",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "focused": {
+                "type": "boolean"
+              },
+              "state": {
+                "enum": [
+                  "active",
+                  "missing"
+                ],
+                "type": "string"
+              },
+              "tab_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "target_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "updated_at_ms": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id",
+              "target_id",
+              "title",
+              "url",
+              "state",
+              "focused",
+              "created_at_ms",
+              "updated_at_ms"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "tab"
+        ],
+        "type": "object"
+      },
+      "title": "New Tab"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Claim Tab"
+      },
+      "description": "Claim an unowned target, or perform an explicitly instructed ownership transfer.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "takeover": {
+            "type": "boolean"
+          },
+          "target_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "user_instruction": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_id"
+        ],
+        "type": "object"
+      },
+      "name": "claim_tab",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "focused": {
+                "type": "boolean"
+              },
+              "state": {
+                "enum": [
+                  "active",
+                  "missing"
+                ],
+                "type": "string"
+              },
+              "tab_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "target_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "updated_at_ms": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id",
+              "target_id",
+              "title",
+              "url",
+              "state",
+              "focused",
+              "created_at_ms",
+              "updated_at_ms"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "tab"
+        ],
+        "type": "object"
+      },
+      "title": "Claim Tab"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Release Tab"
+      },
+      "description": "Release an owned tab lease and make its browser target claimable. VBL-created targets remain eligible for session-expiry cleanup unless an explicit user instruction requests leave_visible.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "leave_visible": {
+            "type": "boolean"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "user_instruction": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "release_tab",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "leave_visible": {
+            "type": "boolean"
+          },
+          "released": {
+            "const": true
+          }
+        },
+        "required": [
+          "released",
+          "leave_visible"
+        ],
+        "type": "object"
+      },
+      "title": "Release Tab"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Focus Tab"
+      },
+      "description": "Bring an owned tab and its browser window to the foreground for explicit user handoff or manual inspection.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "focus_tab",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "tab": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "focused": {
+                "type": "boolean"
+              },
+              "state": {
+                "enum": [
+                  "active",
+                  "missing"
+                ],
+                "type": "string"
+              },
+              "tab_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "target_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "updated_at_ms": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tab_id",
+              "target_id",
+              "title",
+              "url",
+              "state",
+              "focused",
+              "created_at_ms",
+              "updated_at_ms"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "tab"
+        ],
+        "type": "object"
+      },
+      "title": "Focus Tab"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Close Tab"
+      },
+      "description": "Close an owned browser target and complete its lease.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "close_tab",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "closed": {
+            "const": true
+          }
+        },
+        "required": [
+          "closed"
+        ],
+        "type": "object"
+      },
+      "title": "Close Tab"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Snapshot"
+      },
+      "description": "Inspect the compact accessibility tree and obtain lease-scoped element references for semantic actions.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer"
+          },
+          "include_bounds": {
+            "type": "boolean"
+          },
+          "include_hidden": {
+            "type": "boolean"
+          },
+          "max_nodes": {
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "interactive",
+              "meaningful",
+              "full"
+            ],
+            "type": "string"
+          },
+          "root": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "snapshot",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "node_count": {
+            "type": "integer"
+          },
+          "snapshot_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tree": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "document_revision",
+          "url",
+          "title",
+          "tree",
+          "node_count",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "title": "Snapshot"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Navigate"
+      },
+      "description": "Navigate an owned tab by URL, history, or reload while preserving application focus.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "url",
+              "back",
+              "forward",
+              "reload"
+            ],
+            "type": "string"
+          },
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "before_unload": {
+            "enum": [
+              "accept",
+              "dismiss"
+            ],
+            "type": "string"
+          },
+          "ignore_cache": {
+            "type": "boolean"
+          },
+          "init_script": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer"
+          },
+          "url": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "wait_until": {
+            "enum": [
+              "none",
+              "dom_content_loaded",
+              "load",
+              "network_idle"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "navigate",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "additionalProperties": false,
+            "properties": {
+              "center_hit_test": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "delivery_mode": {
+                "enum": [
+                  "browser_protocol_input",
+                  "semantic_dom_activation"
+                ],
+                "type": "string"
+              },
+              "delivery_uncertain": {
+                "type": "boolean"
+              },
+              "effect": {
+                "additionalProperties": false,
+                "properties": {
+                  "accessibility_changed": {
+                    "type": "boolean"
+                  },
+                  "accessibility_changed_node_count": {
+                    "type": "integer"
+                  },
+                  "network_event_count": {
+                    "type": "integer"
+                  },
+                  "network_events": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "post_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "pre_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url_changed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pre_url",
+                  "post_url",
+                  "url_changed",
+                  "network_event_count",
+                  "network_events"
+                ],
+                "type": "object"
+              },
+              "release_delivery": {
+                "enum": [
+                  "chrome_ack",
+                  "dialog_event",
+                  "delivery_uncertain"
+                ],
+                "type": "string"
+              },
+              "resolved_element": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            },
+            "required": [
+              "delivery_mode",
+              "release_delivery",
+              "delivery_uncertain",
+              "effect"
+            ],
+            "type": "object"
+          },
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Navigate"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Wait For"
+      },
+      "description": "Wait for semantic text, element state, URL, page load, or JavaScript state in an owned tab.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "condition": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "duration_ms": {
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "delay",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "duration_ms"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "visible",
+                      "hidden"
+                    ],
+                    "type": "string"
+                  },
+                  "text": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "element",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "attached",
+                      "detached",
+                      "visible",
+                      "hidden",
+                      "enabled",
+                      "disabled",
+                      "editable",
+                      "checked",
+                      "unchecked"
+                    ],
+                    "type": "string"
+                  },
+                  "target": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "ref": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ref"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "css": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "frame_ref": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "css"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "target",
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "url",
+                    "type": "string"
+                  },
+                  "match": {
+                    "enum": [
+                      "exact",
+                      "substring",
+                      "regex"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "load",
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "dom_content_loaded",
+                      "load",
+                      "network_idle"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expression": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "expression",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "expression"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id",
+          "condition"
+        ],
+        "type": "object"
+      },
+      "name": "wait_for",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "elapsed_ms": {
+            "type": "integer"
+          },
+          "matched": {
+            "const": true
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "matched",
+          "elapsed_ms",
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Wait For"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Click"
+      },
+      "description": "Click one accessibility reference after ownership and actionability checks, returning delivery and effect evidence for quiet submit flows. Use CSS only as an explicit fallback.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "button": {
+            "enum": [
+              "left",
+              "middle",
+              "right"
+            ],
+            "type": "string"
+          },
+          "count": {
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "modifiers": {
+            "items": {
+              "enum": [
+                "alt",
+                "control",
+                "meta",
+                "shift"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "timeout_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id",
+          "target"
+        ],
+        "type": "object"
+      },
+      "name": "click",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "additionalProperties": false,
+            "properties": {
+              "center_hit_test": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "delivery_mode": {
+                "enum": [
+                  "browser_protocol_input",
+                  "semantic_dom_activation"
+                ],
+                "type": "string"
+              },
+              "delivery_uncertain": {
+                "type": "boolean"
+              },
+              "effect": {
+                "additionalProperties": false,
+                "properties": {
+                  "accessibility_changed": {
+                    "type": "boolean"
+                  },
+                  "accessibility_changed_node_count": {
+                    "type": "integer"
+                  },
+                  "network_event_count": {
+                    "type": "integer"
+                  },
+                  "network_events": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "post_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "pre_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url_changed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pre_url",
+                  "post_url",
+                  "url_changed",
+                  "network_event_count",
+                  "network_events"
+                ],
+                "type": "object"
+              },
+              "release_delivery": {
+                "enum": [
+                  "chrome_ack",
+                  "dialog_event",
+                  "delivery_uncertain"
+                ],
+                "type": "string"
+              },
+              "resolved_element": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            },
+            "required": [
+              "delivery_mode",
+              "release_delivery",
+              "delivery_uncertain",
+              "effect"
+            ],
+            "type": "object"
+          },
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Click"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Fill"
+      },
+      "description": "Replace the value of one referenced editable control and return a compact accessibility observation.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "timeout_ms": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "target",
+          "value"
+        ],
+        "type": "object"
+      },
+      "name": "fill",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "additionalProperties": false,
+            "properties": {
+              "center_hit_test": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "delivery_mode": {
+                "enum": [
+                  "browser_protocol_input",
+                  "semantic_dom_activation"
+                ],
+                "type": "string"
+              },
+              "delivery_uncertain": {
+                "type": "boolean"
+              },
+              "effect": {
+                "additionalProperties": false,
+                "properties": {
+                  "accessibility_changed": {
+                    "type": "boolean"
+                  },
+                  "accessibility_changed_node_count": {
+                    "type": "integer"
+                  },
+                  "network_event_count": {
+                    "type": "integer"
+                  },
+                  "network_events": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "post_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "pre_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url_changed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pre_url",
+                  "post_url",
+                  "url_changed",
+                  "network_event_count",
+                  "network_events"
+                ],
+                "type": "object"
+              },
+              "release_delivery": {
+                "enum": [
+                  "chrome_ack",
+                  "dialog_event",
+                  "delivery_uncertain"
+                ],
+                "type": "string"
+              },
+              "resolved_element": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            },
+            "required": [
+              "delivery_mode",
+              "release_delivery",
+              "delivery_uncertain",
+              "effect"
+            ],
+            "type": "object"
+          },
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Fill"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Fill Form"
+      },
+      "description": "Fill two or more referenced form controls sequentially and report completed fields.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "text",
+                      "type": "string"
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ref"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "css": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "frame_ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "css"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "target",
+                    "kind",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "select",
+                      "type": "string"
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ref"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "css": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "frame_ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "css"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "values": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "target",
+                    "kind",
+                    "values"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "checked": {
+                      "type": "boolean"
+                    },
+                    "kind": {
+                      "const": "checked",
+                      "type": "string"
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ref"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "css": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "frame_ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "css"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "target",
+                    "kind",
+                    "checked"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "minItems": 2,
+            "type": "array"
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "name": "fill_form",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "completed_fields": {
+            "type": "integer"
+          },
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "total_fields": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "completed_fields",
+          "total_fields",
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Fill Form"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Type Text"
+      },
+      "description": "Insert text at the selection of one referenced editable element while preserving application focus.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "delay_ms": {
+            "type": "integer"
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id",
+          "target",
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "type_text",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "additionalProperties": false,
+            "properties": {
+              "center_hit_test": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "delivery_mode": {
+                "enum": [
+                  "browser_protocol_input",
+                  "semantic_dom_activation"
+                ],
+                "type": "string"
+              },
+              "delivery_uncertain": {
+                "type": "boolean"
+              },
+              "effect": {
+                "additionalProperties": false,
+                "properties": {
+                  "accessibility_changed": {
+                    "type": "boolean"
+                  },
+                  "accessibility_changed_node_count": {
+                    "type": "integer"
+                  },
+                  "network_event_count": {
+                    "type": "integer"
+                  },
+                  "network_events": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "post_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "pre_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url_changed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pre_url",
+                  "post_url",
+                  "url_changed",
+                  "network_event_count",
+                  "network_events"
+                ],
+                "type": "object"
+              },
+              "release_delivery": {
+                "enum": [
+                  "chrome_ack",
+                  "dialog_event",
+                  "delivery_uncertain"
+                ],
+                "type": "string"
+              },
+              "resolved_element": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            },
+            "required": [
+              "delivery_mode",
+              "release_delivery",
+              "delivery_uncertain",
+              "effect"
+            ],
+            "type": "object"
+          },
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Type Text"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Press Key"
+      },
+      "description": "Dispatch one key to a referenced element, or to the focused owned document after explicit handoff.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "modifiers": {
+            "items": {
+              "enum": [
+                "alt",
+                "control",
+                "meta",
+                "shift"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "timeout_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id",
+          "key"
+        ],
+        "type": "object"
+      },
+      "name": "press_key",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "additionalProperties": false,
+            "properties": {
+              "center_hit_test": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "delivery_mode": {
+                "enum": [
+                  "browser_protocol_input",
+                  "semantic_dom_activation"
+                ],
+                "type": "string"
+              },
+              "delivery_uncertain": {
+                "type": "boolean"
+              },
+              "effect": {
+                "additionalProperties": false,
+                "properties": {
+                  "accessibility_changed": {
+                    "type": "boolean"
+                  },
+                  "accessibility_changed_node_count": {
+                    "type": "integer"
+                  },
+                  "network_event_count": {
+                    "type": "integer"
+                  },
+                  "network_events": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "post_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "pre_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url_changed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pre_url",
+                  "post_url",
+                  "url_changed",
+                  "network_event_count",
+                  "network_events"
+                ],
+                "type": "object"
+              },
+              "release_delivery": {
+                "enum": [
+                  "chrome_ack",
+                  "dialog_event",
+                  "delivery_uncertain"
+                ],
+                "type": "string"
+              },
+              "resolved_element": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            },
+            "required": [
+              "delivery_mode",
+              "release_delivery",
+              "delivery_uncertain",
+              "effect"
+            ],
+            "type": "object"
+          },
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Press Key"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Screenshot"
+      },
+      "description": "Capture an owned page or referenced element as a renderable image artifact.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ],
+            "type": "string"
+          },
+          "full_page": {
+            "type": "boolean"
+          },
+          "quality": {
+            "type": "integer"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "tab_id"
+        ],
+        "type": "object"
+      },
+      "name": "screenshot",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "image": {
+            "additionalProperties": false,
+            "properties": {
+              "media_type": {
+                "enum": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "media_type"
+            ],
+            "type": "object"
+          },
+          "width": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifact",
+          "image",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "title": "Screenshot"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Evaluate"
+      },
+      "description": "Evaluate JavaScript for page state that semantic snapshots and diagnostics do not expose.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "args": {
+            "items": {},
+            "type": "array"
+          },
+          "await_promise": {
+            "type": "boolean"
+          },
+          "mode": {
+            "enum": [
+              "expression",
+              "function"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "tab_id",
+          "source"
+        ],
+        "type": "object"
+      },
+      "name": "evaluate",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          },
+          "preview": {
+            "type": "string"
+          },
+          "value": {}
+        },
+        "required": [],
+        "type": "object"
+      },
+      "title": "Evaluate"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Specialized Interaction"
+      },
+      "description": "Perform select, checkbox, hover, drag, drop, upload, dialog, scroll, or coordinate interaction. Set `operation` to one of: select_options, set_checked, hover, drag, drop, upload_files, handle_dialog, scroll, click_at.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "accept",
+              "dismiss"
+            ],
+            "type": "string"
+          },
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "button": {
+            "enum": [
+              "left",
+              "middle",
+              "right"
+            ],
+            "type": "string"
+          },
+          "checked": {
+            "type": "boolean"
+          },
+          "count": {
+            "enum": [
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "data": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "delta_x": {
+            "type": "number"
+          },
+          "delta_y": {
+            "type": "number"
+          },
+          "destination": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "modifiers": {
+            "items": {
+              "enum": [
+                "alt",
+                "control",
+                "meta",
+                "shift"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "observe": {
+            "enum": [
+              "none",
+              "diff",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "select_options",
+              "set_checked",
+              "hover",
+              "drag",
+              "drop",
+              "upload_files",
+              "handle_dialog",
+              "scroll",
+              "click_at"
+            ],
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prompt_text": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "css": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "frame_ref": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "css"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "timeout_ms": {
+            "type": "integer"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "interact",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "additionalProperties": false,
+            "properties": {
+              "center_hit_test": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "delivery_mode": {
+                "enum": [
+                  "browser_protocol_input",
+                  "semantic_dom_activation"
+                ],
+                "type": "string"
+              },
+              "delivery_uncertain": {
+                "type": "boolean"
+              },
+              "effect": {
+                "additionalProperties": false,
+                "properties": {
+                  "accessibility_changed": {
+                    "type": "boolean"
+                  },
+                  "accessibility_changed_node_count": {
+                    "type": "integer"
+                  },
+                  "network_event_count": {
+                    "type": "integer"
+                  },
+                  "network_events": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "post_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "pre_url": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url_changed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pre_url",
+                  "post_url",
+                  "url_changed",
+                  "network_event_count",
+                  "network_events"
+                ],
+                "type": "object"
+              },
+              "release_delivery": {
+                "enum": [
+                  "chrome_ack",
+                  "dialog_event",
+                  "delivery_uncertain"
+                ],
+                "type": "string"
+              },
+              "resolved_element": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            },
+            "required": [
+              "delivery_mode",
+              "release_delivery",
+              "delivery_uncertain",
+              "effect"
+            ],
+            "type": "object"
+          },
+          "document_revision": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "diff": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "base_snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "changed_node_count": {
+                        "type": "integer"
+                      },
+                      "changes": {
+                        "type": "string"
+                      },
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "changes",
+                      "changed_node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  },
+                  "mode": {
+                    "const": "diff",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "diff"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "snapshot",
+                    "type": "string"
+                  },
+                  "snapshot": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "document_revision": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "node_count": {
+                        "type": "integer"
+                      },
+                      "snapshot_id": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "tree": {
+                        "type": "string"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "snapshot_id",
+                      "document_revision",
+                      "url",
+                      "title",
+                      "tree",
+                      "node_count",
+                      "truncated"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "snapshot"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "operation": {
+            "enum": [
+              "select_options",
+              "set_checked",
+              "hover",
+              "drag",
+              "drop",
+              "upload_files",
+              "handle_dialog",
+              "scroll",
+              "click_at"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "document_revision",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "title": "Specialized Interaction"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Console Diagnostics"
+      },
+      "description": "List, inspect, or clear lease-scoped console diagnostics. Set `operation` to one of: list, get, clear.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "levels": {
+            "items": {
+              "enum": [
+                "verbose",
+                "debug",
+                "info",
+                "warning",
+                "error"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "message_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "list",
+              "get",
+              "clear"
+            ],
+            "type": "string"
+          },
+          "since": {
+            "type": "integer"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "console",
+      "outputSchema": {
+        "$defs": {
+          "a": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          },
+          "c": {
+            "additionalProperties": false,
+            "properties": {
+              "arguments": {
+                "items": {},
+                "type": "array"
+              },
+              "level": {
+                "enum": [
+                  "verbose",
+                  "debug",
+                  "info",
+                  "warning",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "message_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sequence": {
+                "type": "integer"
+              },
+              "source": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "type": "integer"
+                  },
+                  "line": {
+                    "type": "integer"
+                  },
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "stack": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "text": {
+                "type": "string"
+              },
+              "timestamp_ms": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "message_id",
+              "sequence",
+              "level",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "messages": {
+                "items": {
+                  "$ref": "#/$defs/c"
+                },
+                "type": "array"
+              },
+              "next_since": {
+                "type": "integer"
+              },
+              "operation": {
+                "const": "list",
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "operation",
+              "messages",
+              "next_since",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "$ref": "#/$defs/c"
+              },
+              "operation": {
+                "const": "get",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "cleared": {
+                "const": true
+              },
+              "operation": {
+                "const": "clear",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "cleared"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Console Diagnostics"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Network Diagnostics"
+      },
+      "description": "List, inspect, or clear lease-scoped network diagnostics. Set `operation` to one of: list, get, clear.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "body_limit_bytes": {
+            "type": "integer"
+          },
+          "include_request_body": {
+            "type": "boolean"
+          },
+          "include_response_body": {
+            "type": "boolean"
+          },
+          "include_static": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "operation": {
+            "enum": [
+              "list",
+              "get",
+              "clear"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "resource_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "since": {
+            "type": "integer"
+          },
+          "status_max": {
+            "type": "integer"
+          },
+          "status_min": {
+            "type": "integer"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "url_pattern": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "network",
+      "outputSchema": {
+        "$defs": {
+          "a": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          },
+          "n": {
+            "additionalProperties": false,
+            "properties": {
+              "duration_ms": {
+                "type": "number"
+              },
+              "error_text": {
+                "type": "string"
+              },
+              "failed": {
+                "type": "boolean"
+              },
+              "method": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "mime_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "request_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "resource_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sequence": {
+                "type": "integer"
+              },
+              "started_at_ms": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "request_id",
+              "sequence",
+              "url",
+              "method"
+            ],
+            "type": "object"
+          }
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "next_since": {
+                "type": "integer"
+              },
+              "operation": {
+                "const": "list",
+                "type": "string"
+              },
+              "requests": {
+                "items": {
+                  "$ref": "#/$defs/n"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "operation",
+              "requests",
+              "next_since",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "body_artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "initiator": {},
+              "operation": {
+                "const": "get",
+                "type": "string"
+              },
+              "request": {
+                "$ref": "#/$defs/n"
+              },
+              "request_body": {
+                "type": "string"
+              },
+              "request_headers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "response_body": {
+                "type": "string"
+              },
+              "response_headers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "timing": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "operation",
+              "request",
+              "request_headers"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "cleared": {
+                "const": true
+              },
+              "operation": {
+                "const": "clear",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "cleared"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Network Diagnostics"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Emulation"
+      },
+      "description": "Configure viewport, network, CPU, geolocation, media, user agent, or headers for an owned target. Set `operation` to one of: set_viewport, set_network, set_cpu, set_geolocation, set_media, set_user_agent, set_headers, reset.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "accept_language": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "accuracy_meters": {
+            "type": "number"
+          },
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "color_scheme": {
+            "enum": [
+              "light",
+              "dark",
+              "no_preference"
+            ],
+            "type": "string"
+          },
+          "device_scale_factor": {
+            "type": "number"
+          },
+          "download_bytes_per_second": {
+            "type": "number"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "latitude": {
+            "type": "number"
+          },
+          "longitude": {
+            "type": "number"
+          },
+          "media": {
+            "enum": [
+              "screen",
+              "print"
+            ],
+            "type": "string"
+          },
+          "mobile": {
+            "type": "boolean"
+          },
+          "offline": {
+            "type": "boolean"
+          },
+          "operation": {
+            "enum": [
+              "set_viewport",
+              "set_network",
+              "set_cpu",
+              "set_geolocation",
+              "set_media",
+              "set_user_agent",
+              "set_headers",
+              "reset"
+            ],
+            "type": "string"
+          },
+          "orientation": {
+            "enum": [
+              "portrait",
+              "landscape"
+            ],
+            "type": "string"
+          },
+          "platform": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "preset": {
+            "enum": [
+              "offline",
+              "slow_3g",
+              "fast_3g",
+              "slow_4g",
+              "none"
+            ],
+            "type": "string"
+          },
+          "reduced_motion": {
+            "enum": [
+              "reduce",
+              "no_preference"
+            ],
+            "type": "string"
+          },
+          "slowdown": {
+            "type": "number"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "touch": {
+            "type": "boolean"
+          },
+          "upload_bytes_per_second": {
+            "type": "number"
+          },
+          "user_agent": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "emulation",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "effective": {},
+          "operation": {
+            "enum": [
+              "set_viewport",
+              "set_network",
+              "set_cpu",
+              "set_geolocation",
+              "set_media",
+              "set_user_agent",
+              "set_headers",
+              "reset"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "effective"
+        ],
+        "type": "object"
+      },
+      "title": "Emulation"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Performance"
+      },
+      "description": "Capture traces, read web vitals, and analyze broker-produced performance artifacts. Set `operation` to one of: start_trace, stop_trace, vitals, analyze.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "artifact_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "insight": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "max_findings": {
+            "type": "integer"
+          },
+          "operation": {
+            "enum": [
+              "start_trace",
+              "stop_trace",
+              "vitals",
+              "analyze"
+            ],
+            "type": "string"
+          },
+          "reload": {
+            "type": "boolean"
+          },
+          "screenshots": {
+            "type": "boolean"
+          },
+          "since_navigation": {
+            "type": "boolean"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "performance",
+      "outputSchema": {
+        "$defs": {
+          "a": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          }
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "start_trace",
+                "type": "string"
+              },
+              "recording": {
+                "const": true
+              }
+            },
+            "required": [
+              "operation",
+              "recording"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "operation": {
+                "const": "stop_trace",
+                "type": "string"
+              },
+              "recording": {
+                "const": false
+              }
+            },
+            "required": [
+              "operation",
+              "recording",
+              "artifact"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "metrics": {
+                "additionalProperties": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "type": "object"
+              },
+              "operation": {
+                "const": "vitals",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "metrics"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "findings": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "evidence": {},
+                    "name": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "severity": {
+                      "enum": [
+                        "info",
+                        "warning",
+                        "error"
+                      ],
+                      "type": "string"
+                    },
+                    "summary": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "severity",
+                    "summary"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "operation": {
+                "const": "analyze",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "artifact",
+              "findings"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Performance"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Audit"
+      },
+      "description": "Run accessibility, best-practices, SEO, or agentic-browsing audits against an owned tab. Set `operation` to one of: run.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "enum": [
+                "accessibility",
+                "seo",
+                "best_practices",
+                "agentic_browsing"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "device": {
+            "enum": [
+              "desktop",
+              "mobile"
+            ],
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "navigation",
+              "snapshot"
+            ],
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "run"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "audit",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "findings": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "category": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "description": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "refs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "title": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "category",
+                "title",
+                "description"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "operation": {
+            "const": "run",
+            "type": "string"
+          },
+          "reports": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "artifact_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "created_at_ms": {
+                  "type": "integer"
+                },
+                "kind": {
+                  "enum": [
+                    "screenshot",
+                    "console",
+                    "network",
+                    "trace",
+                    "audit",
+                    "heap_snapshot",
+                    "screencast",
+                    "evaluation"
+                  ],
+                  "type": "string"
+                },
+                "media_type": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "retention": {
+                  "const": "session",
+                  "type": "string"
+                },
+                "sha256": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "artifact_id",
+                "kind",
+                "media_type",
+                "size_bytes",
+                "sha256",
+                "created_at_ms",
+                "retention"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "scores": {
+            "additionalProperties": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "operation",
+          "scores",
+          "findings",
+          "reports"
+        ],
+        "type": "object"
+      },
+      "title": "Audit"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Memory"
+      },
+      "description": "Capture and inspect bounded heap-snapshot artifacts for an owned tab. Set `operation` to one of: capture, summary, classes, node, dominators, retainers, retaining_paths, edges, close.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "artifact_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "class_name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "cursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "incoming",
+              "outgoing"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "max_depth": {
+            "type": "integer"
+          },
+          "min_retained_bytes": {
+            "type": "integer"
+          },
+          "node_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "capture",
+              "summary",
+              "classes",
+              "node",
+              "dominators",
+              "retainers",
+              "retaining_paths",
+              "edges",
+              "close"
+            ],
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "memory",
+      "outputSchema": {
+        "$defs": {
+          "a": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          }
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "operation": {
+                "const": "capture",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "artifact"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "closed": {
+                "const": true
+              },
+              "operation": {
+                "const": "close",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "closed"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "data": {},
+              "next_cursor": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation": {
+                "enum": [
+                  "summary",
+                  "classes",
+                  "node",
+                  "dominators",
+                  "retainers",
+                  "retaining_paths",
+                  "edges"
+                ],
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "operation",
+              "artifact",
+              "data",
+              "truncated"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Memory"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Screencast"
+      },
+      "description": "Start, stop, or inspect an owned-tab screencast recording. Set `operation` to one of: start, stop, status.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "dependencies": {
+          "max_height": [
+            "max_width"
+          ],
+          "max_width": [
+            "max_height"
+          ]
+        },
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "fps": {
+            "maximum": 30,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_duration_ms": {
+            "maximum": 300000,
+            "minimum": 1000,
+            "type": "integer"
+          },
+          "max_height": {
+            "maximum": 2160,
+            "minimum": 16,
+            "multipleOf": 2,
+            "type": "integer"
+          },
+          "max_width": {
+            "maximum": 3840,
+            "minimum": 16,
+            "multipleOf": 2,
+            "type": "integer"
+          },
+          "operation": {
+            "enum": [
+              "start",
+              "stop",
+              "status"
+            ],
+            "type": "string"
+          },
+          "quality": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "tab_id",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "screencast",
+      "outputSchema": {
+        "$defs": {
+          "a": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          }
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "metrics": {
+                "additionalProperties": false,
+                "properties": {
+                  "dropped_frames": {
+                    "type": "integer"
+                  },
+                  "encoded_frames": {
+                    "type": "integer"
+                  },
+                  "received_frames": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "received_frames",
+                  "encoded_frames",
+                  "dropped_frames"
+                ],
+                "type": "object"
+              },
+              "operation": {
+                "const": "start",
+                "type": "string"
+              },
+              "recording": {
+                "const": true
+              },
+              "started_at_ms": {
+                "type": "integer"
+              },
+              "state": {
+                "const": "recording"
+              }
+            },
+            "required": [
+              "operation",
+              "recording",
+              "state",
+              "started_at_ms",
+              "metrics"
+            ],
+            "type": "object"
+          },
+          {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "metrics": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "dropped_frames": {
+                        "type": "integer"
+                      },
+                      "encoded_frames": {
+                        "type": "integer"
+                      },
+                      "received_frames": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "received_frames",
+                      "encoded_frames",
+                      "dropped_frames"
+                    ],
+                    "type": "object"
+                  },
+                  "operation": {
+                    "const": "stop",
+                    "type": "string"
+                  },
+                  "recording": {
+                    "const": true
+                  },
+                  "started_at_ms": {
+                    "type": "integer"
+                  },
+                  "state": {
+                    "const": "recording"
+                  }
+                },
+                "required": [
+                  "operation",
+                  "recording",
+                  "state",
+                  "started_at_ms",
+                  "metrics"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "metrics": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "dropped_frames": {
+                        "type": "integer"
+                      },
+                      "encoded_frames": {
+                        "type": "integer"
+                      },
+                      "received_frames": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "received_frames",
+                      "encoded_frames",
+                      "dropped_frames"
+                    ],
+                    "type": "object"
+                  },
+                  "operation": {
+                    "const": "stop",
+                    "type": "string"
+                  },
+                  "recording": {
+                    "const": true
+                  },
+                  "started_at_ms": {
+                    "type": "integer"
+                  },
+                  "state": {
+                    "const": "finalizing"
+                  }
+                },
+                "required": [
+                  "operation",
+                  "recording",
+                  "state",
+                  "started_at_ms",
+                  "metrics"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "artifact": {
+                    "$ref": "#/$defs/a"
+                  },
+                  "metrics": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "dropped_frames": {
+                        "type": "integer"
+                      },
+                      "encoded_frames": {
+                        "type": "integer"
+                      },
+                      "received_frames": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "received_frames",
+                      "encoded_frames",
+                      "dropped_frames"
+                    ],
+                    "type": "object"
+                  },
+                  "operation": {
+                    "const": "stop",
+                    "type": "string"
+                  },
+                  "recording": {
+                    "const": false
+                  },
+                  "started_at_ms": {
+                    "type": "integer"
+                  },
+                  "state": {
+                    "const": "ready"
+                  }
+                },
+                "required": [
+                  "operation",
+                  "recording",
+                  "state",
+                  "started_at_ms",
+                  "metrics",
+                  "artifact"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "error": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "message": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message"
+                    ],
+                    "type": "object"
+                  },
+                  "metrics": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "dropped_frames": {
+                        "type": "integer"
+                      },
+                      "encoded_frames": {
+                        "type": "integer"
+                      },
+                      "received_frames": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "received_frames",
+                      "encoded_frames",
+                      "dropped_frames"
+                    ],
+                    "type": "object"
+                  },
+                  "operation": {
+                    "const": "stop",
+                    "type": "string"
+                  },
+                  "recording": {
+                    "const": false
+                  },
+                  "started_at_ms": {
+                    "type": "integer"
+                  },
+                  "state": {
+                    "const": "error"
+                  }
+                },
+                "required": [
+                  "operation",
+                  "recording",
+                  "state",
+                  "started_at_ms",
+                  "metrics",
+                  "error"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "operation": {
+                    "const": "status",
+                    "type": "string"
+                  },
+                  "recording": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "operation",
+                  "recording"
+                ],
+                "type": "object"
+              },
+              {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "metrics": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "dropped_frames": {
+                            "type": "integer"
+                          },
+                          "encoded_frames": {
+                            "type": "integer"
+                          },
+                          "received_frames": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "received_frames",
+                          "encoded_frames",
+                          "dropped_frames"
+                        ],
+                        "type": "object"
+                      },
+                      "operation": {
+                        "const": "status",
+                        "type": "string"
+                      },
+                      "recording": {
+                        "const": true
+                      },
+                      "started_at_ms": {
+                        "type": "integer"
+                      },
+                      "state": {
+                        "const": "recording"
+                      }
+                    },
+                    "required": [
+                      "operation",
+                      "recording",
+                      "state",
+                      "started_at_ms",
+                      "metrics"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "metrics": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "dropped_frames": {
+                            "type": "integer"
+                          },
+                          "encoded_frames": {
+                            "type": "integer"
+                          },
+                          "received_frames": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "received_frames",
+                          "encoded_frames",
+                          "dropped_frames"
+                        ],
+                        "type": "object"
+                      },
+                      "operation": {
+                        "const": "status",
+                        "type": "string"
+                      },
+                      "recording": {
+                        "const": true
+                      },
+                      "started_at_ms": {
+                        "type": "integer"
+                      },
+                      "state": {
+                        "const": "finalizing"
+                      }
+                    },
+                    "required": [
+                      "operation",
+                      "recording",
+                      "state",
+                      "started_at_ms",
+                      "metrics"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "artifact": {
+                        "$ref": "#/$defs/a"
+                      },
+                      "metrics": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "dropped_frames": {
+                            "type": "integer"
+                          },
+                          "encoded_frames": {
+                            "type": "integer"
+                          },
+                          "received_frames": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "received_frames",
+                          "encoded_frames",
+                          "dropped_frames"
+                        ],
+                        "type": "object"
+                      },
+                      "operation": {
+                        "const": "status",
+                        "type": "string"
+                      },
+                      "recording": {
+                        "const": false
+                      },
+                      "started_at_ms": {
+                        "type": "integer"
+                      },
+                      "state": {
+                        "const": "ready"
+                      }
+                    },
+                    "required": [
+                      "operation",
+                      "recording",
+                      "state",
+                      "started_at_ms",
+                      "metrics",
+                      "artifact"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "error": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "message": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ],
+                        "type": "object"
+                      },
+                      "metrics": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "dropped_frames": {
+                            "type": "integer"
+                          },
+                          "encoded_frames": {
+                            "type": "integer"
+                          },
+                          "received_frames": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "received_frames",
+                          "encoded_frames",
+                          "dropped_frames"
+                        ],
+                        "type": "object"
+                      },
+                      "operation": {
+                        "const": "status",
+                        "type": "string"
+                      },
+                      "recording": {
+                        "const": false
+                      },
+                      "started_at_ms": {
+                        "type": "integer"
+                      },
+                      "state": {
+                        "const": "error"
+                      }
+                    },
+                    "required": [
+                      "operation",
+                      "recording",
+                      "state",
+                      "started_at_ms",
+                      "metrics",
+                      "error"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "title": "Screencast"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Artifacts"
+      },
+      "description": "List, inspect, read, export, or delete browser artifacts owned by the session. Set `operation` to one of: list, metadata, read, export, delete.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "artifact_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "cursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "length": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "operation": {
+            "enum": [
+              "list",
+              "metadata",
+              "read",
+              "export",
+              "delete"
+            ],
+            "type": "string"
+          },
+          "overwrite": {
+            "type": "boolean"
+          },
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "tab_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
+      },
+      "name": "artifacts",
+      "outputSchema": {
+        "$defs": {
+          "a": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "created_at_ms": {
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "screenshot",
+                  "console",
+                  "network",
+                  "trace",
+                  "audit",
+                  "heap_snapshot",
+                  "screencast",
+                  "evaluation"
+                ],
+                "type": "string"
+              },
+              "media_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention": {
+                "const": "session",
+                "type": "string"
+              },
+              "sha256": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "kind",
+              "media_type",
+              "size_bytes",
+              "sha256",
+              "created_at_ms",
+              "retention"
+            ],
+            "type": "object"
+          }
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifacts": {
+                "items": {
+                  "$ref": "#/$defs/a"
+                },
+                "type": "array"
+              },
+              "next_cursor": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation": {
+                "const": "list",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "artifacts"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "operation": {
+                "const": "metadata",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "artifact"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "data_base64": {
+                "type": "string"
+              },
+              "eof": {
+                "type": "boolean"
+              },
+              "offset": {
+                "type": "integer"
+              },
+              "operation": {
+                "const": "read",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "artifact",
+              "offset",
+              "data_base64",
+              "eof"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {
+                "$ref": "#/$defs/a"
+              },
+              "operation": {
+                "const": "export",
+                "type": "string"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "artifact",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "deleted": {
+                "const": true
+              },
+              "operation": {
+                "const": "delete",
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "deleted"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Artifacts"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Browser Tool Help"
+      },
+      "description": "Choose the preferred explicit tool or specialized-domain operation for a browser task.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "topic": {
+            "enum": [
+              "workflow",
+              "tabs",
+              "snapshot",
+              "interaction",
+              "navigation",
+              "diagnostics",
+              "emulation",
+              "performance",
+              "audit",
+              "memory",
+              "screencast",
+              "artifacts",
+              "errors"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "name": "help",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "errors": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "recovery": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "recovery"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "example": {
+            "additionalProperties": false,
+            "properties": {
+              "arguments": {},
+              "tool": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "tool",
+              "arguments"
+            ],
+            "type": "object"
+          },
+          "neighbors": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "tool": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "use_when": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool",
+                "use_when"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "operation": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "preferred": {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "tool": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "tool",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "result_schema": {},
+          "task": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "topic": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "task",
+          "preferred",
+          "neighbors",
+          "example",
+          "result_schema",
+          "errors"
+        ],
+        "type": "object"
+      },
+      "title": "Browser Tool Help"
+    }
+  ]
+}
