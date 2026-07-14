@@ -1127,6 +1127,19 @@ impl CommandOutput {
 
         self
     }
+
+    pub(crate) fn compact_text_from_structured(
+        mut self,
+        max_bytes: Option<usize>,
+    ) -> serde_json::Result<Self> {
+        self.text = self
+            .structured
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?
+            .map(|text| limit_text(text, max_bytes));
+        Ok(self)
+    }
 }
 
 fn shape_structured(value: Value, spec: &OutputSpec) -> Value {

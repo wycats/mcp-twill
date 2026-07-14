@@ -53,7 +53,11 @@ fn released_error_inventory_has_one_authored_twill_owner() {
         .iter()
         .map(|(code, _)| *code)
         .collect::<BTreeSet<_>>();
-    assert_eq!(authored.len(), vbl::ERROR_OWNERS.len(), "duplicate owner");
+    assert_eq!(
+        authored.len(),
+        vbl::ERROR_OWNERS.len(),
+        "duplicate error code"
+    );
     assert_eq!(authored, released, "every released code has one owner");
     assert_eq!(
         vbl::ERROR_OWNERS

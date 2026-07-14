@@ -8,9 +8,10 @@ use mcp_twill::{
     ApplicationRecoveryKey, ApplicationRecoverySelection, ApplicationResult,
     ApplicationResultContract, ApplicationSuccess, CommandContext, CommandExecutionOutcome,
     CommandOutput, CommandRegistry, CommandSpec, DynamicApplicationError, DynamicApplicationResult,
-    FrameworkError, FrameworkEvent, Grant, HelpRequest, Listing, OutputContract, PlanFacts,
-    Resource, ResourceDecl, ResponseEnvelope, ResponseProfile, ResultContractBoundary,
-    ResultContractReason, RunMode, RunRequest, application_error_set, contract,
+    FrameworkError, FrameworkEvent, Grant, HelpRequest, Listing, OutputContract, OutputFormat,
+    OutputSpec, PlanFacts, Resource, ResourceDecl, ResponseEnvelope, ResponseProfile,
+    ResultContractBoundary, ResultContractReason, RunMode, RunRequest, application_error_set,
+    contract,
 };
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -301,6 +302,25 @@ async fn typed_success_is_validated_once_and_projects_compact_json() {
         output.text.as_deref(),
         Some(r#"{"activeTab":"tab-1","ready":true}"#)
     );
+}
+
+#[tokio::test]
+async fn result_aware_text_is_generated_after_output_selection() {
+    let registry = result_registry();
+    let mut run = request("browser status");
+    run.output = Some(OutputSpec {
+        format: OutputFormat::Text,
+        fields: Some(vec!["ready".to_string()]),
+        ..OutputSpec::default()
+    });
+    let CommandExecutionOutcome::Success(response) =
+        registry.run(run).await.expect("framework succeeds")
+    else {
+        panic!("expected success");
+    };
+    let output = response.output.expect("result output");
+    assert_eq!(output.structured, Some(json!({ "ready": true })));
+    assert_eq!(output.text.as_deref(), Some(r#"{"ready":true}"#));
 }
 
 #[tokio::test]
@@ -779,6 +799,107 @@ fn typed_schema_normalizes_rust_storage_constraints() {
     assert!(!text.contains("minimum"));
     assert!(!text.contains("maximum"));
     assert!(text.contains("null"));
+}
+
+#[test]
+fn typed_schema_normalizes_nullable_local_references() {
+    #[derive(Serialize, JsonSchema)]
+    struct Nested {
+        value: String,
+    }
+
+    #[derive(Serialize, JsonSchema)]
+    struct OptionalNested {
+        nested: Option<Nested>,
+    }
+
+    let contract = ApplicationResultContract::for_type::<OptionalNested>();
+    let text = contract.success_schema.to_string();
+    assert!(!text.contains("anyOf"));
+    assert!(text.contains("oneOf"));
+
+    let registry = CommandRegistry::new("typed-ref", "Typed reference").register_dynamic(
+        CommandSpec::new(["typed-ref"], "Typed reference", "Typed reference").with_output(
+            OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            },
+        ),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "nested": { "value": "ready" }
+            })))
+        },
+    );
+    registry.validate_results().unwrap();
+}
+
+#[tokio::test]
+async fn local_reference_siblings_are_applied_during_validation() {
+    let contract = ApplicationResultContract::new(json!({
+        "$defs": {
+            "base": {
+                "type": "object",
+                "properties": { "base": { "type": "boolean" } },
+                "required": ["base"]
+            }
+        },
+        "$ref": "#/$defs/base",
+        "required": ["sibling"]
+    }));
+    let registry = CommandRegistry::new("ref-sibling", "Reference sibling").register_dynamic(
+        CommandSpec::new(["ref-sibling"], "Reference sibling", "Reference sibling").with_output(
+            OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            },
+        ),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "base": true
+            })))
+        },
+    );
+    registry.validate_results().unwrap();
+    assert_eq!(
+        registry.run(request("ref-sibling")).await.unwrap_err(),
+        FrameworkError::ResultContractViolation {
+            boundary: ResultContractBoundary::Success,
+            reason: ResultContractReason::SchemaMismatch,
+        }
+    );
+}
+
+#[tokio::test]
+async fn integer_schema_accepts_zero_fraction_json_numbers() {
+    fn registry(value: Value) -> CommandRegistry {
+        CommandRegistry::new("integer", "Integer").register_dynamic(
+            CommandSpec::new(["integer"], "Integer", "Integer").with_output(OutputContract {
+                application: Some(ApplicationResultContract::new(json!({ "type": "integer" }))),
+                ..OutputContract::default()
+            }),
+            move |_context| {
+                let value = value.clone();
+                async move {
+                    Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(value))
+                }
+            },
+        )
+    }
+
+    let whole = registry(json!(1.0));
+    whole.validate_results().unwrap();
+    assert!(whole.run(request("integer")).await.is_ok());
+
+    let fractional = registry(json!(1.5));
+    fractional.validate_results().unwrap();
+    assert_eq!(
+        fractional.run(request("integer")).await.unwrap_err(),
+        FrameworkError::ResultContractViolation {
+            boundary: ResultContractBoundary::Success,
+            reason: ResultContractReason::SchemaMismatch,
+        }
+    );
 }
 
 #[test]

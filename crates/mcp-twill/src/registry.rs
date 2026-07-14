@@ -2120,14 +2120,8 @@ impl CommandRegistry {
                         ))
                     })?;
                 crate::results::validate_application_success(contract, &value)?;
-                let text = serde_json::to_string(&value).map_err(|_| {
-                    FrameworkError::ResultContractViolation {
-                        boundary: crate::ResultContractBoundary::Success,
-                        reason: crate::ResultContractReason::SerializationFailed,
-                    }
-                })?;
                 let output = CommandOutput {
-                    text: Some(text),
+                    text: None,
                     structured: Some(value),
                     stderr: Vec::new(),
                     next_cursor: None,
@@ -2136,6 +2130,12 @@ impl CommandRegistry {
                 };
                 let output = self.mint_output_references(&registered.spec, output)?;
                 let output = output.apply_output_spec(&plan.output);
+                let output = output
+                    .compact_text_from_structured(plan.output.max_bytes)
+                    .map_err(|_| FrameworkError::ResultContractViolation {
+                        boundary: crate::ResultContractBoundary::Success,
+                        reason: crate::ResultContractReason::SerializationFailed,
+                    })?;
                 Ok(CommandExecutionOutcome::Success(RunResponse {
                     plan,
                     output: Some(output),

@@ -1362,9 +1362,7 @@ pub(crate) fn validate_application_error(
                 reason: ResultContractReason::InvalidMessage,
             });
         }
-        (ApplicationMessageDecl::RuntimeBounded { max_scalar_values }, Some(message))
-            if message.is_empty() =>
-        {
+        (ApplicationMessageDecl::RuntimeBounded { .. }, Some(message)) if message.is_empty() => {
             return Err(FrameworkError::ResultContractViolation {
                 boundary: ResultContractBoundary::ApplicationError,
                 reason: ResultContractReason::InvalidMessage,
@@ -1744,10 +1742,15 @@ fn visit_schema_refs(
 }
 
 fn normalize_typed_schema(value: &mut Value) {
-    normalize_typed_schema_at(value);
+    let definitions = value
+        .get("$defs")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    normalize_typed_schema_at(value, &definitions);
 }
 
-fn normalize_typed_schema_at(value: &mut Value) {
+fn normalize_typed_schema_at(value: &mut Value, definitions: &Map<String, Value>) {
     match value {
         Value::Object(object) => {
             if let Some(Value::String(format)) = object.get("format")
@@ -1782,7 +1785,9 @@ fn normalize_typed_schema_at(value: &mut Value) {
                     && branches
                         .iter()
                         .find(|branch| branch.get("type") != Some(&json!("null")))
-                        .is_some_and(schema_is_provably_non_null)
+                        .is_some_and(|branch| {
+                            schema_is_provably_non_null(branch, definitions, &mut BTreeSet::new())
+                        })
                 {
                     object.insert("oneOf".to_string(), any_of);
                 } else {
@@ -1793,19 +1798,23 @@ fn normalize_typed_schema_at(value: &mut Value) {
                 kinds.sort_by_key(|kind| kind == "null");
             }
             for nested in object.values_mut() {
-                normalize_typed_schema_at(nested);
+                normalize_typed_schema_at(nested, definitions);
             }
         }
         Value::Array(values) => {
             for nested in values {
-                normalize_typed_schema_at(nested);
+                normalize_typed_schema_at(nested, definitions);
             }
         }
         _ => {}
     }
 }
 
-fn schema_is_provably_non_null(schema: &Value) -> bool {
+fn schema_is_provably_non_null(
+    schema: &Value,
+    definitions: &Map<String, Value>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
     let Some(object) = schema.as_object() else {
         return false;
     };
@@ -1819,11 +1828,28 @@ fn schema_is_provably_non_null(schema: &Value) -> bool {
     {
         return true;
     }
-    match object.get("type") {
+    let own_assertion_is_non_null = match object.get("type") {
         Some(Value::String(kind)) => kind != "null",
         Some(Value::Array(kinds)) => !kinds.iter().any(|kind| kind == "null"),
         _ => false,
+    };
+    if own_assertion_is_non_null {
+        return true;
     }
+    let Some(reference) = object.get("$ref").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(name) = reference.strip_prefix("#/$defs/") else {
+        return false;
+    };
+    if name.contains('/') || !visiting.insert(name.to_string()) {
+        return false;
+    }
+    let non_null = definitions
+        .get(name)
+        .is_some_and(|target| schema_is_provably_non_null(target, definitions, visiting));
+    visiting.remove(name);
+    non_null
 }
 
 fn value_matches_schema(value: &Value, schema: &Value, root: &Value) -> bool {
@@ -1832,10 +1858,13 @@ fn value_matches_schema(value: &Value, schema: &Value, root: &Value) -> bool {
     };
     if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
         let name = reference.trim_start_matches("#/$defs/");
-        return root
+        if !root
             .get("$defs")
             .and_then(|defs| defs.get(name))
-            .is_some_and(|schema| value_matches_schema(value, schema, root));
+            .is_some_and(|schema| value_matches_schema(value, schema, root))
+        {
+            return false;
+        }
     }
     if let Some(branches) = object.get("oneOf").and_then(Value::as_array)
         && branches
@@ -1936,7 +1965,13 @@ fn matches_one_type(value: &Value, kind: &str) -> bool {
         "object" => value.is_object(),
         "array" => value.is_array(),
         "number" => value.is_number(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "integer" => {
+            value.as_i64().is_some()
+                || value.as_u64().is_some()
+                || value
+                    .as_f64()
+                    .is_some_and(|value| value.is_finite() && value.fract() == 0.0)
+        }
         "string" => value.is_string(),
         _ => false,
     }
