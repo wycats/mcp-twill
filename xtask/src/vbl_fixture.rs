@@ -909,7 +909,12 @@ mod tests {
     #[test]
     fn payload_derivations_are_owned_by_the_importer() -> Result<()> {
         let mut manifest = read_manifest(&fixture_directory())?;
-        manifest.files[0].derivation = Derivation::SourceCopy;
+        manifest
+            .files
+            .iter_mut()
+            .find(|entry| entry.path == "baseline-tools.json")
+            .expect("baseline entry")
+            .derivation = Derivation::SourceCopy;
         let error = validate_file_entries(&manifest.files).unwrap_err();
         assert!(error.to_string().contains("unexpected derivation"));
         Ok(())
