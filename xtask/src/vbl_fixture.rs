@@ -25,6 +25,35 @@ const PAYLOADS: [&str; 5] = [
     "surface-catalog.json",
     "vscode-package.json",
 ];
+const EXPECTED_MANIFEST_SHA256: &str =
+    "8f891cfdfb1e5d20e968c339e83b04da203d272fce4d6f419346d68101fb44d0";
+const EXPECTED_FILES: [(&str, Derivation, &str); 5] = [
+    (
+        "application-error-vectors.json",
+        Derivation::RustExport,
+        "36aa551aa6dbb7ba0677ed5a9fa0fd221ba04c71adc8336e9c45ea61b92581dd",
+    ),
+    (
+        "baseline-tools.json",
+        Derivation::RustExport,
+        "ac160d41a025734eefbb08dda04a4f40f8043c7f11aa2970e7c06f3939f14e75",
+    ),
+    (
+        "presentation-vectors.json",
+        Derivation::ReviewedVector,
+        "8d064f8d058caa525fa7a419a979b5ff05b0854d40cfcfffb8c6d91f8f8e5e82",
+    ),
+    (
+        "surface-catalog.json",
+        Derivation::RustExport,
+        "6538b3591f83519a1551b5f2f13e9075a54a16a46dcad617fe5fcd0ace8f66f2",
+    ),
+    (
+        "vscode-package.json",
+        Derivation::SourceCopy,
+        "2c6730ad53159c3f5d913a72be06214e7f1136dbc90c62be5a8f4f186e14e3fc",
+    ),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -301,6 +330,10 @@ pub fn validate_bundle(directory: &Path) -> Result<()> {
     );
     let manifest_bytes =
         fs::read(directory.join("manifest.json")).context("read fixture manifest")?;
+    ensure!(
+        sha256(&manifest_bytes) == EXPECTED_MANIFEST_SHA256,
+        "manifest.json does not match the pinned bundle"
+    );
     let manifest: Manifest =
         serde_json::from_slice(&manifest_bytes).context("parse fixture manifest")?;
     ensure!(
@@ -329,15 +362,7 @@ pub fn validate_bundle(directory: &Path) -> Result<()> {
         "fixture importer identity is not canonical"
     );
 
-    let paths = manifest
-        .files
-        .iter()
-        .map(|entry| entry.path.as_str())
-        .collect::<Vec<_>>();
-    ensure!(
-        paths == PAYLOADS,
-        "manifest payload inventory is incomplete or not sorted"
-    );
+    validate_file_entries(&manifest.files)?;
 
     let actual = directory_inventory(directory)?;
     let expected = PAYLOADS
@@ -397,6 +422,30 @@ pub fn validate_bundle(directory: &Path) -> Result<()> {
                 entry.path
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_file_entries(files: &[FileEntry]) -> Result<()> {
+    ensure!(
+        files.len() == EXPECTED_FILES.len(),
+        "manifest payload inventory is incomplete"
+    );
+    for (entry, (path, derivation, hash)) in files.iter().zip(EXPECTED_FILES) {
+        ensure!(
+            entry.path == path,
+            "manifest payload inventory is incomplete or not sorted"
+        );
+        ensure!(
+            entry.derivation == derivation,
+            "{} has an unexpected derivation",
+            entry.path
+        );
+        ensure!(
+            entry.sha256 == hash,
+            "{} does not match the pinned payload hash",
+            entry.path
+        );
     }
     Ok(())
 }
@@ -799,14 +848,9 @@ mod tests {
             "nested/../baseline-tools.json",
             "nested\\baseline-tools.json",
         ] {
-            let copy = fixture_copy()?;
-            let mut manifest = read_manifest(copy.path())?;
-            manifest.files[0].sources[0].path = invalid.to_string();
-            write_manifest(copy.path(), &manifest)?;
-            let error = validate_bundle(copy.path()).unwrap_err();
+            let error = validate_relative_path(invalid).unwrap_err();
             assert!(
-                error.to_string().contains("inventory")
-                    || error.to_string().contains("escape")
+                error.to_string().contains("escape")
                     || error.to_string().contains("absolute")
                     || error.to_string().contains("separator")
             );
@@ -815,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_refresh_is_valid_in_isolation_but_not_reproducible() -> Result<()> {
+    fn payload_and_manifest_partial_refresh_is_rejected_offline() -> Result<()> {
         let copy = fixture_copy()?;
         let changed = canonical_value(json!({"partial": "refresh"}))?;
         fs::write(copy.path().join("baseline-tools.json"), &changed)?;
@@ -827,14 +871,17 @@ mod tests {
             .expect("baseline entry");
         baseline.sha256 = sha256(&changed);
         write_manifest(copy.path(), &manifest)?;
-        validate_bundle(copy.path())?;
-        let error = compare_directories(&fixture_directory(), copy.path()).unwrap_err();
-        assert!(error.to_string().contains("differs from a fresh import"));
+        let error = validate_bundle(copy.path()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the pinned bundle")
+        );
         Ok(())
     }
 
     #[test]
-    fn manifest_must_be_written_and_hashed_canonically() -> Result<()> {
+    fn manifest_bytes_are_pinned_outside_the_bundle() -> Result<()> {
         let copy = fixture_copy()?;
         let manifest = read_manifest(copy.path())?;
         fs::write(
@@ -845,8 +892,17 @@ mod tests {
             validate_bundle(copy.path())
                 .unwrap_err()
                 .to_string()
-                .contains("canonical JSON")
+                .contains("does not match the pinned bundle")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn payload_derivations_are_owned_by_the_importer() -> Result<()> {
+        let mut manifest = read_manifest(&fixture_directory())?;
+        manifest.files[0].derivation = Derivation::SourceCopy;
+        let error = validate_file_entries(&manifest.files).unwrap_err();
+        assert!(error.to_string().contains("unexpected derivation"));
         Ok(())
     }
 }
