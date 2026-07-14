@@ -25,6 +25,8 @@ use crate::{
 
 const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const MAX_PUBLIC_SCALARS: usize = 512;
+type NumericBounds = (Option<Value>, Option<Value>);
+type RustStorageBounds = BTreeMap<String, NumericBounds>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1185,10 +1187,48 @@ pub(crate) fn compile_contract(contract: &mut ApplicationResultContract) -> crat
     canonicalize_schema(&mut contract.success_schema, false)?;
     canonicalize_error_specs(&mut contract.errors)?;
     for error in &mut contract.errors {
+        close_error_detail_objects(&mut error.details_schema);
         canonicalize_schema(&mut error.details_schema, false)?;
         validate_error_spec(error)?;
     }
     Ok(())
+}
+
+fn close_error_detail_objects(schema: &mut Value) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let describes_object = match object.get("type") {
+        Some(Value::String(kind)) => kind == "object",
+        Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "object"),
+        _ => object.contains_key("properties") || object.contains_key("required"),
+    };
+    if describes_object && !object.contains_key("additionalProperties") {
+        object.insert("additionalProperties".to_string(), Value::Bool(false));
+    }
+    if let Some(items) = object.get_mut("items") {
+        close_error_detail_objects(items);
+    }
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        for property in properties.values_mut() {
+            close_error_detail_objects(property);
+        }
+    }
+    if let Some(additional) = object.get_mut("additionalProperties")
+        && !additional.is_boolean()
+    {
+        close_error_detail_objects(additional);
+    }
+    if let Some(branches) = object.get_mut("oneOf").and_then(Value::as_array_mut) {
+        for branch in branches {
+            close_error_detail_objects(branch);
+        }
+    }
+    if let Some(definitions) = object.get_mut("$defs").and_then(Value::as_object_mut) {
+        for definition in definitions.values_mut() {
+            close_error_detail_objects(definition);
+        }
+    }
 }
 
 pub(crate) fn compose_error_specs(
@@ -1630,7 +1670,12 @@ fn validate_schema_literal(value: &Value) -> crate::Result<()> {
                         .as_u64()
                         .map(|value| i128::from(value) <= MAX_EXACT_INTEGER)
                 })
-                .unwrap_or_else(|| number.as_f64().is_some_and(f64::is_finite));
+                .unwrap_or_else(|| {
+                    number.as_f64().is_some_and(|value| {
+                        value.is_finite()
+                            && (value.fract() != 0.0 || value.abs() <= MAX_EXACT_INTEGER as f64)
+                    })
+                });
             if !exact {
                 return Err(build_error(
                     "result schema numeric literal is outside the exact I-JSON domain",
@@ -1753,26 +1798,22 @@ fn normalize_typed_schema(value: &mut Value) {
 fn normalize_typed_schema_at(value: &mut Value, definitions: &Map<String, Value>) {
     match value {
         Value::Object(object) => {
-            if let Some(Value::String(format)) = object.get("format")
-                && matches!(
-                    format.as_str(),
-                    "int8"
-                        | "int16"
-                        | "int32"
-                        | "int64"
-                        | "int128"
-                        | "uint8"
-                        | "uint16"
-                        | "uint32"
-                        | "uint64"
-                        | "uint128"
-                        | "float"
-                        | "double"
-                )
+            if let Some(format) = object.get("format").and_then(Value::as_str)
+                && let Some((storage_minimum, storage_maximum)) = rust_storage_bounds().get(format)
             {
+                if storage_minimum
+                    .as_ref()
+                    .is_some_and(|minimum| object.get("minimum") == Some(minimum))
+                {
+                    object.remove("minimum");
+                }
+                if storage_maximum
+                    .as_ref()
+                    .is_some_and(|maximum| object.get("maximum") == Some(maximum))
+                {
+                    object.remove("maximum");
+                }
                 object.remove("format");
-                object.remove("minimum");
-                object.remove("maximum");
             }
             if let Some(any_of) = object.remove("anyOf") {
                 if let Value::Array(branches) = &any_of
@@ -1808,6 +1849,41 @@ fn normalize_typed_schema_at(value: &mut Value, definitions: &Map<String, Value>
         }
         _ => {}
     }
+}
+
+fn rust_storage_bounds() -> &'static RustStorageBounds {
+    static BOUNDS: OnceLock<RustStorageBounds> = OnceLock::new();
+    BOUNDS.get_or_init(|| {
+        fn insert<T: JsonSchema>(bounds: &mut RustStorageBounds) {
+            let generator = SchemaSettings::draft2020_12().into_generator();
+            let schema = serde_json::to_value(generator.into_root_schema_for::<T>())
+                .expect("Schemars primitive schema serializes as JSON");
+            if let Some(format) = schema.get("format").and_then(Value::as_str) {
+                bounds.insert(
+                    format.to_string(),
+                    (
+                        schema.get("minimum").cloned(),
+                        schema.get("maximum").cloned(),
+                    ),
+                );
+            }
+        }
+
+        let mut bounds = BTreeMap::new();
+        insert::<i8>(&mut bounds);
+        insert::<i16>(&mut bounds);
+        insert::<i32>(&mut bounds);
+        insert::<i64>(&mut bounds);
+        insert::<i128>(&mut bounds);
+        insert::<u8>(&mut bounds);
+        insert::<u16>(&mut bounds);
+        insert::<u32>(&mut bounds);
+        insert::<u64>(&mut bounds);
+        insert::<u128>(&mut bounds);
+        insert::<f32>(&mut bounds);
+        insert::<f64>(&mut bounds);
+        bounds
+    })
 }
 
 fn schema_is_provably_non_null(

@@ -13,7 +13,7 @@ use mcp_twill::{
     ResultContractBoundary, ResultContractReason, RunMode, RunRequest, application_error_set,
     contract,
 };
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -774,6 +774,7 @@ fn schema_dialect_canonicalizes_supported_forms_and_rejects_drift() {
             "type": "object"
         }),
         json!({ "const": 9_007_199_254_740_992_u64 }),
+        json!({ "const": 9_007_199_254_740_992.0_f64 }),
     ] {
         assert!(
             explicit_schema_registry(unsupported)
@@ -788,10 +789,19 @@ fn schema_dialect_canonicalizes_supported_forms_and_rejects_drift() {
 fn typed_schema_normalizes_rust_storage_constraints() {
     #[derive(Serialize, JsonSchema)]
     struct Numbers {
-        signed: i32,
-        unsigned: u64,
-        ratio: f32,
-        optional: Option<i16>,
+        signed_8: i8,
+        signed_16: i16,
+        signed_32: i32,
+        signed_64: i64,
+        signed_128: i128,
+        unsigned_8: u8,
+        unsigned_16: u16,
+        unsigned_32: u32,
+        unsigned_64: u64,
+        unsigned_128: u128,
+        ratio_32: f32,
+        ratio_64: f64,
+        optional: Option<i32>,
     }
     let contract = ApplicationResultContract::for_type::<Numbers>();
     let text = contract.success_schema.to_string();
@@ -799,6 +809,48 @@ fn typed_schema_normalizes_rust_storage_constraints() {
     assert!(!text.contains("minimum"));
     assert!(!text.contains("maximum"));
     assert!(text.contains("null"));
+}
+
+#[test]
+fn typed_schema_rejects_authored_numeric_bounds_instead_of_broadening() {
+    #[derive(Serialize)]
+    struct PositiveCount(u32);
+
+    impl JsonSchema for PositiveCount {
+        fn schema_name() -> Cow<'static, str> {
+            "PositiveCount".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 1,
+            })
+            .try_into()
+            .unwrap()
+        }
+    }
+
+    let contract = ApplicationResultContract::for_type::<PositiveCount>();
+    assert_eq!(contract.success_schema["minimum"], 1);
+    assert!(contract.success_schema.get("format").is_none());
+    let registry = CommandRegistry::new("bounded", "Bounded").register_dynamic(
+        CommandSpec::new(["bounded"], "Bounded", "Bounded").with_output(OutputContract {
+            application: Some(contract),
+            ..OutputContract::default()
+        }),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!(0)))
+        },
+    );
+    let error = registry.validate_results().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported result schema keyword `minimum`"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -976,7 +1028,6 @@ async fn invalid_dynamic_code_and_details_are_redacted_contract_violations() {
         details_schema: json!({
             "type": "object",
             "properties": {},
-            "additionalProperties": false,
         }),
         capability: None,
         recoveries: Vec::new(),
@@ -1013,6 +1064,16 @@ async fn invalid_dynamic_code_and_details_are_redacted_contract_violations() {
             },
         );
         registry.validate_results().unwrap();
+        assert_eq!(
+            registry.catalog().operations[0]
+                .output
+                .application
+                .as_ref()
+                .unwrap()
+                .errors[0]
+                .details_schema["additionalProperties"],
+            false
+        );
         let failure = registry.run(request("invalid")).await.unwrap_err();
         assert_eq!(
             failure,
