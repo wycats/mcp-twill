@@ -98,10 +98,16 @@ pub fn import(repository: &Path, reference: &str, check: bool) -> Result<()> {
         resolved.trim()
     );
 
-    let archive = TempDir::new().context("create archive workspace")?;
-    export_archive(repository, VBL_COMMIT, archive.path())?;
+    let source_archive = TempDir::new().context("create pristine source archive")?;
+    export_archive(repository, VBL_COMMIT, source_archive.path())?;
+    let build_archive = TempDir::new().context("create helper build archive")?;
+    export_archive(repository, VBL_COMMIT, build_archive.path())?;
     let generated = TempDir::new().context("create generated fixture workspace")?;
-    generate_bundle(archive.path(), generated.path())?;
+    generate_bundle(
+        source_archive.path(),
+        build_archive.path(),
+        generated.path(),
+    )?;
 
     let destination = fixture_directory();
     if check {
@@ -150,23 +156,23 @@ fn export_archive(repository: &Path, commit: &str, destination: &Path) -> Result
     Ok(())
 }
 
-fn generate_bundle(archive: &Path, destination: &Path) -> Result<()> {
+fn generate_bundle(source_archive: &Path, build_archive: &Path, destination: &Path) -> Result<()> {
     let target_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask belongs to the workspace")
         .join("target/vbl-fixture-import");
     fs::create_dir_all(&target_dir).context("create fixture importer target directory")?;
 
-    let baseline_helper = archive.join("agent-surface-contract/examples/export_baseline.rs");
+    let baseline_helper = build_archive.join("agent-surface-contract/examples/export_baseline.rs");
     fs::create_dir_all(baseline_helper.parent().expect("helper has a parent"))?;
     fs::write(&baseline_helper, BASELINE_HELPER).context("write archived baseline helper")?;
 
-    let error_helper = archive.join("examples/export_errors.rs");
+    let error_helper = build_archive.join("examples/export_errors.rs");
     fs::create_dir_all(error_helper.parent().expect("helper has a parent"))?;
     fs::write(&error_helper, ERROR_HELPER).context("write archived error helper")?;
 
     let baseline = cargo_output(
-        archive,
+        build_archive,
         &target_dir,
         &[
             "run",
@@ -179,12 +185,12 @@ fn generate_bundle(archive: &Path, destination: &Path) -> Result<()> {
         ],
     )?;
     let errors = cargo_output(
-        archive,
+        build_archive,
         &target_dir,
         &["run", "--locked", "--quiet", "--example", "export_errors"],
     )?;
     let surface = cargo_output(
-        archive,
+        build_archive,
         &target_dir,
         &[
             "run",
@@ -232,7 +238,7 @@ fn generate_bundle(archive: &Path, destination: &Path) -> Result<()> {
         },
         GeneratedPayload {
             path: "vscode-package.json",
-            bytes: fs::read(archive.join("vscode-extension/package.json"))
+            bytes: fs::read(source_archive.join("vscode-extension/package.json"))
                 .context("read archived VS Code package manifest")?,
             derivation: Derivation::SourceCopy,
             sources: &["vscode-extension/package.json"],
@@ -248,7 +254,7 @@ fn generate_bundle(archive: &Path, destination: &Path) -> Result<()> {
             .sources
             .iter()
             .map(|path| {
-                let bytes = fs::read(archive.join(path))
+                let bytes = fs::read(source_archive.join(path))
                     .with_context(|| format!("read archived source {path}"))?;
                 Ok(SourceEntry {
                     path: (*path).to_string(),
