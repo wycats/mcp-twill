@@ -104,6 +104,13 @@ impl ServerBuilder {
     /// routing belongs on the commands themselves (`use_when`,
     /// `alternative`, `fallback`), not here.
     pub fn preamble(&mut self, text: impl Into<String>) -> &mut Self {
+        if self.preamble.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "server `{}` assigns `preamble` more than once",
+                self.name
+            )));
+            return self;
+        }
         self.preamble = Some(text.into());
         self
     }
@@ -471,6 +478,13 @@ impl CommandBuilder {
     /// One sentence: when this command is the right choice. Positive
     /// polarity; mutually exclusive with `fallback`.
     pub fn use_when(&mut self, text: impl Into<String>) -> &mut Self {
+        if self.use_when.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "command `{}` assigns `use_when` more than once",
+                self.path.join(" ")
+            )));
+            return self;
+        }
         self.use_when = Some(text.into());
         self
     }
@@ -491,14 +505,25 @@ impl CommandBuilder {
 
     /// Marks this command as an escape hatch: the commands to exhaust
     /// first and the condition that justifies bypassing them. Mutually
-    /// exclusive with `use_when`.
+    /// exclusive with `use_when`. Preferences are copied from borrowed or
+    /// owned string-like items into the catalog declaration.
     pub fn fallback(
         &mut self,
-        prefer: impl IntoIterator<Item = impl Into<String>>,
+        prefer: impl IntoIterator<Item = impl AsRef<str>>,
         when: impl Into<String>,
     ) -> &mut Self {
+        if self.fallback.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "command `{}` assigns `fallback` more than once",
+                self.path.join(" ")
+            )));
+            return self;
+        }
         self.fallback = Some(Fallback {
-            prefer: prefer.into_iter().map(Into::into).collect(),
+            prefer: prefer
+                .into_iter()
+                .map(|preferred| preferred.as_ref().to_string())
+                .collect(),
             when: when.into(),
         });
         self

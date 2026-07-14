@@ -417,6 +417,7 @@ pub fn registry() -> Result<CommandRegistry> {
                 command
                     .summary("Sync issues with the remote tracker")
                     .description("Pushes and pulls issue records over an established session.")
+                    .use_when("pulling issues that already exist remotely")
                     .write("issues", "Updates issue records from the remote tracker")
                     .example_with_args(
                         "issues sync --session-id $args.session_id",
