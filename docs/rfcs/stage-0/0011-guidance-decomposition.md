@@ -37,7 +37,7 @@ The motivating artifact is, again, visible-browser-lab — specifically the `SER
 | "Target activation is reserved for `focus_tab`... manual inspection or handoff." | Selection (reserved-for) | `use_when` on `focus_tab` |
 | "CSS and evaluate are escape hatches only when snapshot and the named semantic tools cannot represent the required state; do not use them to verify a semantic action." | Preference ordering | `fallback` on the `css` variant and the `evaluate` command |
 
-The released v0.4.8 paragraph now mixes four layers: serving-profile behavior, resource authority and recovery, command selection, and one server-wide behavioral promise. RFCs 0012–0019 give the first two layers typed homes. This RFC owns the third and leaves only the genuine server-wide promise in the preamble. Stranding command-selection facts at server level has the same three costs RFC 0010 catalogued for preconditions:
+The released v0.4.9 paragraph mixes four layers: serving-profile behavior, resource authority and recovery, command selection, and one server-wide behavioral promise. Its `SERVER_INSTRUCTIONS` bytes are identical to v0.4.8, while the v0.4.9 surface changes screencast descriptions and schemas; current-surface evidence therefore pins v0.4.9 without changing this RFC's selection decomposition. RFCs 0012–0019 give the first two layers typed homes. This RFC owns the third and leaves only the genuine server-wide promise in the preamble. Stranding command-selection facts at server level has the same three costs RFC 0010 catalogued for preconditions:
 
 - **Every conversation pays for every sentence.** The routing fact for `fill_form` costs tokens in conversations that never touch a form. Placed on the command, it costs tokens exactly where the decision is made.
 - **Prose references drift.** "Use `fill_form` for two or more controls" names a command in unchecked text; rename the command and the sentence silently orphans. The framework already solves this exact problem for runnable guidance templates — `validate_guidance` rejects a template that matches no catalog command — but routing references have no equivalent discipline.
@@ -234,12 +234,17 @@ impl ServerBuilder {
     pub fn preamble(&mut self, text: impl Into<String>) -> &mut Self;
 }
 
+impl CommandRegistry {
+    pub fn declare_preamble(self, text: impl Into<String>) -> Self;
+    pub fn preamble(&self) -> Option<&str>;
+}
+
 impl Variant {
     pub fn fallback(self, when: impl Into<String>) -> Self;
 }
 ```
 
-Both fallback builders copy each preference into the owned declaration. Arrays of string literals, borrowed slices such as `&[&str]`, and owned `Vec<String>` values are equivalent authoring forms and normalize to the same ordered `Vec<String>`.
+Both fallback builders copy each preference into the owned declaration. Arrays of string literals, borrowed slices such as `&[&str]`, and owned `Vec<String>` values are equivalent authoring forms and normalize to the same ordered `Vec<String>`. Supporting the borrowed-slice form intentionally changes the shipped iterator item bound from `Into<String>` to `AsRef<str>`. Ordinary `String` and string-reference collections remain source-compatible. A custom item type that implements only `Into<String>` must implement `AsRef<str>` or be converted explicitly to `Vec<String>` before calling `fallback`; this is a Rust source migration with no serialized or runtime change.
 
 Every authored guidance string is static public catalog text. After confirming
 that it is not whitespace-only, registration accepts at most 1,024 Unicode
@@ -250,10 +255,12 @@ is never trimmed, escaped, or truncated. The same rule covers `use_when`,
 every alternative/fallback condition, variant fallback conditions, and the
 server preamble, so every projection has one accepted spelling.
 
-The low-level `CommandSpec` and `Variant` methods transform public declaration
-values: `use_when`, command `fallback`, and variant `fallback` replace their
-visible optional field, while `alternative` appends one ordered edge. The
-mutable `CommandBuilder` and `ServerBuilder` are finalizing builders instead.
+The low-level `CommandSpec`, `Variant`, and `CommandRegistry` methods transform public declaration
+values: `use_when`, command `fallback`, variant `fallback`, and
+`CommandRegistry::declare_preamble` replace their visible optional field, while
+`alternative` appends one ordered edge. `CommandRegistry::preamble` returns the
+selected server preamble without creating a second authority. The mutable
+`CommandBuilder` and `ServerBuilder` are finalizing builders instead.
 Their `use_when`, `fallback`, and `preamble` slots may each be authored once; a
 second assignment records a build error even when the values agree. An
 `alternative` remains an ordered keyed addition and duplicate targets fail
@@ -328,7 +335,8 @@ RFC 0015's `check_native_surface_projection` and RFC 0019's host-adapter contrac
 2. Treat every alternative and fallback target as a canonical catalog operation id while retaining the existing serialized field names.
 3. Add RFC 0015 direct/grouped translation, deterministic description ordering, surface-filtered help, and subset closure over guidance edges.
 4. Add RFC 0019 structured host guidance segments and generated-artifact checks that reject raw structural names in host prose.
-5. Validate RFC 0015's released-observation manifest, derive shipped guidance from `surface-catalog.json` and `vscode-package.json`, author the new structured graph in `crates/mcp-twill/tests/support/vbl.rs`, and compare their projections through the downstream eval gate.
+5. After RFC 0015's evidence-only v0.4.9 fixture bootstrap lands, consume its manifest and released `surface-catalog.json`/`vscode-package.json` observations, then author the structured guidance graph in `crates/mcp-twill/tests/support/vbl.rs`. RFC 0015 owns the importer, provenance, and frozen bundle; this RFC owns the declarations and guidance comparison.
+6. After RFC 0015 and RFC 0019 land the translated native and generated-host projections, VBL owns the paired control/treatment evaluation used for this RFC's later `Implemented` lifecycle gate.
 
 ### Acceptance Tests
 
@@ -340,9 +348,9 @@ in `host_adapters.rs`; and the promotion evidence below remains a downstream
 VBL evaluation gate. None of those integrations may infer structure from
 prose or replace catalog operation ids as the guidance authority.
 
-- RFC 0015's manifest validates before VBL guidance parity; the test reads released descriptions and instructions from `surface-catalog.json` and `vscode-package.json`, while the new structured declarations remain visibly authored in `tests/support/vbl.rs`.
+- RFC 0015's v0.4.9 manifest validates before VBL guidance parity; the test reads released descriptions and instructions from `surface-catalog.json` and `vscode-package.json`, while the new structured declarations remain visibly authored in `tests/support/vbl.rs`.
 - A server declaring `use_when`, `alternative` edges, a command-level `fallback`, a variant-level `fallback`, and a preamble registers successfully; the catalog carries all five and each is covered by the catalog hash (adding or removing any changes the hash).
-- Equivalent low-level `CommandSpec`/`Variant` construction and mutable `CommandBuilder`/`ServerBuilder` authoring produce byte-identical catalog facts, help, hashes, and validation failures.
+- Equivalent low-level `CommandSpec`/`Variant` construction with `CommandRegistry::declare_preamble` observed through `preamble()`, and mutable `CommandBuilder`/`ServerBuilder` authoring produce byte-identical catalog facts, help, hashes, and validation failures.
 - Low-level visible-value setters retain only their final `use_when` or fallback value, while mutable command/server builders reject repeated `use_when`, command `fallback`, or preamble assignment even when equal. Alternative append order and fallback preference order remain byte-visible and hash-significant; reversing registry insertion alone leaves canonically sorted reverse-fallback help unchanged.
 - Command fallback preferences authored from a literal array, borrowed slice, and owned string vector normalize to the same ordered catalog declaration and hash.
 - Legacy `CommandSpec`, `Variant`, and `ServerSpec` JSON without the new guidance fields and explicit empty/`None` values normalize to byte-identical catalog data and hash input; guidance projection remains absent until adopted.
@@ -362,7 +370,7 @@ prose or replace catalog operation ids as the guidance authority.
 
 Design acceptance does not depend on a model evaluation: the ownership, validation, projection, and compatibility rules above are independently reviewable. Promotion to `Implemented` does require downstream evidence for the behavioral claim that decomposing the released VBL guidance preserves or improves command selection.
 
-VBL runs the complete 30-fixture `agent-surface-eval` suite twice from one source commit. The control uses the released v0.4.8 server-level guidance blob and legacy descriptions with the new guidance fields absent. The treatment keeps the same operations, schemas, fixtures, skill, model id, reasoning effort, authentication source, and infrastructure-retry policy while replacing routing prose with this RFC's structured declarations and minimal preamble. Both runs are fresh full-suite runs rather than selected or resumed trials. Their evidence bundle records the VBL commit, model and reasoning settings, catalog and surface hashes, JSON summaries, and per-fixture tool sequences so the comparison cannot hide unrelated surface drift.
+VBL runs the complete 30-fixture `agent-surface-eval` suite twice from one source commit. The control uses the released v0.4.9 surface at peeled commit `f2bd478fa5506df7530b3fd60d7d0114f0ed3160`: its server-level guidance blob is byte-identical to v0.4.8, while its screencast descriptions and schemas reflect the current release. The new guidance fields remain absent from the control. The treatment keeps the same operations, schemas, fixtures, skill, model id, reasoning effort, authentication source, and infrastructure-retry policy while replacing routing prose with this RFC's structured declarations and minimal preamble. Both runs are fresh full-suite runs rather than selected or resumed trials. Their evidence bundle records the VBL commit, model and reasoning settings, catalog and surface hashes, JSON summaries, and per-fixture tool sequences so the comparison cannot hide unrelated surface drift.
 
 The control must reproduce the harness's existing acceptance floor: 30 trials, at least 27 successful tasks, at least 26 correct first selections, zero semantic fallback violations, and zero unowned backend actions. The treatment must meet the same absolute floor, retain zero violations/actions, and have no lower successful-task or correct-first-selection count than that paired control. The evidence reports every per-fixture selection change even when aggregate counts pass. A failure keeps the RFC at `Accepted` while the declarations, projections, or derived-overview design are revised; it does not weaken the thresholds or silently restore the blob.
 
