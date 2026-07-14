@@ -1,0 +1,2085 @@
+{
+  "name": "visible-browser-lab",
+  "displayName": "Visible Browser Lab",
+  "version": "0.0.0-dev",
+  "private": true,
+  "description": "Native VS Code language model tools for lease-scoped visible Chrome interaction.",
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "publisher": "wycats",
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:test": "tsc -p test/tsconfig.json",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test:unit",
+    "format": "oxfmt --write package.json tsconfig.json src test unit",
+    "format:check": "oxfmt --check package.json tsconfig.json src test unit",
+    "lint": "oxlint --type-aware --type-check --tsconfig tsconfig.json --deny-warnings src",
+    "test:extension-host": "pnpm run build:test && node dist-test/runner.js",
+    "test:unit": "tsc -p unit/tsconfig.json && node --test dist-unit/unit/invocation_context.test.js dist-unit/unit/confirmation.test.js dist-unit/unit/model_result.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit && tsc -p unit/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.120.0",
+    "@vscode/test-electron": "^2.5.2",
+    "oxfmt": "^0.56.0",
+    "oxlint": "^1.71.0",
+    "oxlint-tsgolint": "^0.23.0",
+    "typescript": "^5.9.0"
+  },
+  "contributes": {
+    "configuration": {
+      "properties": {
+        "visibleBrowserLab.binaryPath": {
+          "default": "",
+          "markdownDescription": "Optional path to a development or custom `visible-browser-lab-mcp` binary. Empty uses the packaged binary.",
+          "type": "string"
+        },
+        "visibleBrowserLab.cdpEndpoint": {
+          "default": "",
+          "markdownDescription": "Optional Chrome DevTools HTTP endpoint passed through `VISIBLE_BROWSER_CDP_ENDPOINT`. Empty uses managed Chrome.",
+          "type": "string"
+        },
+        "visibleBrowserLab.cdpPort": {
+          "default": "",
+          "markdownDescription": "Optional Chrome DevTools port passed through `VISIBLE_BROWSER_CDP_PORT`. Ignored when an endpoint is configured.",
+          "type": "string"
+        },
+        "visibleBrowserLab.chromePath": {
+          "default": "",
+          "markdownDescription": "Optional Chromium-family executable path passed through `VISIBLE_BROWSER_LAB_CHROME_PATH`.",
+          "type": "string"
+        },
+        "visibleBrowserLab.stateDir": {
+          "default": "",
+          "markdownDescription": "Optional runtime state directory passed through `VISIBLE_BROWSER_LAB_STATE_DIR`. Empty uses the platform cache directory.",
+          "type": "string"
+        }
+      },
+      "title": "Visible Browser Lab"
+    },
+    "languageModelTools": [
+      {
+        "displayName": "Start Session",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "focus": {
+              "type": "boolean"
+            },
+            "label": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "start_url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "modelDescription": "Start one lease-scoped browser session and optionally create its first background tab. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band, so this compatibility entry point reuses the current ambient session; its model-visible schema and result never accept or expose a session handle. For normal work, call browser operations directly. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_start_session",
+        "userDescription": "Start one lease-scoped browser session and optionally create its first background tab."
+      },
+      {
+        "displayName": "List Tabs",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "scope": {
+              "enum": [
+                "owned",
+                "global_readonly"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "modelDescription": "List caller-owned tab leases, or request the read-only target inventory without foreign action handles. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_list_tabs",
+        "userDescription": "List caller-owned tab leases, or request the read-only target inventory without foreign action handles."
+      },
+      {
+        "displayName": "New Tab",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "focus": {
+              "type": "boolean"
+            },
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "modelDescription": "Create a background browser tab and lease it to the caller's session. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_new_tab",
+        "userDescription": "Create a background browser tab and lease it to the caller's session."
+      },
+      {
+        "displayName": "Claim Tab",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "takeover": {
+              "type": "boolean"
+            },
+            "target_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "user_instruction": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "target_id"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Claim an unowned target, or perform an explicitly instructed ownership transfer. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_claim_tab",
+        "userDescription": "Claim an unowned target, or perform an explicitly instructed ownership transfer."
+      },
+      {
+        "displayName": "Release Tab",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "leave_visible": {
+              "type": "boolean"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "user_instruction": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Release an owned tab lease and make its browser target claimable. VBL-created targets remain eligible for session-expiry cleanup unless an explicit user instruction requests leave_visible. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_release_tab",
+        "userDescription": "Release an owned tab lease and make its browser target claimable. VBL-created targets remain eligible for session-expiry cleanup unless an explicit user instruction requests leave_visible."
+      },
+      {
+        "displayName": "Focus Tab",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Bring an owned tab and its browser window to the foreground for explicit user handoff or manual inspection. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_focus_tab",
+        "userDescription": "Bring an owned tab and its browser window to the foreground for explicit user handoff or manual inspection."
+      },
+      {
+        "displayName": "Close Tab",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Close an owned browser target and complete its lease. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_close_tab",
+        "userDescription": "Close an owned browser target and complete its lease."
+      },
+      {
+        "canBeReferencedInPrompt": true,
+        "displayName": "Snapshot",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "depth": {
+              "type": "integer"
+            },
+            "include_bounds": {
+              "type": "boolean"
+            },
+            "include_hidden": {
+              "type": "boolean"
+            },
+            "max_nodes": {
+              "type": "integer"
+            },
+            "mode": {
+              "enum": [
+                "interactive",
+                "meaningful",
+                "full"
+              ],
+              "type": "string"
+            },
+            "root": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Inspect the compact accessibility tree and obtain lease-scoped element references for semantic actions. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_snapshot",
+        "toolReferenceName": "vbl_snapshot",
+        "userDescription": "Inspect the compact accessibility tree and obtain lease-scoped element references for semantic actions."
+      },
+      {
+        "canBeReferencedInPrompt": true,
+        "displayName": "Navigate",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "enum": [
+                "url",
+                "back",
+                "forward",
+                "reload"
+              ],
+              "type": "string"
+            },
+            "before_unload": {
+              "enum": [
+                "accept",
+                "dismiss"
+              ],
+              "type": "string"
+            },
+            "ignore_cache": {
+              "type": "boolean"
+            },
+            "init_script": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "integer"
+            },
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "wait_until": {
+              "enum": [
+                "none",
+                "dom_content_loaded",
+                "load",
+                "network_idle"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "action"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Navigate an owned tab by URL, history, or reload while preserving application focus. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_navigate",
+        "toolReferenceName": "vbl_navigate",
+        "userDescription": "Navigate an owned tab by URL, history, or reload while preserving application focus."
+      },
+      {
+        "displayName": "Wait For",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "condition": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duration_ms": {
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "const": "delay",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "duration_ms"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "text",
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "visible",
+                        "hidden"
+                      ],
+                      "type": "string"
+                    },
+                    "text": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "element",
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "attached",
+                        "detached",
+                        "visible",
+                        "hidden",
+                        "enabled",
+                        "disabled",
+                        "editable",
+                        "checked",
+                        "unchecked"
+                      ],
+                      "type": "string"
+                    },
+                    "target": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ref"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "css": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "frame_ref": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "css"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "target",
+                    "state"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "url",
+                      "type": "string"
+                    },
+                    "match": {
+                      "enum": [
+                        "exact",
+                        "substring",
+                        "regex"
+                      ],
+                      "type": "string"
+                    },
+                    "value": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "value"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "load",
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "dom_content_loaded",
+                        "load",
+                        "network_idle"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "state"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "expression": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "expression",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "expression"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tab_id",
+            "condition"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Wait for semantic text, element state, URL, page load, or JavaScript state in an owned tab. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_wait_for",
+        "userDescription": "Wait for semantic text, element state, URL, page load, or JavaScript state in an owned tab."
+      },
+      {
+        "displayName": "Click",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "button": {
+              "enum": [
+                "left",
+                "middle",
+                "right"
+              ],
+              "type": "string"
+            },
+            "count": {
+              "enum": [
+                1,
+                2
+              ],
+              "type": "integer"
+            },
+            "modifiers": {
+              "items": {
+                "enum": [
+                  "alt",
+                  "control",
+                  "meta",
+                  "shift"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "timeout_ms": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tab_id",
+            "target"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Click one accessibility reference after ownership and actionability checks, returning delivery and effect evidence for quiet submit flows. Use CSS only as an explicit fallback. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_click",
+        "userDescription": "Click one accessibility reference after ownership and actionability checks, returning delivery and effect evidence for quiet submit flows. Use CSS only as an explicit fallback."
+      },
+      {
+        "displayName": "Fill",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "timeout_ms": {
+              "type": "integer"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "target",
+            "value"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Replace the value of one referenced editable control and return a compact accessibility observation. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_fill",
+        "userDescription": "Replace the value of one referenced editable control and return a compact accessibility observation."
+      },
+      {
+        "displayName": "Fill Form",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "text",
+                        "type": "string"
+                      },
+                      "target": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "ref": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ref"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "css": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "frame_ref": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "css"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "target",
+                      "kind",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "select",
+                        "type": "string"
+                      },
+                      "target": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "ref": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ref"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "css": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "frame_ref": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "css"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "values": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "target",
+                      "kind",
+                      "values"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "checked": {
+                        "type": "boolean"
+                      },
+                      "kind": {
+                        "const": "checked",
+                        "type": "string"
+                      },
+                      "target": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "ref": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ref"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "css": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "frame_ref": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "css"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "target",
+                      "kind",
+                      "checked"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "minItems": 2,
+              "type": "array"
+            },
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tab_id",
+            "fields"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Fill two or more referenced form controls sequentially and report completed fields. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_fill_form",
+        "userDescription": "Fill two or more referenced form controls sequentially and report completed fields."
+      },
+      {
+        "displayName": "Type Text",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "delay_ms": {
+              "type": "integer"
+            },
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tab_id",
+            "target",
+            "text"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Insert text at the selection of one referenced editable element while preserving application focus. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_type_text",
+        "userDescription": "Insert text at the selection of one referenced editable element while preserving application focus."
+      },
+      {
+        "displayName": "Press Key",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "modifiers": {
+              "items": {
+                "enum": [
+                  "alt",
+                  "control",
+                  "meta",
+                  "shift"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "timeout_ms": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tab_id",
+            "key"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Dispatch one key to a referenced element, or to the focused owned document after explicit handoff. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_press_key",
+        "userDescription": "Dispatch one key to a referenced element, or to the focused owned document after explicit handoff."
+      },
+      {
+        "canBeReferencedInPrompt": true,
+        "displayName": "Screenshot",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "enum": [
+                "png",
+                "jpeg",
+                "webp"
+              ],
+              "type": "string"
+            },
+            "full_page": {
+              "type": "boolean"
+            },
+            "quality": {
+              "type": "integer"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "tab_id"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Capture an owned page or referenced element as a renderable image artifact. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_screenshot",
+        "toolReferenceName": "vbl_screenshot",
+        "userDescription": "Capture an owned page or referenced element as a renderable image artifact."
+      },
+      {
+        "displayName": "Evaluate",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "items": {},
+              "type": "array"
+            },
+            "await_promise": {
+              "type": "boolean"
+            },
+            "mode": {
+              "enum": [
+                "expression",
+                "function"
+              ],
+              "type": "string"
+            },
+            "source": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "required": [
+            "tab_id",
+            "source"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Evaluate JavaScript for page state that semantic snapshots and diagnostics do not expose. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_evaluate",
+        "userDescription": "Evaluate JavaScript for page state that semantic snapshots and diagnostics do not expose."
+      },
+      {
+        "displayName": "Specialized Interaction",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "enum": [
+                "accept",
+                "dismiss"
+              ],
+              "type": "string"
+            },
+            "button": {
+              "enum": [
+                "left",
+                "middle",
+                "right"
+              ],
+              "type": "string"
+            },
+            "checked": {
+              "type": "boolean"
+            },
+            "count": {
+              "enum": [
+                1,
+                2
+              ],
+              "type": "integer"
+            },
+            "data": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "delta_x": {
+              "type": "number"
+            },
+            "delta_y": {
+              "type": "number"
+            },
+            "destination": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "modifiers": {
+              "items": {
+                "enum": [
+                  "alt",
+                  "control",
+                  "meta",
+                  "shift"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "observe": {
+              "enum": [
+                "none",
+                "diff",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "operation": {
+              "enum": [
+                "select_options",
+                "set_checked",
+                "hover",
+                "drag",
+                "drop",
+                "upload_files",
+                "handle_dialog",
+                "scroll",
+                "click_at"
+              ],
+              "type": "string"
+            },
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "prompt_text": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "css": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "frame_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "css"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "timeout_ms": {
+              "type": "integer"
+            },
+            "values": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Perform select, checkbox, hover, drag, drop, upload, dialog, scroll, or coordinate interaction. Set `operation` to one of: select_options, set_checked, hover, drag, drop, upload_files, handle_dialog, scroll, click_at. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_interact",
+        "userDescription": "Perform select, checkbox, hover, drag, drop, upload, dialog, scroll, or coordinate interaction. Set `operation` to one of: select_options, set_checked, hover, drag, drop, upload_files, handle_dialog, scroll, click_at."
+      },
+      {
+        "displayName": "Console Diagnostics",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "levels": {
+              "items": {
+                "enum": [
+                  "verbose",
+                  "debug",
+                  "info",
+                  "warning",
+                  "error"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "message_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operation": {
+              "enum": [
+                "list",
+                "get",
+                "clear"
+              ],
+              "type": "string"
+            },
+            "since": {
+              "type": "integer"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "List, inspect, or clear lease-scoped console diagnostics. Set `operation` to one of: list, get, clear. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_console",
+        "userDescription": "List, inspect, or clear lease-scoped console diagnostics. Set `operation` to one of: list, get, clear."
+      },
+      {
+        "displayName": "Network Diagnostics",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "body_limit_bytes": {
+              "type": "integer"
+            },
+            "include_request_body": {
+              "type": "boolean"
+            },
+            "include_response_body": {
+              "type": "boolean"
+            },
+            "include_static": {
+              "type": "boolean"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "operation": {
+              "enum": [
+                "list",
+                "get",
+                "clear"
+              ],
+              "type": "string"
+            },
+            "request_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "resource_types": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "since": {
+              "type": "integer"
+            },
+            "status_max": {
+              "type": "integer"
+            },
+            "status_min": {
+              "type": "integer"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "url_pattern": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "List, inspect, or clear lease-scoped network diagnostics. Set `operation` to one of: list, get, clear. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_network",
+        "userDescription": "List, inspect, or clear lease-scoped network diagnostics. Set `operation` to one of: list, get, clear."
+      },
+      {
+        "displayName": "Emulation",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "accept_language": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "accuracy_meters": {
+              "type": "number"
+            },
+            "color_scheme": {
+              "enum": [
+                "light",
+                "dark",
+                "no_preference"
+              ],
+              "type": "string"
+            },
+            "device_scale_factor": {
+              "type": "number"
+            },
+            "download_bytes_per_second": {
+              "type": "number"
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "height": {
+              "type": "integer"
+            },
+            "latency_ms": {
+              "type": "number"
+            },
+            "latitude": {
+              "type": "number"
+            },
+            "longitude": {
+              "type": "number"
+            },
+            "media": {
+              "enum": [
+                "screen",
+                "print"
+              ],
+              "type": "string"
+            },
+            "mobile": {
+              "type": "boolean"
+            },
+            "offline": {
+              "type": "boolean"
+            },
+            "operation": {
+              "enum": [
+                "set_viewport",
+                "set_network",
+                "set_cpu",
+                "set_geolocation",
+                "set_media",
+                "set_user_agent",
+                "set_headers",
+                "reset"
+              ],
+              "type": "string"
+            },
+            "orientation": {
+              "enum": [
+                "portrait",
+                "landscape"
+              ],
+              "type": "string"
+            },
+            "platform": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "preset": {
+              "enum": [
+                "offline",
+                "slow_3g",
+                "fast_3g",
+                "slow_4g",
+                "none"
+              ],
+              "type": "string"
+            },
+            "reduced_motion": {
+              "enum": [
+                "reduce",
+                "no_preference"
+              ],
+              "type": "string"
+            },
+            "slowdown": {
+              "type": "number"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "touch": {
+              "type": "boolean"
+            },
+            "upload_bytes_per_second": {
+              "type": "number"
+            },
+            "user_agent": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "width": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Configure viewport, network, CPU, geolocation, media, user agent, or headers for an owned target. Set `operation` to one of: set_viewport, set_network, set_cpu, set_geolocation, set_media, set_user_agent, set_headers, reset. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_emulation",
+        "userDescription": "Configure viewport, network, CPU, geolocation, media, user agent, or headers for an owned target. Set `operation` to one of: set_viewport, set_network, set_cpu, set_geolocation, set_media, set_user_agent, set_headers, reset."
+      },
+      {
+        "displayName": "Performance",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "categories": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "insight": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "max_findings": {
+              "type": "integer"
+            },
+            "operation": {
+              "enum": [
+                "start_trace",
+                "stop_trace",
+                "vitals",
+                "analyze"
+              ],
+              "type": "string"
+            },
+            "reload": {
+              "type": "boolean"
+            },
+            "screenshots": {
+              "type": "boolean"
+            },
+            "since_navigation": {
+              "type": "boolean"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Capture traces, read web vitals, and analyze broker-produced performance artifacts. Set `operation` to one of: start_trace, stop_trace, vitals, analyze. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_performance",
+        "userDescription": "Capture traces, read web vitals, and analyze broker-produced performance artifacts. Set `operation` to one of: start_trace, stop_trace, vitals, analyze."
+      },
+      {
+        "displayName": "Audit",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "categories": {
+              "items": {
+                "enum": [
+                  "accessibility",
+                  "seo",
+                  "best_practices",
+                  "agentic_browsing"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "device": {
+              "enum": [
+                "desktop",
+                "mobile"
+              ],
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "navigation",
+                "snapshot"
+              ],
+              "type": "string"
+            },
+            "operation": {
+              "enum": [
+                "run"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Run accessibility, best-practices, SEO, or agentic-browsing audits against an owned tab. Set `operation` to one of: run. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_audit",
+        "userDescription": "Run accessibility, best-practices, SEO, or agentic-browsing audits against an owned tab. Set `operation` to one of: run."
+      },
+      {
+        "displayName": "Memory",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "class_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "direction": {
+              "enum": [
+                "incoming",
+                "outgoing"
+              ],
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "max_depth": {
+              "type": "integer"
+            },
+            "min_retained_bytes": {
+              "type": "integer"
+            },
+            "node_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "operation": {
+              "enum": [
+                "capture",
+                "summary",
+                "classes",
+                "node",
+                "dominators",
+                "retainers",
+                "retaining_paths",
+                "edges",
+                "close"
+              ],
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Capture and inspect bounded heap-snapshot artifacts for an owned tab. Set `operation` to one of: capture, summary, classes, node, dominators, retainers, retaining_paths, edges, close. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_memory",
+        "userDescription": "Capture and inspect bounded heap-snapshot artifacts for an owned tab. Set `operation` to one of: capture, summary, classes, node, dominators, retainers, retaining_paths, edges, close."
+      },
+      {
+        "displayName": "Screencast",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "dependencies": {
+            "max_height": [
+              "max_width"
+            ],
+            "max_width": [
+              "max_height"
+            ]
+          },
+          "properties": {
+            "fps": {
+              "maximum": 30,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "max_duration_ms": {
+              "maximum": 300000,
+              "minimum": 1000,
+              "type": "integer"
+            },
+            "max_height": {
+              "maximum": 2160,
+              "minimum": 16,
+              "multipleOf": 2,
+              "type": "integer"
+            },
+            "max_width": {
+              "maximum": 3840,
+              "minimum": 16,
+              "multipleOf": 2,
+              "type": "integer"
+            },
+            "operation": {
+              "enum": [
+                "start",
+                "stop",
+                "status"
+              ],
+              "type": "string"
+            },
+            "quality": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Start, stop, or inspect an owned-tab screencast recording. Set `operation` to one of: start, stop, status. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_screencast",
+        "userDescription": "Start, stop, or inspect an owned-tab screencast recording. Set `operation` to one of: start, stop, status."
+      },
+      {
+        "displayName": "Artifacts",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kinds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "length": {
+              "type": "integer"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "offset": {
+              "type": "integer"
+            },
+            "operation": {
+              "enum": [
+                "list",
+                "metadata",
+                "read",
+                "export",
+                "delete"
+              ],
+              "type": "string"
+            },
+            "overwrite": {
+              "type": "boolean"
+            },
+            "path": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "tab_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "List, inspect, read, export, or delete browser artifacts owned by the session. Set `operation` to one of: list, metadata, read, export, delete. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_artifacts",
+        "userDescription": "List, inspect, read, export, or delete browser artifacts owned by the session. Set `operation` to one of: list, metadata, read, export, delete."
+      },
+      {
+        "canBeReferencedInPrompt": true,
+        "displayName": "Browser Tool Help",
+        "icon": "$(browser)",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "topic": {
+              "enum": [
+                "workflow",
+                "tabs",
+                "snapshot",
+                "interaction",
+                "navigation",
+                "diagnostics",
+                "emulation",
+                "performance",
+                "audit",
+                "memory",
+                "screencast",
+                "artifacts",
+                "errors"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
+          "type": "object"
+        },
+        "modelDescription": "Choose the preferred explicit tool or specialized-domain operation for a browser task. Backed by Visible Browser Lab's shared broker surface. VS Code chat supplies conversation identity out of band; never call start_session or invent, request, or pass a session handle. If the host returns session_required, report its recovery guidance. Use only tab_id values owned by the selected session. The tool returns structured JSON success values or structured browser errors with recovery guidance.",
+        "name": "visible_browser_lab_help",
+        "toolReferenceName": "vbl",
+        "userDescription": "Choose the preferred explicit tool or specialized-domain operation for a browser task."
+      }
+    ]
+  },
+  "activationEvents": [
+    "onLanguageModelTool:visible_browser_lab_artifacts",
+    "onLanguageModelTool:visible_browser_lab_audit",
+    "onLanguageModelTool:visible_browser_lab_claim_tab",
+    "onLanguageModelTool:visible_browser_lab_click",
+    "onLanguageModelTool:visible_browser_lab_close_tab",
+    "onLanguageModelTool:visible_browser_lab_console",
+    "onLanguageModelTool:visible_browser_lab_emulation",
+    "onLanguageModelTool:visible_browser_lab_evaluate",
+    "onLanguageModelTool:visible_browser_lab_fill",
+    "onLanguageModelTool:visible_browser_lab_fill_form",
+    "onLanguageModelTool:visible_browser_lab_focus_tab",
+    "onLanguageModelTool:visible_browser_lab_help",
+    "onLanguageModelTool:visible_browser_lab_interact",
+    "onLanguageModelTool:visible_browser_lab_list_tabs",
+    "onLanguageModelTool:visible_browser_lab_memory",
+    "onLanguageModelTool:visible_browser_lab_navigate",
+    "onLanguageModelTool:visible_browser_lab_network",
+    "onLanguageModelTool:visible_browser_lab_new_tab",
+    "onLanguageModelTool:visible_browser_lab_performance",
+    "onLanguageModelTool:visible_browser_lab_press_key",
+    "onLanguageModelTool:visible_browser_lab_release_tab",
+    "onLanguageModelTool:visible_browser_lab_screencast",
+    "onLanguageModelTool:visible_browser_lab_screenshot",
+    "onLanguageModelTool:visible_browser_lab_snapshot",
+    "onLanguageModelTool:visible_browser_lab_start_session",
+    "onLanguageModelTool:visible_browser_lab_type_text",
+    "onLanguageModelTool:visible_browser_lab_wait_for"
+  ],
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "visibleBrowserLab": {
+    "runtimeBinary": "bin/visible-browser-lab-mcp",
+    "serverInstructions": "Generated during packaging by `cargo xtask vscode-manifest`."
+  }
+}
