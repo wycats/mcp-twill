@@ -243,9 +243,9 @@ impl WorkspaceDecl {
 
 /// A server-level capability declaration: a named precondition that some
 /// commands establish and other commands require, with the argument that
-/// carries proof of it across calls. The framework validates the
-/// declarations and pre-validates call shape; capability validity (a live
-/// lease, an owned tab) stays a server concern.
+/// carries opaque proof of it across calls. The framework validates the
+/// declarations and pre-validates call shape; application code validates the
+/// proof. Live server-held values use [`ResourceDecl`] instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityDecl {

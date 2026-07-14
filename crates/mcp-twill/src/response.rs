@@ -43,8 +43,7 @@ pub enum ErrorCode {
     UnsupportedRootScheme,
     /// A required capability's carrier argument was not bound at plan time.
     CapabilityMissing,
-    /// The handler judged a presented capability invalid (stale lease,
-    /// foreign resource).
+    /// The application judged a presented explicit proof invalid.
     CapabilityDenied,
     /// A resource reference did not resolve to a live value (stale lease,
     /// foreign tab, expired session).
@@ -341,6 +340,7 @@ impl ResponseEnvelope {
         request: Option<RunRequest>,
         plan: Option<InvocationPlan>,
     ) -> Self {
+        let error = normalize_public_capability_denial(error);
         let code = ErrorCode::from_framework_error(&error);
         let status = status_for_error(&error);
         let message = error.to_string();
@@ -389,6 +389,97 @@ impl ResponseEnvelope {
             .or_else(|| self.error.as_ref().map(|error| error.message.clone()))
             .unwrap_or_else(|| "Command result".to_string())
     }
+}
+
+/// Produces the display-safe compatibility detail promised by RFC 0010.
+/// The bound counts rendered Unicode scalars, including escape sequences and
+/// the truncation marker, and truncation never splits one encoded input scalar.
+fn normalize_public_capability_denial(error: FrameworkError) -> FrameworkError {
+    let FrameworkError::CapabilityDenied {
+        capability,
+        detail,
+        carrier,
+        providers,
+    } = error
+    else {
+        return error;
+    };
+    FrameworkError::CapabilityDenied {
+        capability,
+        detail: encode_capability_denial_detail(&detail),
+        carrier,
+        providers,
+    }
+}
+
+fn encode_capability_denial_detail(detail: &str) -> String {
+    const LIMIT: usize = 512;
+
+    let mut output = String::with_capacity(LIMIT);
+    let mut rendered_width = 0;
+    let mut scalars = detail.chars().peekable();
+    while let Some(scalar) = scalars.next() {
+        let mut unicode_escape = [0_u8; 6];
+        let mut utf8_scalar = [0_u8; 4];
+        let (chunk, chunk_width) = match scalar {
+            '"' => ("\\\"", 2),
+            '\\' => ("\\\\", 2),
+            '\u{0008}' => ("\\b", 2),
+            '\u{000C}' => ("\\f", 2),
+            '\n' => ("\\n", 2),
+            '\r' => ("\\r", 2),
+            '\t' => ("\\t", 2),
+            scalar if capability_denial_uses_unicode_escape(scalar) => (
+                capability_denial_unicode_escape(scalar, &mut unicode_escape),
+                6,
+            ),
+            scalar => {
+                let chunk: &str = scalar.encode_utf8(&mut utf8_scalar);
+                (chunk, 1)
+            }
+        };
+
+        // When more input remains, reserve the final rendered scalar for the
+        // truncation marker. The last input scalar may use the full bound.
+        let available = if scalars.peek().is_some() {
+            LIMIT - 1
+        } else {
+            LIMIT
+        };
+        if rendered_width + chunk_width > available {
+            output.push('…');
+            break;
+        }
+        output.push_str(chunk);
+        rendered_width += chunk_width;
+    }
+    output
+}
+
+fn capability_denial_unicode_escape(scalar: char, buffer: &mut [u8; 6]) -> &str {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    buffer[0] = b'\\';
+    buffer[1] = b'u';
+    let value = scalar as u32;
+    for (index, shift) in [12, 8, 4, 0].into_iter().enumerate() {
+        buffer[index + 2] = HEX[((value >> shift) & 0xF) as usize];
+    }
+    std::str::from_utf8(buffer).expect("Unicode escape buffer is ASCII")
+}
+
+fn capability_denial_uses_unicode_escape(scalar: char) -> bool {
+    matches!(scalar,
+        '\u{0000}'..='\u{0007}'
+        | '\u{000B}'
+        | '\u{000E}'..='\u{001F}'
+        | '\u{007F}'..='\u{009F}'
+        | '\u{061C}'
+        | '\u{200E}'..='\u{200F}'
+        | '\u{2028}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}'
+        | '\u{FEFF}'
+    )
 }
 
 fn status_for_error(error: &FrameworkError) -> ResponseStatus {

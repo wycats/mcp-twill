@@ -273,6 +273,92 @@ fn catalog_projects_resource_with_derived_edges() {
     assert_eq!(resource.released_by, vec!["session end".to_string()]);
     assert_eq!(resource.enumerated_by, vec!["session list".to_string()]);
     assert_eq!(resource.required_by, vec!["session status".to_string()]);
+
+    let start = catalog
+        .operations
+        .iter()
+        .find(|operation| operation.id == "session.start")
+        .unwrap();
+    assert_eq!(start.provides, vec!["session".to_string()]);
+    let status = catalog
+        .operations
+        .iter()
+        .find(|operation| operation.id == "session.status")
+        .unwrap();
+    assert_eq!(status.requires, vec!["session".to_string()]);
+    let end = catalog
+        .operations
+        .iter()
+        .find(|operation| operation.id == "session.end")
+        .unwrap();
+    assert_eq!(end.requires, vec!["session".to_string()]);
+}
+
+// Acceptance: compatibility edges under a declared resource name are owned
+// by the handler signature. Matching handwritten copies deduplicate, while
+// handwritten edges without a matching signature cannot extend the graph.
+#[test]
+fn resource_signatures_own_compatibility_capability_edges() {
+    let store = Arc::new(SessionStore::default());
+    let registry = CommandRegistry::build("resource-authority", "Resource authority", |server| {
+        server.resource(
+            ResourceDecl::new("session", "A live test session lease")
+                .uri("test://session/{id}")
+                .expiry("Sessions end when the server exits"),
+        );
+        server.resolver::<Session>(SessionResolver {
+            store: store.clone(),
+        });
+        server.command("session start", |command| {
+            command
+                .summary("Start a session")
+                .description("Grants a session reference.")
+                .requires("session")
+                .provides("session")
+                .handle({
+                    let store = store.clone();
+                    move |_context: CommandContext| {
+                        let id = store.start();
+                        async move {
+                            Ok(CommandOutput::structured(json!({ "session_id": id }))
+                                .grant(Grant::<Session>::new(id)))
+                        }
+                    }
+                });
+        });
+        server.command("session status", |command| {
+            command
+                .summary("Inspect a session")
+                .description("Requires a live session reference.")
+                .requires("session")
+                .provides("session")
+                .handle(
+                    |session: Res<Session>, _context: CommandContext| async move {
+                        Ok(CommandOutput::structured(
+                            json!({ "session_id": session.id }),
+                        ))
+                    },
+                );
+        });
+    })
+    .expect("resource-authoritative registry");
+
+    let catalog = registry.catalog();
+    let start = catalog
+        .operations
+        .iter()
+        .find(|operation| operation.id == "session.start")
+        .unwrap();
+    assert!(start.requires.is_empty());
+    assert_eq!(start.provides, vec!["session".to_string()]);
+
+    let status = catalog
+        .operations
+        .iter()
+        .find(|operation| operation.id == "session.status")
+        .unwrap();
+    assert_eq!(status.requires, vec!["session".to_string()]);
+    assert!(status.provides.is_empty());
 }
 
 // Acceptance: signature-derived resource requirements inject the carrier
@@ -312,6 +398,41 @@ fn carrier_argument_is_injected_with_derived_reference_type() {
         .find(|spec| spec.path.join(" ") == "session end")
         .expect("end command");
     assert_eq!(end.releases, vec!["session".to_string()]);
+}
+
+// Acceptance: resource-derived compatibility capabilities remain visible in
+// the catalog without duplicating or weakening resource lifecycle help.
+#[test]
+fn resource_compatibility_help_delegates_to_lifecycle_sections() {
+    let registry = session_registry();
+    let server_help = registry.help(HelpRequest {
+        command: None,
+        topic: None,
+        detail: None,
+    });
+    assert!(
+        server_help
+            .text
+            .contains("derived from resource `session`; see Resources for lifecycle and recovery"),
+        "help: {}",
+        server_help.text
+    );
+
+    let status_help = registry.help(HelpRequest {
+        command: Some("session status".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(status_help.text.contains("Requires resources:"));
+    assert!(!status_help.text.contains("\nRequires:\n"));
+
+    let start_help = registry.help(HelpRequest {
+        command: Some("session start".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(start_help.text.contains("Grants:"));
+    assert!(!start_help.text.contains("\nProvides:\n"));
 }
 
 // Acceptance: resource declarations and derived edges are hash-covered —

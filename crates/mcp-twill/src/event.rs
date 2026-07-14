@@ -48,7 +48,7 @@ impl FrameworkEvent {
             effects: plan
                 .map(|plan| vec![plan.effect.clone()])
                 .unwrap_or_default(),
-            diagnostics: envelope.diagnostics.clone(),
+            diagnostics: event_diagnostics(envelope),
         }
     }
 
@@ -79,6 +79,39 @@ impl FrameworkEvent {
         self.runtime = Some(runtime);
         self
     }
+}
+
+/// Capability denial detail is suitable for the bounded public response but
+/// not for framework events, which commonly back application logs. Preserve
+/// the stable code, capability name, and declaration-derived location only.
+fn event_diagnostics(envelope: &ResponseEnvelope) -> Vec<Diagnostic> {
+    let capability = envelope.error.as_ref().and_then(|error| {
+        (error.code == crate::ErrorCode::CapabilityDenied)
+            .then(|| {
+                error
+                    .details
+                    .get("capability")
+                    .and_then(|value| value.as_str())
+            })
+            .flatten()
+    });
+    envelope
+        .diagnostics
+        .iter()
+        .cloned()
+        .map(|mut diagnostic| {
+            if diagnostic.code == crate::ErrorCode::CapabilityDenied {
+                diagnostic.message = capability.map_or_else(
+                    || "capability denied".to_string(),
+                    |capability| format!("capability `{capability}` denied"),
+                );
+                diagnostic.expected = None;
+                diagnostic.actual = None;
+                diagnostic.suggestions.clear();
+            }
+            diagnostic
+        })
+        .collect()
 }
 
 /// The slice of an invocation plan that events need, extracted so the flow

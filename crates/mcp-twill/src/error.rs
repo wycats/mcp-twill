@@ -109,9 +109,9 @@ pub enum FrameworkError {
     },
     #[error("capability `{capability}` denied: {detail}")]
     CapabilityDenied {
-        /// The declared capability the server refused to honor.
+        /// The declared explicit proof capability the application refused.
         capability: String,
-        /// Server-specific detail (stale lease, foreign tab).
+        /// Application-specific detail, normalized before public response.
         detail: String,
         /// The carrier argument, filled in by the framework from the
         /// capability declaration before the response is built.
@@ -183,7 +183,7 @@ pub enum FrameworkError {
 
 impl FrameworkError {
     /// Constructor for handlers that determine a presented capability is
-    /// invalid (stale lease, foreign tab). The framework fills in the
+    /// invalid (for example, a receipt for an older build). The framework fills in the
     /// carrier argument and establishing commands from the declarations
     /// before the response is built.
     pub fn capability_denied(capability: impl Into<String>, detail: impl Into<String>) -> Self {
