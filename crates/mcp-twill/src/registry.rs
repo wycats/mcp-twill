@@ -22,6 +22,8 @@ use crate::{
 };
 use crate::{CommandTemplate, PermissionSpec};
 
+const MAX_GUIDANCE_SCALARS: usize = 1_024;
+
 pub type HandlerFuture = Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send>>;
 
 #[async_trait]
@@ -1052,22 +1054,30 @@ impl CommandRegistry {
     }
 
     pub fn validate_guidance(&self) -> Result<()> {
-        if let Some(preamble) = &self.preamble
-            && preamble.trim().is_empty()
-        {
-            return Err(FrameworkError::Build(
-                "server preamble is empty; declare text or remove it".to_string(),
-            ));
+        if let Some(preamble) = &self.preamble {
+            if preamble.trim().is_empty() {
+                return Err(FrameworkError::Build(
+                    "server preamble is empty; declare text or remove it".to_string(),
+                ));
+            }
+            validate_guidance_text(preamble, &format!("server `{}` preamble", self.server_name))?;
         }
         for type_decl in self.types.values() {
             for variant in &type_decl.variants {
-                if let Some(when) = &variant.fallback
-                    && when.trim().is_empty()
-                {
-                    return Err(FrameworkError::Build(format!(
-                        "type `{}` variant `{}` declares a fallback with an empty condition",
-                        type_decl.name, variant.name
-                    )));
+                if let Some(when) = &variant.fallback {
+                    if when.trim().is_empty() {
+                        return Err(FrameworkError::Build(format!(
+                            "type `{}` variant `{}` declares a fallback with an empty condition",
+                            type_decl.name, variant.name
+                        )));
+                    }
+                    validate_guidance_text(
+                        when,
+                        &format!(
+                            "type `{}` variant `{}` fallback condition",
+                            type_decl.name, variant.name
+                        ),
+                    )?;
                 }
             }
             if !type_decl.variants.is_empty()
@@ -1092,6 +1102,10 @@ impl CommandRegistry {
                         "command `{name}` declares an empty `use_when`"
                     )));
                 }
+                validate_guidance_text(
+                    use_when,
+                    &format!("command `{name}` `use_when` condition"),
+                )?;
                 if command.spec.fallback.is_some() {
                     return Err(FrameworkError::Build(format!(
                         "command `{name}` declares both `use_when` and `fallback`; a fallback's condition is its selection criterion"
@@ -1106,6 +1120,13 @@ impl CommandRegistry {
                         alternative.command
                     )));
                 }
+                validate_guidance_text(
+                    &alternative.when,
+                    &format!(
+                        "command `{name}` alternative `{}` condition",
+                        alternative.command
+                    ),
+                )?;
                 if alternative.command == name {
                     return Err(FrameworkError::Build(format!(
                         "command `{name}` lists itself as an alternative"
@@ -1130,6 +1151,10 @@ impl CommandRegistry {
                         "command `{name}` declares a fallback with an empty condition"
                     )));
                 }
+                validate_guidance_text(
+                    &fallback.when,
+                    &format!("command `{name}` fallback condition"),
+                )?;
                 if fallback.prefer.is_empty() {
                     return Err(FrameworkError::Build(format!(
                         "command `{name}` declares a fallback with an empty `prefer` list; an escape hatch must say what it is an escape from"
@@ -2426,6 +2451,37 @@ impl CommandRegistry {
         }
         lines.join("\n")
     }
+}
+
+fn validate_guidance_text(text: &str, subject: &str) -> Result<()> {
+    let scalar_count = text.chars().count();
+    if scalar_count > MAX_GUIDANCE_SCALARS {
+        return Err(FrameworkError::Build(format!(
+            "{subject} exceeds the 1,024 Unicode scalar limit ({scalar_count})"
+        )));
+    }
+    if let Some(scalar) = text
+        .chars()
+        .find(|scalar| guidance_scalar_is_unsafe(*scalar))
+    {
+        return Err(FrameworkError::Build(format!(
+            "{subject} contains presentation-unsafe scalar U+{:04X}",
+            scalar as u32
+        )));
+    }
+    Ok(())
+}
+
+fn guidance_scalar_is_unsafe(scalar: char) -> bool {
+    matches!(scalar,
+        '\u{0000}'..='\u{001F}'
+        | '\u{007F}'..='\u{009F}'
+        | '\u{061C}'
+        | '\u{200E}'..='\u{200F}'
+        | '\u{2028}'..='\u{202E}'
+        | '\u{2060}'..='\u{206F}'
+        | '\u{FEFF}'
+    )
 }
 
 fn backticked_list(names: &[String]) -> String {

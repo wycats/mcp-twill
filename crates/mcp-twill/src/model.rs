@@ -817,14 +817,18 @@ impl CommandSpec {
     /// Marks this command as an escape hatch: the commands to exhaust
     /// first and the condition that justifies bypassing them. Mutually
     /// exclusive with `use_when` — the fallback's condition is its
-    /// selection criterion.
+    /// selection criterion. Preferences are copied from borrowed or owned
+    /// string-like items into the catalog declaration.
     pub fn fallback(
         mut self,
-        prefer: impl IntoIterator<Item = impl Into<String>>,
+        prefer: impl IntoIterator<Item = impl AsRef<str>>,
         when: impl Into<String>,
     ) -> Self {
         self.fallback = Some(Fallback {
-            prefer: prefer.into_iter().map(Into::into).collect(),
+            prefer: prefer
+                .into_iter()
+                .map(|preferred| preferred.as_ref().to_string())
+                .collect(),
             when: when.into(),
         });
         self

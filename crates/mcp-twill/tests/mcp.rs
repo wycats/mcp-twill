@@ -167,9 +167,15 @@ impl ClientHandler for RootsClient {
 #[tokio::test]
 async fn getting_started_prompt_includes_declared_guidance() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
-    let server = CliMcpServer::new(registry().declare_guidance(
-        mcp_twill::CommandGuidance::run_command("quickstart", "getting-started", "issues list"),
-    ))?;
+    let server = CliMcpServer::new(
+        registry()
+            .declare_preamble("Issue records are the source of truth.")
+            .declare_guidance(mcp_twill::CommandGuidance::run_command(
+                "quickstart",
+                "getting-started",
+                "issues list",
+            )),
+    )?;
     tokio::spawn(async move {
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
@@ -180,6 +186,10 @@ async fn getting_started_prompt_includes_declared_guidance() -> anyhow::Result<(
         .get_prompt(GetPromptRequestParams::new("getting_started"))
         .await?;
     let text = serde_json::to_string(&prompt)?;
+    assert!(
+        text.contains("Issue records are the source of truth."),
+        "{text}"
+    );
     assert!(text.contains("Guidance:"), "{text}");
     assert!(text.contains("issues list"), "{text}");
 

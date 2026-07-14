@@ -1019,6 +1019,18 @@ pub fn check_guidance_projection(registry: &CommandRegistry) -> Vec<ContractViol
     }
     let catalog = registry.catalog();
     if let Some(preamble) = registry.preamble() {
+        let server_help = registry.help(crate::HelpRequest {
+            command: None,
+            topic: None,
+            detail: None,
+        });
+        if !server_help.text.contains(preamble) {
+            violations.push(violation(
+                None,
+                "guidance",
+                "server help does not render the declared preamble",
+            ));
+        }
         for command in registry.command_specs() {
             let name = command.path.join(" ");
             if preamble.contains(&format!("`{name}`")) {
@@ -1045,7 +1057,7 @@ pub fn check_guidance_projection(registry: &CommandRegistry) -> Vec<ContractViol
                 detail: None,
             });
             if let Some(use_when) = &command.use_when
-                && !help.text.contains(use_when.as_str())
+                && !help.text.contains(&format!("Use when: {use_when}"))
             {
                 violations.push(violation(
                     Some(&name),
@@ -1054,7 +1066,10 @@ pub fn check_guidance_projection(registry: &CommandRegistry) -> Vec<ContractViol
                 ));
             }
             for alternative in &command.alternatives {
-                if !help.text.contains(&format!("`{}`", alternative.command)) {
+                if !help.text.contains(&format!(
+                    "- `{}` — {}",
+                    alternative.command, alternative.when
+                )) {
                     violations.push(violation(
                         Some(&name),
                         "guidance",
@@ -1066,18 +1081,26 @@ pub fn check_guidance_projection(registry: &CommandRegistry) -> Vec<ContractViol
                 }
             }
             if let Some(fallback) = &command.fallback {
-                for preferred in &fallback.prefer {
-                    if !help.text.contains(&format!("`{preferred}`")) {
-                        violations.push(violation(
-                            Some(&name),
-                            "guidance",
-                            format!("command help does not name preferred command `{preferred}`"),
-                        ));
-                    }
+                let preferred = fallback
+                    .prefer
+                    .iter()
+                    .map(|preferred| format!("`{preferred}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let rendered = format!(
+                    "Fallback: prefer {preferred}. Use only when {}.",
+                    fallback.when
+                );
+                if !help.text.contains(&rendered) {
+                    violations.push(violation(
+                        Some(&name),
+                        "guidance",
+                        "command help does not render the fallback declaration",
+                    ));
                 }
             }
-            for (source, _) in &reverse_edges {
-                if !help.text.contains(&format!("`{source}`")) {
+            for (source, when) in &reverse_edges {
+                if !help.text.contains(&format!("- `{source}` — when {when}")) {
                     violations.push(violation(
                         Some(&name),
                         "guidance",
