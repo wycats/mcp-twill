@@ -244,7 +244,7 @@ impl Variant {
 }
 ```
 
-Under the proposed API, both fallback builders copy each preference into the owned declaration. Once implemented, arrays of string literals, borrowed slices such as `&[&str]`, and owned `Vec<String>` values are equivalent authoring forms and normalize to the same ordered `Vec<String>`. The implementation required before this RFC advances must change the current shipped iterator item bound from `Into<String>` to `AsRef<str>` and compile the borrowed-slice form in acceptance coverage. Ordinary `String` and string-reference collections remain source-compatible. A custom item type that implements only `Into<String>` must implement `AsRef<str>` or be converted explicitly to `Vec<String>` before calling `fallback`; this is a Rust source migration with no serialized or runtime change.
+Under the proposed API, both fallback builders copy each preference into the owned declaration. After implementation, arrays of string literals, borrowed slices such as `&[&str]`, and owned `Vec<String>` values are equivalent authoring forms and normalize to the same ordered `Vec<String>`. Implementing this proposal changes the current shipped iterator item bound from `Into<String>` to `AsRef<str>`; acceptance coverage must compile the borrowed-slice form before this RFC advances. Ordinary `String` and string-reference collections remain source-compatible. A custom item type that implements only `Into<String>` must implement `AsRef<str>` or be converted explicitly to `Vec<String>` before calling `fallback`; this is a Rust source migration with no serialized or runtime change.
 
 Every authored guidance string is static public catalog text. After confirming
 that it is not whitespace-only, registration accepts at most 1,024 Unicode
