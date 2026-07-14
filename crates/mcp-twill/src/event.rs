@@ -25,6 +25,8 @@ pub struct FrameworkEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
     pub status: ResponseStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_error_code: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<EffectSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -45,6 +47,17 @@ impl FrameworkEvent {
                 .clone()
                 .or_else(|| plan.map(|plan| plan.command_path.clone())),
             status: envelope.status.clone(),
+            application_error_code: envelope.error.as_ref().and_then(|error| {
+                (error.code == crate::ErrorCode::ApplicationError)
+                    .then(|| {
+                        error
+                            .details
+                            .get("applicationCode")?
+                            .as_str()
+                            .map(str::to_owned)
+                    })
+                    .flatten()
+            }),
             effects: plan
                 .map(|plan| vec![plan.effect.clone()])
                 .unwrap_or_default(),
@@ -62,6 +75,7 @@ impl FrameworkEvent {
             operation_id: None,
             command: None,
             status: ResponseStatus::InvalidInput,
+            application_error_code: None,
             effects: Vec::new(),
             diagnostics: vec![Diagnostic {
                 code: crate::ErrorCode::InvalidArgumentType,

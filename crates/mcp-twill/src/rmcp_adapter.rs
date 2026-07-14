@@ -197,6 +197,7 @@ impl CliMcpServer {
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
         registry.validate_resources()?;
+        registry.validate_results()?;
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));
@@ -573,12 +574,21 @@ impl CliMcpServer {
             )
             .await;
         match result {
-            Ok(response) => {
+            Ok(crate::CommandExecutionOutcome::Success(response)) => {
                 if let Some(meta) = progress_meta {
                     Self::notify_progress(meta, &client, 4.0, 4.0, "Command complete").await;
                 }
                 RunOutcome::output(
                     ResponseEnvelope::success(response, profile),
+                    Some(plan_for_event),
+                )
+            }
+            Ok(crate::CommandExecutionOutcome::ApplicationError { plan, error }) => {
+                if let Some(meta) = progress_meta {
+                    Self::notify_progress(meta, &client, 4.0, 4.0, "Command complete").await;
+                }
+                RunOutcome::output(
+                    ResponseEnvelope::application_error(plan, error, profile),
                     Some(plan_for_event),
                 )
             }
@@ -1215,6 +1225,9 @@ fn envelope_result(envelope: ResponseEnvelope) -> CallToolResult {
 }
 
 fn success_result(envelope: ResponseEnvelope, profile: ResponseProfile) -> CallToolResult {
+    if envelope.error.is_some() {
+        return envelope_result(envelope);
+    }
     if matches!(profile, ResponseProfile::Text) {
         let mut text = envelope
             .output
@@ -1410,5 +1423,41 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn text_profile_keeps_application_errors_in_the_mcp_error_family() {
+        let envelope = ResponseEnvelope {
+            status: crate::ResponseStatus::Failed,
+            command: Some(vec!["browser".to_string(), "status".to_string()]),
+            output: None,
+            error: Some(crate::ErrorBody {
+                code: crate::ErrorCode::ApplicationError,
+                message: "No browser session is available".to_string(),
+                details: json!({
+                    "applicationCode": "session_required",
+                    "details": {},
+                    "recoveries": [],
+                }),
+            }),
+            diagnostics: Vec::new(),
+            steering: Vec::new(),
+            display: None,
+            replay: None,
+            preview: None,
+            plan: None,
+            retry: None,
+        };
+        let result = success_result(envelope, ResponseProfile::Text);
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.structured_content.is_some());
+        assert!(
+            result.content[0]
+                .raw
+                .as_text()
+                .unwrap()
+                .text
+                .contains("application_error")
+        );
     }
 }

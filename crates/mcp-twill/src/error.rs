@@ -177,6 +177,11 @@ pub enum FrameworkError {
     },
     #[error("registry build failed: {0}")]
     Build(String),
+    #[error("declared result contract was violated")]
+    ResultContractViolation {
+        boundary: crate::ResultContractBoundary,
+        reason: crate::ResultContractReason,
+    },
     #[error("command handler failed: {0}")]
     Handler(String),
 }

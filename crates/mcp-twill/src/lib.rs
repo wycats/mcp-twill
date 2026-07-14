@@ -9,6 +9,7 @@ pub mod model;
 pub mod registry;
 pub mod resource;
 pub mod response;
+pub mod results;
 pub mod rmcp_adapter;
 pub mod runtime;
 pub mod template;
@@ -33,6 +34,7 @@ pub use resource::{
     ResolvedResources, Resource, ResourceOutput, ResourceRefusal,
 };
 pub use response::*;
+pub use results::*;
 pub use rmcp_adapter::{
     CliMcpServer, CliMcpServerConfig, ConversationIdentityCompatibility,
     WorkspaceMetadataCompatibility,

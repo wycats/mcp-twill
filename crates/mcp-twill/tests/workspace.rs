@@ -23,6 +23,15 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 
+fn success(outcome: mcp_twill::CommandExecutionOutcome) -> mcp_twill::RunResponse {
+    match outcome {
+        mcp_twill::CommandExecutionOutcome::Success(response) => response,
+        mcp_twill::CommandExecutionOutcome::ApplicationError { error, .. } => {
+            panic!("unexpected application error: {}", error.code)
+        }
+    }
+}
+
 #[derive(Default)]
 struct TestClient;
 
@@ -86,7 +95,7 @@ async fn declared_workspace_root_appears_in_dry_run_plan() {
     );
     run.dry_run = true;
 
-    let response = registry().run(run).await.unwrap();
+    let response = success(registry().run(run).await.unwrap());
     assert!(response.dry_run);
     let roots = &response.plan.workspace_roots;
     assert_eq!(roots.len(), 1);
@@ -162,13 +171,15 @@ async fn path_traversal_outside_selected_root_is_rejected_before_dispatch() {
 
     assert_eq!(dispatches.load(Ordering::SeqCst), 0);
 
-    let allowed = registry
-        .run(request(
-            "files read $args.path",
-            json!({"path": "file:///workspace/repo/src/lib.rs"}),
-        ))
-        .await
-        .unwrap();
+    let allowed = success(
+        registry
+            .run(request(
+                "files read $args.path",
+                json!({"path": "file:///workspace/repo/src/lib.rs"}),
+            ))
+            .await
+            .unwrap(),
+    );
     assert!(allowed.output.is_some());
     assert_eq!(dispatches.load(Ordering::SeqCst), 1);
 }
@@ -208,7 +219,7 @@ async fn dry_run_envelope_shows_selected_root_source_and_reason() {
     );
     run.dry_run = true;
 
-    let response = registry().run(run).await.unwrap();
+    let response = success(registry().run(run).await.unwrap());
     let envelope = ResponseEnvelope::success(response, ResponseProfile::Debug);
     let value = serde_json::to_value(&envelope).unwrap();
     let root = &value["plan"]["workspaceRoots"][0];
@@ -388,10 +399,12 @@ fn declaring_registry() -> CommandRegistry {
 #[tokio::test]
 async fn uses_workspace_resolves_declared_fallback_and_reaches_handler() {
     let registry = declaring_registry();
-    let response = registry
-        .run(request("issues export", json!({})))
-        .await
-        .unwrap();
+    let response = success(
+        registry
+            .run(request("issues export", json!({})))
+            .await
+            .unwrap(),
+    );
 
     let roots = &response.plan.workspace_roots;
     assert_eq!(roots.len(), 1);
@@ -689,10 +702,12 @@ async fn direct_host_root_reaches_required_and_optional_handlers_with_provenance
             HostWorkspaceRoot::new("com.example.editor", "file:///host/project").unwrap(),
         ]);
 
-    let required = ambient_registry()
-        .run_with_context(request("artifacts export", json!({})), context.clone())
-        .await
-        .unwrap();
+    let required = success(
+        ambient_registry()
+            .run_with_context(request("artifacts export", json!({})), context.clone())
+            .await
+            .unwrap(),
+    );
     assert_eq!(required.plan.workspace_roots.len(), 1);
     assert_eq!(required.plan.workspace_roots[0].source, "trusted_host");
     assert_eq!(
@@ -704,10 +719,12 @@ async fn direct_host_root_reaches_required_and_optional_handlers_with_provenance
         "com.example.editor"
     );
 
-    let optional = ambient_registry()
-        .run_with_context(request("tabs list", json!({})), context)
-        .await
-        .unwrap();
+    let optional = success(
+        ambient_registry()
+            .run_with_context(request("tabs list", json!({})), context)
+            .await
+            .unwrap(),
+    );
     assert_eq!(optional.plan.workspace_roots.len(), 1);
     assert_eq!(
         optional.output.unwrap().structured.unwrap()["hasWorkspace"],
@@ -718,10 +735,12 @@ async fn direct_host_root_reaches_required_and_optional_handlers_with_provenance
 #[tokio::test]
 async fn optional_workspace_absence_is_valid_and_required_absence_fails() {
     let empty = host_context([]);
-    let optional = ambient_registry()
-        .run_with_context(request("tabs list", json!({})), empty.clone())
-        .await
-        .unwrap();
+    let optional = success(
+        ambient_registry()
+            .run_with_context(request("tabs list", json!({})), empty.clone())
+            .await
+            .unwrap(),
+    );
     assert!(optional.plan.workspace_roots.is_empty());
     assert_eq!(
         optional.output.unwrap().structured.unwrap()["hasWorkspace"],

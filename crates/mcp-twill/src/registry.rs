@@ -14,11 +14,11 @@ use schemars::schema_for;
 use serde_json::{Value, json};
 
 use crate::{
-    CatalogIdentity, CommandCatalog, CommandContext, CommandGuidance, CommandOutput, CommandSpec,
-    EffectLane, FrameworkError, HelpRequest, HelpResult, HelpTopic, InvocationPlan,
-    InvocationToken, OperationSpec, PermissionPolicy, Result, RunRequest, RunResponse, ServerSpec,
-    TemplateToken, ToolLaneSpec, WorkspaceDecl, group_namespaces, stable_hash_value,
-    structured_error, value_matches_type,
+    CatalogIdentity, CommandCatalog, CommandContext, CommandExecutionOutcome, CommandGuidance,
+    CommandOutput, CommandSpec, EffectLane, FrameworkError, HelpRequest, HelpResult, HelpTopic,
+    InvocationPlan, InvocationToken, OperationSpec, PermissionPolicy, Result, RunRequest,
+    RunResponse, ServerSpec, TemplateToken, ToolLaneSpec, WorkspaceDecl, group_namespaces,
+    stable_hash_value, structured_error, value_matches_type,
 };
 use crate::{CommandTemplate, PermissionSpec};
 
@@ -62,13 +62,25 @@ pub struct CommandRegistry {
     resolvers: BTreeMap<String, Arc<dyn crate::resource::ErasedResolver>>,
     readers: BTreeMap<String, Arc<dyn crate::resource::ErasedReader>>,
     guidance: Vec<CommandGuidance>,
+    registration_errors: Vec<FrameworkError>,
     policy: PermissionPolicy,
 }
 
 #[derive(Clone)]
 struct RegisteredCommand {
     spec: CommandSpec,
-    handler: Arc<dyn CommandHandler>,
+    handler: Arc<dyn crate::results::ErasedCommandHandler>,
+    result_kind: ResultHandlerKind,
+}
+
+#[derive(Clone)]
+enum ResultHandlerKind {
+    Legacy,
+    Typed {
+        pending: crate::results::PendingApplicationContract,
+        explicit_application: bool,
+    },
+    Dynamic,
 }
 
 impl CommandRegistry {
@@ -89,6 +101,7 @@ impl CommandRegistry {
             resolvers: BTreeMap::new(),
             readers: BTreeMap::new(),
             guidance: Vec::new(),
+            registration_errors: Vec::new(),
             policy: PermissionPolicy::default(),
         }
     }
@@ -127,6 +140,7 @@ impl CommandRegistry {
             self.duplicate_capabilities.push(decl.name.clone());
         }
         self.capabilities.insert(decl.name.clone(), decl);
+        self.refresh_typed_result_contracts();
         self
     }
 
@@ -146,6 +160,7 @@ impl CommandRegistry {
     pub(crate) fn declare_derived_capability(mut self, decl: crate::CapabilityDecl) -> Self {
         self.resource_capabilities.insert(decl.name.clone());
         self.capabilities.insert(decl.name.clone(), decl);
+        self.refresh_typed_result_contracts();
         self
     }
 
@@ -227,10 +242,245 @@ impl CommandRegistry {
             spec.path.clone(),
             RegisteredCommand {
                 spec,
-                handler: Arc::new(handler),
+                handler: Arc::new(crate::results::LegacyHandlerAdapter(handler)),
+                result_kind: ResultHandlerKind::Legacy,
             },
         );
+        self.refresh_typed_result_contracts();
         self
+    }
+
+    pub fn register_result<M, H>(self, spec: CommandSpec, handler: H) -> Self
+    where
+        H: crate::ApplicationResultDialect<M>,
+    {
+        let registration = handler.into_result_registration();
+        self.register_result_registration(spec, registration)
+    }
+
+    pub(crate) fn register_result_registration(
+        mut self,
+        mut spec: CommandSpec,
+        registration: crate::results::ResultHandlerRegistration,
+    ) -> Self {
+        let explicit_application = spec
+            .output
+            .as_ref()
+            .is_some_and(|output| output.application.is_some());
+        project_result_resources(
+            &mut spec,
+            &registration.resource_uses,
+            &registration.granted,
+            &registration.enumerated,
+        );
+        normalize_command_spec(&mut spec);
+        self.commands.insert(
+            spec.path.clone(),
+            RegisteredCommand {
+                spec,
+                handler: registration.handler,
+                result_kind: ResultHandlerKind::Typed {
+                    pending: registration.pending,
+                    explicit_application,
+                },
+            },
+        );
+        self.refresh_typed_result_contracts();
+        self
+    }
+
+    pub fn register_dynamic<M, H>(self, spec: CommandSpec, handler: H) -> Self
+    where
+        H: crate::DynamicApplicationDialect<M>,
+    {
+        let registration = handler.into_dynamic_registration();
+        self.register_dynamic_registration(spec, registration)
+    }
+
+    pub(crate) fn register_dynamic_registration(
+        mut self,
+        mut spec: CommandSpec,
+        registration: crate::results::DynamicHandlerRegistration,
+    ) -> Self {
+        project_result_resources(
+            &mut spec,
+            &registration.resource_uses,
+            &registration.granted,
+            &registration.enumerated,
+        );
+        if let Some(contract) = spec
+            .output
+            .as_mut()
+            .and_then(|output| output.application.as_mut())
+            && let Err(error) = crate::results::compile_contract(contract)
+        {
+            self.registration_errors.push(error);
+        }
+        normalize_command_spec(&mut spec);
+        self.commands.insert(
+            spec.path.clone(),
+            RegisteredCommand {
+                spec,
+                handler: registration.handler,
+                result_kind: ResultHandlerKind::Dynamic,
+            },
+        );
+        self.refresh_typed_result_contracts();
+        self
+    }
+
+    fn refresh_typed_result_contracts(&mut self) {
+        let capabilities = &self.capabilities;
+        let resource_capabilities = &self.resource_capabilities;
+        let providers = self
+            .commands
+            .values()
+            .map(|command| command.spec.clone())
+            .collect::<Vec<_>>();
+        for command in self.commands.values_mut() {
+            let ResultHandlerKind::Typed {
+                pending,
+                explicit_application,
+            } = &command.result_kind
+            else {
+                continue;
+            };
+            if *explicit_application {
+                continue;
+            }
+            if let Ok(contract) = compile_pending_result_contract(
+                &command.spec,
+                pending,
+                capabilities,
+                resource_capabilities,
+                &providers,
+            ) {
+                command
+                    .spec
+                    .output
+                    .get_or_insert_with(crate::OutputContract::default)
+                    .application = Some(contract);
+            }
+        }
+    }
+
+    pub fn validate_results(&self) -> Result<()> {
+        if let Some(error) = self.registration_errors.first() {
+            return Err(error.clone());
+        }
+        let providers = self
+            .commands
+            .values()
+            .map(|command| command.spec.clone())
+            .collect::<Vec<_>>();
+        let mut identities = BTreeMap::<String, crate::ApplicationErrorSpec>::new();
+        let mut actions = BTreeMap::<String, String>::new();
+        for command in self.commands.values() {
+            let contract = match &command.result_kind {
+                ResultHandlerKind::Legacy => {
+                    if command
+                        .spec
+                        .output
+                        .as_ref()
+                        .is_some_and(|output| output.application.is_some())
+                    {
+                        return Err(FrameworkError::Build(format!(
+                            "legacy command `{}` cannot declare an application result contract",
+                            command.spec.name()
+                        )));
+                    }
+                    continue;
+                }
+                ResultHandlerKind::Typed {
+                    pending,
+                    explicit_application,
+                } => {
+                    if *explicit_application {
+                        return Err(FrameworkError::Build(format!(
+                            "typed result command `{}` cannot declare an explicit application result contract",
+                            command.spec.name()
+                        )));
+                    }
+                    let contract = compile_pending_result_contract(
+                        &command.spec,
+                        pending,
+                        &self.capabilities,
+                        &self.resource_capabilities,
+                        &providers,
+                    )?;
+                    if command
+                        .spec
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.application.as_ref())
+                        != Some(&contract)
+                    {
+                        return Err(FrameworkError::Build(format!(
+                            "typed result command `{}` has an explicit or stale application contract",
+                            command.spec.name()
+                        )));
+                    }
+                    contract
+                }
+                ResultHandlerKind::Dynamic => {
+                    let mut contract = command
+                        .spec
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.application.clone())
+                        .ok_or_else(|| {
+                        FrameworkError::Build(format!(
+                            "dynamic result command `{}` is missing an application result contract",
+                            command.spec.name()
+                        ))
+                        })?;
+                    crate::results::compile_contract(&mut contract)?;
+                    validate_explicit_capability_bindings(
+                        &command.spec,
+                        &contract,
+                        &self.capabilities,
+                        &self.resource_capabilities,
+                        &providers,
+                    )?;
+                    contract
+                }
+            };
+            validate_recovery_operations(&contract, &providers)?;
+            for recovery in contract
+                .errors
+                .iter()
+                .flat_map(|error| error.recoveries.iter())
+            {
+                if let crate::ApplicationRecoveryDecl::Action(action) = recovery {
+                    if let Some(summary) = actions.get(&action.code) {
+                        if summary != &action.summary {
+                            return Err(FrameworkError::Build(format!(
+                                "application recovery action `{}` has conflicting summaries",
+                                action.code
+                            )));
+                        }
+                    } else {
+                        actions.insert(action.code.clone(), action.summary.clone());
+                    }
+                }
+            }
+            for error in contract.errors {
+                if let Some(existing) = identities.get(&error.code) {
+                    if existing.summary != error.summary
+                        || existing.message != error.message
+                        || existing.details_schema != error.details_schema
+                    {
+                        return Err(FrameworkError::Build(format!(
+                            "application error `{}` has conflicting server-wide declarations",
+                            error.code
+                        )));
+                    }
+                } else {
+                    identities.insert(error.code.clone(), error);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn command_specs(&self) -> impl Iterator<Item = &CommandSpec> {
@@ -1706,7 +1956,7 @@ impl CommandRegistry {
         })
     }
 
-    pub async fn run(&self, request: RunRequest) -> Result<RunResponse> {
+    pub async fn run(&self, request: RunRequest) -> Result<CommandExecutionOutcome> {
         self.run_with_context(request, crate::InvocationContext::default())
             .await
     }
@@ -1715,7 +1965,7 @@ impl CommandRegistry {
         &self,
         request: RunRequest,
         context: crate::InvocationContext,
-    ) -> Result<RunResponse> {
+    ) -> Result<CommandExecutionOutcome> {
         let resolved = self.resolve_context_workspaces(&context);
         self.run_with_lane_prepared(request, None, None, None, &resolved, &context)
             .await
@@ -1727,7 +1977,7 @@ impl CommandRegistry {
         current_tool: impl Into<String>,
         lane: EffectLane,
         primary_tool_name: impl AsRef<str>,
-    ) -> Result<RunResponse> {
+    ) -> Result<CommandExecutionOutcome> {
         self.run_with_lane_prepared(
             request,
             Some(current_tool.into()),
@@ -1748,7 +1998,7 @@ impl CommandRegistry {
         lane: EffectLane,
         primary_tool_name: impl AsRef<str>,
         resolved: &ResolvedWorkspaceSet,
-    ) -> Result<RunResponse> {
+    ) -> Result<CommandExecutionOutcome> {
         self.run_in_lane_with_workspaces_and_context(
             request,
             current_tool,
@@ -1771,7 +2021,7 @@ impl CommandRegistry {
         primary_tool_name: impl AsRef<str>,
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
-    ) -> Result<RunResponse> {
+    ) -> Result<CommandExecutionOutcome> {
         if context.host_workspace_roots().is_some() {
             return Err(FrameworkError::ConflictingWorkspaceInputs);
         }
@@ -1795,7 +2045,7 @@ impl CommandRegistry {
         primary_tool_name: Option<String>,
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
-    ) -> Result<RunResponse> {
+    ) -> Result<CommandExecutionOutcome> {
         let plan = self.build_plan_prepared(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
             && plan.lane != current_lane
@@ -1809,11 +2059,11 @@ impl CommandRegistry {
         }
 
         if matches!(request.effective_mode(), crate::RunMode::DryRun) {
-            return Ok(RunResponse {
+            return Ok(CommandExecutionOutcome::Success(RunResponse {
                 plan,
                 output: None,
                 dry_run: true,
-            });
+            }));
         }
 
         self.policy.check(&plan.permissions)?;
@@ -1833,7 +2083,7 @@ impl CommandRegistry {
         } else {
             crate::InvocationContext::default()
         };
-        let output = registered
+        let outcome = registered
             .handler
             .call(CommandContext::with_invocation_context(
                 plan.clone(),
@@ -1843,14 +2093,71 @@ impl CommandRegistry {
             ))
             .await
             .map_err(|error| self.normalize_capability_denied(&registered.spec, error))?;
-        let output = self.mint_output_references(&registered.spec, output)?;
-        let output = output.apply_output_spec(&plan.output);
-
-        Ok(RunResponse {
-            plan,
-            output: Some(output),
-            dry_run: false,
-        })
+        match outcome {
+            crate::results::HandlerOutcome::Success(output) => {
+                let output = self.mint_output_references(&registered.spec, output)?;
+                let output = output.apply_output_spec(&plan.output);
+                Ok(CommandExecutionOutcome::Success(RunResponse {
+                    plan,
+                    output: Some(output),
+                    dry_run: false,
+                }))
+            }
+            crate::results::HandlerOutcome::ApplicationSuccess {
+                value,
+                grants,
+                listings,
+            } => {
+                let contract = registered
+                    .spec
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.application.as_ref())
+                    .ok_or_else(|| {
+                        FrameworkError::Build(format!(
+                            "result-aware command `{}` has no compiled application contract",
+                            registered.spec.name()
+                        ))
+                    })?;
+                crate::results::validate_application_success(contract, &value)?;
+                let text = serde_json::to_string(&value).map_err(|_| {
+                    FrameworkError::ResultContractViolation {
+                        boundary: crate::ResultContractBoundary::Success,
+                        reason: crate::ResultContractReason::SerializationFailed,
+                    }
+                })?;
+                let output = CommandOutput {
+                    text: Some(text),
+                    structured: Some(value),
+                    stderr: Vec::new(),
+                    next_cursor: None,
+                    grants,
+                    listings,
+                };
+                let output = self.mint_output_references(&registered.spec, output)?;
+                let output = output.apply_output_spec(&plan.output);
+                Ok(CommandExecutionOutcome::Success(RunResponse {
+                    plan,
+                    output: Some(output),
+                    dry_run: false,
+                }))
+            }
+            crate::results::HandlerOutcome::ApplicationError(raw) => {
+                let contract = registered
+                    .spec
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.application.as_ref())
+                    .ok_or_else(|| {
+                        FrameworkError::Build(format!(
+                            "result-aware command `{}` has no compiled application contract",
+                            registered.spec.name()
+                        ))
+                    })?;
+                let error = crate::results::validate_application_error(contract, raw)?;
+                Ok(CommandExecutionOutcome::ApplicationError { plan, error })
+            }
+        }
     }
 
     /// Resolves every resource the handler signature requires or releases,
@@ -2343,6 +2650,38 @@ impl CommandRegistry {
             }
             sections.push(lines.join("\n"));
         }
+        if let Some(output) = &spec.output {
+            let mut lines = vec!["Output:".to_string(), format!("- {}", output.summary)];
+            if let Some(application) = &output.application {
+                lines.push(format!(
+                    "- Application success schema: `{}`",
+                    serde_json::to_string(&application.success_schema)
+                        .unwrap_or_else(|_| "{}".to_string())
+                ));
+                if !application.errors.is_empty() {
+                    lines.push("Expected application errors:".to_string());
+                    for error in &application.errors {
+                        lines.push(format!("- `{}`: {}", error.code, error.summary));
+                        for recovery in &error.recoveries {
+                            match recovery {
+                                crate::ApplicationRecoveryDecl::Operation { operation_id } => {
+                                    lines.push(format!(
+                                        "  - recover with operation `{operation_id}`"
+                                    ));
+                                }
+                                crate::ApplicationRecoveryDecl::Action(action) => {
+                                    lines.push(format!(
+                                        "  - recovery action `{}`: {}",
+                                        action.code, action.summary
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            sections.push(lines.join("\n"));
+        }
         sections.push(self.examples_text(spec));
         sections.join("\n\n")
     }
@@ -2482,6 +2821,151 @@ fn guidance_scalar_is_unsafe(scalar: char) -> bool {
         | '\u{2060}'..='\u{206F}'
         | '\u{FEFF}'
     )
+}
+
+fn normalize_command_spec(spec: &mut CommandSpec) {
+    spec.workspaces.sort();
+    spec.workspaces.dedup();
+    spec.optional_workspaces.sort();
+    spec.optional_workspaces.dedup();
+}
+
+fn project_result_resources(
+    spec: &mut CommandSpec,
+    uses: &[crate::resource::ResourceUse],
+    granted: &[&'static str],
+    enumerated: &[&'static str],
+) {
+    for resource_use in uses {
+        if resource_use.released {
+            spec.releases.push(resource_use.resource.to_string());
+        } else {
+            spec.requires_resources
+                .push(resource_use.resource.to_string());
+        }
+    }
+    spec.grants
+        .extend(granted.iter().map(|name| (*name).to_string()));
+    spec.enumerates
+        .extend(enumerated.iter().map(|name| (*name).to_string()));
+    for values in [
+        &mut spec.requires_resources,
+        &mut spec.releases,
+        &mut spec.grants,
+        &mut spec.enumerates,
+    ] {
+        values.sort();
+        values.dedup();
+    }
+}
+
+fn compile_pending_result_contract(
+    spec: &CommandSpec,
+    pending: &crate::results::PendingApplicationContract,
+    capabilities: &BTreeMap<String, crate::CapabilityDecl>,
+    resource_capabilities: &BTreeSet<String>,
+    commands: &[CommandSpec],
+) -> Result<crate::ApplicationResultContract> {
+    let errors =
+        crate::results::compose_error_specs(&pending.declarations, &pending.uses, |capability| {
+            valid_capability_binding(spec, capability, capabilities, resource_capabilities)
+                .then(|| bootstrap_providers(commands, capability))
+        })?;
+    let mut contract = crate::ApplicationResultContract {
+        success_schema: pending.success_schema.clone(),
+        errors,
+    };
+    crate::results::compile_contract(&mut contract)?;
+    validate_recovery_operations(&contract, commands)?;
+    Ok(contract)
+}
+
+fn valid_capability_binding(
+    spec: &CommandSpec,
+    capability: &str,
+    capabilities: &BTreeMap<String, crate::CapabilityDecl>,
+    resource_capabilities: &BTreeSet<String>,
+) -> bool {
+    capabilities.contains_key(capability)
+        && !resource_capabilities.contains(capability)
+        && spec.requires.iter().any(|required| required == capability)
+}
+
+fn bootstrap_providers(commands: &[CommandSpec], capability: &str) -> Vec<String> {
+    let mut providers = commands
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .provides
+                .iter()
+                .any(|provided| provided == capability)
+                && !candidate
+                    .requires
+                    .iter()
+                    .any(|required| required == capability)
+        })
+        .map(CommandSpec::name)
+        .collect::<Vec<_>>();
+    providers.sort();
+    providers.dedup();
+    providers
+}
+
+fn validate_explicit_capability_bindings(
+    spec: &CommandSpec,
+    contract: &crate::ApplicationResultContract,
+    capabilities: &BTreeMap<String, crate::CapabilityDecl>,
+    resource_capabilities: &BTreeSet<String>,
+    commands: &[CommandSpec],
+) -> Result<()> {
+    for error in &contract.errors {
+        let Some(capability) = &error.capability else {
+            continue;
+        };
+        if !valid_capability_binding(spec, capability, capabilities, resource_capabilities) {
+            return Err(FrameworkError::Build(format!(
+                "application error `{}` binds capability `{capability}` that command `{}` does not require as a hand-declared capability",
+                error.code,
+                spec.name()
+            )));
+        }
+        let expected = bootstrap_providers(commands, capability)
+            .into_iter()
+            .map(|operation_id| crate::ApplicationRecoveryDecl::Operation { operation_id })
+            .collect::<Vec<_>>();
+        if error.recovery_cardinality != crate::RecoveryCardinality::Any
+            || error.recoveries != expected
+        {
+            return Err(FrameworkError::Build(format!(
+                "application error `{}` does not use the canonical bootstrap recoveries for capability `{capability}`",
+                error.code
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_recovery_operations(
+    contract: &crate::ApplicationResultContract,
+    commands: &[CommandSpec],
+) -> Result<()> {
+    let operation_ids = commands
+        .iter()
+        .map(CommandSpec::name)
+        .collect::<BTreeSet<_>>();
+    for error in &contract.errors {
+        for recovery in &error.recoveries {
+            if let crate::ApplicationRecoveryDecl::Operation { operation_id } = recovery
+                && !operation_ids.contains(operation_id)
+            {
+                return Err(FrameworkError::Build(format!(
+                    "application error `{}` recovers with unknown operation `{operation_id}`",
+                    error.code
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn backticked_list(names: &[String]) -> String {

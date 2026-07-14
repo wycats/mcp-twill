@@ -23,6 +23,15 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 
+fn success(outcome: mcp_twill::CommandExecutionOutcome) -> mcp_twill::RunResponse {
+    match outcome {
+        mcp_twill::CommandExecutionOutcome::Success(response) => response,
+        mcp_twill::CommandExecutionOutcome::ApplicationError { error, .. } => {
+            panic!("unexpected application error: {}", error.code)
+        }
+    }
+}
+
 fn request(command: &str, args: serde_json::Value) -> RunRequest {
     RunRequest {
         command: command.to_string(),
@@ -895,10 +904,12 @@ fn parse_uri_only_accepts_mintable_ids() {
 #[tokio::test]
 async fn grants_mint_uris_in_structured_output() {
     let registry = session_registry();
-    let response = registry
-        .run(request("session start", json!({})))
-        .await
-        .expect("grant succeeds");
+    let response = success(
+        registry
+            .run(request("session start", json!({})))
+            .await
+            .expect("grant succeeds"),
+    );
     let output = response.output.expect("executed output");
     assert_eq!(output.grants.len(), 1);
     let grant = &output.grants[0];
@@ -920,10 +931,12 @@ async fn listings_mint_uris_for_every_reference() {
         .await
         .expect("second grant");
 
-    let response = registry
-        .run(request("session list", json!({})))
-        .await
-        .expect("listing succeeds");
+    let response = success(
+        registry
+            .run(request("session list", json!({})))
+            .await
+            .expect("listing succeeds"),
+    );
     let output = response.output.expect("executed output");
     assert_eq!(output.listings.len(), 2);
     let uris: Vec<_> = output
@@ -1248,7 +1261,7 @@ async fn listing_honors_output_limit() {
         limit: Some(1),
         ..Default::default()
     });
-    let response = registry.run(limited).await.expect("listing succeeds");
+    let response = success(registry.run(limited).await.expect("listing succeeds"));
     let output = response.output.expect("executed output");
     assert_eq!(output.listings.len(), 1);
     assert_eq!(output.listings[0].uri, "test://session/sess-1");
@@ -1331,13 +1344,13 @@ async fn handler_tuples_extend_past_two_resources() {
     let carriers: Vec<_> = inspect.args.iter().map(|arg| arg.name.as_str()).collect();
     assert_eq!(carriers, vec!["session_id", "tab_id", "window_id"]);
 
-    let response = registry
+    let response = success(registry
         .run(request(
             "inspect --session-id $args.session_id --tab-id $args.tab_id --window-id $args.window_id",
             json!({ "session_id": "s1", "tab_id": "t1", "window_id": "w1" }),
         ))
         .await
-        .expect("all three resolve");
+        .expect("all three resolve"));
     let output = response.output.expect("executed output");
     assert_eq!(
         output.structured,

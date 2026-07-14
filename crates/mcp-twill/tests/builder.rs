@@ -9,6 +9,15 @@ use rmcp::ServerHandler;
 use serde::Deserialize;
 use serde_json::json;
 
+fn success(outcome: mcp_twill::CommandExecutionOutcome) -> mcp_twill::RunResponse {
+    match outcome {
+        mcp_twill::CommandExecutionOutcome::Success(response) => response,
+        mcp_twill::CommandExecutionOutcome::ApplicationError { error, .. } => {
+            panic!("unexpected application error: {}", error.code)
+        }
+    }
+}
+
 fn request(command: &str, args: serde_json::Value) -> RunRequest {
     RunRequest {
         command: command.to_string(),
@@ -80,6 +89,7 @@ fn explicit_registry() -> CommandRegistry {
         .with_output(OutputContract {
             format: OutputFormat::Structured,
             summary: "Created issue record.".to_string(),
+            application: None,
         })
         .with_example(create_example()),
         |_context| async {
@@ -162,6 +172,7 @@ fn builder_registry() -> CommandRegistry {
                     .output(OutputContract {
                         format: OutputFormat::Structured,
                         summary: "Created issue record.".to_string(),
+                        application: None,
                     })
                     .example_with_args(
                         "issues create --title $args.title --body $args.body",
@@ -245,13 +256,15 @@ fn builder_commands_project_help_lanes_and_annotations() {
 
 #[tokio::test]
 async fn typed_handler_receives_deserialized_args() {
-    let response = builder_registry()
-        .run(request(
-            "issues create --title $args.title --body $args.body",
-            json!({ "title": "Typed title", "body": "Typed body" }),
-        ))
-        .await
-        .unwrap();
+    let response = success(
+        builder_registry()
+            .run(request(
+                "issues create --title $args.title --body $args.body",
+                json!({ "title": "Typed title", "body": "Typed body" }),
+            ))
+            .await
+            .unwrap(),
+    );
 
     let output = response.output.unwrap().structured.unwrap();
     assert_eq!(output["title"], "Typed title");

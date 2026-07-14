@@ -21,6 +21,15 @@ use schemars::schema_for;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+fn success(outcome: mcp_twill::CommandExecutionOutcome) -> mcp_twill::RunResponse {
+    match outcome {
+        mcp_twill::CommandExecutionOutcome::Success(response) => response,
+        mcp_twill::CommandExecutionOutcome::ApplicationError { error, .. } => {
+            panic!("unexpected application error: {}", error.code)
+        }
+    }
+}
+
 #[derive(Default)]
 struct TestClient;
 
@@ -337,18 +346,20 @@ async fn explicit_application_argument_remains_unchanged() {
             })))
         },
     );
-    let response = registry
-        .run_with_context(
-            request(
-                "session select $args.agent_session_id",
-                json!({ "agent_session_id": "explicit-session" }),
-            ),
-            InvocationContext::new().with_conversation_identity(
-                ConversationIdentity::new("com.example.host", "ambient-session").unwrap(),
-            ),
-        )
-        .await
-        .unwrap();
+    let response = success(
+        registry
+            .run_with_context(
+                request(
+                    "session select $args.agent_session_id",
+                    json!({ "agent_session_id": "explicit-session" }),
+                ),
+                InvocationContext::new().with_conversation_identity(
+                    ConversationIdentity::new("com.example.host", "ambient-session").unwrap(),
+                ),
+            )
+            .await
+            .unwrap(),
+    );
     let output = response.output.unwrap().structured.unwrap();
     assert_eq!(output["agentSessionId"], "explicit-session");
     assert_eq!(output["ambientIssuer"], "com.example.host");
@@ -374,7 +385,7 @@ async fn framework_projections_never_serialize_raw_identity_or_private_digest() 
     );
     let run = request("session inspect", json!({}));
     let plan = registry.build_plan_with_context(&run, &context).unwrap();
-    let response = registry.run_with_context(run, context).await.unwrap();
+    let response = success(registry.run_with_context(run, context).await.unwrap());
 
     let digest = {
         let bytes = serde_json::to_vec(&json!([
