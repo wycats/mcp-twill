@@ -2,7 +2,7 @@
 
 # RFC 0014: Application Result Contracts
 
-- Status: Draft
+- Status: Accepted
 - Area: command results, output schemas, application errors, recovery, MCP projection
 - Target milestone: v0.4
 - Depends on: RFC 0001 (authoritative command catalog), RFC 0002 (diagnostics and response profiles), RFC 0010 (declared preconditions), RFC 0012 (first-class resources)
@@ -1095,7 +1095,7 @@ RFC 0012 provides the closest internal precedent: handler signatures derive reso
 
 ## Unresolved Questions
 
-No architectural questions remain for the initial result boundary. The Rust names and macro forms in this body are the current Stage-0 proposal; any review-driven rename or ergonomic change must amend the managed RFC before Stage 1, and implementation may not substitute an unreviewed spelling. Such a revision must retain one outcome-aware execution family, distinct command and producer error footprints, and portable application values without supplemental legacy components.
+No architectural questions remain for the initial result boundary. The Rust names and macro forms in this body are the accepted Stage-1 implementation contract; implementation may not substitute an unreviewed spelling. Any later review-driven rename or ergonomic change must return the RFC to design review and amend the managed body before implementation proceeds. Such a revision must retain one outcome-aware execution family, distinct command and producer error footprints, and portable application values without supplemental legacy components.
 
 ## Future Possibilities
 
