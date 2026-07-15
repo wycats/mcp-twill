@@ -7,10 +7,10 @@ use std::{
 
 use mcp_twill::{
     ApplicationError, ApplicationErrorDecl, ApplicationErrorUse, ApplicationResult,
-    ApplicationSuccess, CapabilityDecl, CommandContext, CommandOutput, CommandRegistry, EventSink,
-    Field, FrameworkEvent, Grant, InvocationPlan, Listing, ReadResource, Release, Res,
-    ResolveResource, Resource, ResourceDecl, ResourceRefusal, Result, TypeDecl, Variant,
-    WorkspaceDecl, application_error_set, arg,
+    ApplicationSuccess, ArgumentSchemaDecl, CapabilityDecl, CommandContext, CommandOutput,
+    CommandRegistry, EventSink, Field, FrameworkEvent, Grant, InvocationPlan, JsonInteger, Listing,
+    ReadResource, Release, Res, ResolveResource, Resource, ResourceDecl, ResourceRefusal, Result,
+    TypeDecl, Variant, WorkspaceDecl, application_error_set, arg,
 };
 use rmcp::{ServiceExt, transport::stdio};
 use schemars::JsonSchema;
@@ -92,6 +92,56 @@ async fn create_issue(_context: CommandContext, args: CreateIssueArgs) -> Result
         "title": args.title,
         "body": args.body,
         "status": "open"
+    })))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[schemars(inline)]
+enum WaitCondition {
+    Delay {
+        duration_ms: JsonInteger,
+    },
+    Text {
+        #[schemars(length(min = 1))]
+        text: String,
+        state: WaitState,
+    },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+enum WaitState {
+    Visible,
+    Hidden,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WaitArgs {
+    condition: WaitCondition,
+    timeout_ms: Option<JsonInteger>,
+}
+
+async fn wait_for_page(_context: CommandContext, args: WaitArgs) -> Result<CommandOutput> {
+    let condition = match args.condition {
+        WaitCondition::Delay { duration_ms } => {
+            json!({ "kind": "delay", "duration_ms": duration_ms })
+        }
+        WaitCondition::Text { text, state } => json!({
+            "kind": "text",
+            "text": text,
+            "state": match state {
+                WaitState::Visible => "visible",
+                WaitState::Hidden => "hidden",
+            }
+        }),
+    };
+    Ok(CommandOutput::structured(json!({
+        "condition": condition,
+        "timeout_ms": args.timeout_ms,
+        "completed": true,
     })))
 }
 
@@ -252,6 +302,66 @@ pub fn registry() -> Result<CommandRegistry> {
                             .fallback("the issue number is not known"),
                     ),
             );
+
+            server.argument_schema(ArgumentSchemaDecl::new(
+                "wait-condition",
+                "A browser condition to wait for",
+                json!({
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": { "const": "delay" },
+                                "duration_ms": { "type": "integer" }
+                            },
+                            "required": ["kind", "duration_ms"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": { "const": "text" },
+                                "text": { "type": "string", "minLength": 1 },
+                                "state": {
+                                    "type": "string",
+                                    "enum": ["visible", "hidden"]
+                                }
+                            },
+                            "required": ["kind", "text", "state"],
+                            "additionalProperties": false
+                        }
+                    ]
+                }),
+            ));
+
+            server.command("page wait", |command| {
+                command
+                    .summary("Wait for a page condition")
+                    .description("Waits for a declared delay or text-state condition.")
+                    .arg(
+                        arg::named_schema("condition", "wait-condition")
+                            .summary("Condition that completes the wait"),
+                    )
+                    .arg(
+                        arg::integer("timeout_ms")
+                            .summary("Maximum wait time in milliseconds")
+                            .optional(),
+                    )
+                    .read("page", "Observes the requested page condition")
+                    .example_with_args(
+                        "page wait --condition $args.condition --timeout-ms $args.timeout_ms",
+                        "Wait until text is visible",
+                        json!({
+                            "condition": {
+                                "kind": "text",
+                                "text": "Ready",
+                                "state": "visible"
+                            },
+                            "timeout_ms": 5000
+                        }),
+                    )
+                    .handle_constrained(wait_for_page);
+            });
 
             server.command("issues create", |command| {
                 command

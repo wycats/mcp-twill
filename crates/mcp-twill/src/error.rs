@@ -75,6 +75,16 @@ pub enum FrameworkError {
         problems: Vec<(String, String)>,
     },
     #[error(
+        "argument `{argument}` does not satisfy its schema at `{path}` ({keyword}); expected {expected}"
+    )]
+    ArgumentSchemaMismatch {
+        argument: String,
+        path: String,
+        keyword: crate::ArgumentSchemaKeyword,
+        expected: String,
+        branches: Vec<crate::SchemaBranchProblem>,
+    },
+    #[error(
         "{}",
         workspace_mismatch_message(argument, workspace, selected_root, diagnostics)
     )]
@@ -181,6 +191,12 @@ pub enum FrameworkError {
     ResultContractViolation {
         boundary: crate::ResultContractBoundary,
         reason: crate::ResultContractReason,
+    },
+    #[error("declared argument contract was violated")]
+    ArgumentContractViolation {
+        operation_id: String,
+        argument: Option<String>,
+        reason: crate::ArgumentContractReason,
     },
     #[error("command handler failed: {0}")]
     Handler(String),

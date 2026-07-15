@@ -22,6 +22,7 @@ pub enum ArgType {
     Json,
     Bool,
     Number,
+    Integer,
     /// References a `TypeDecl` by name; values are matched against the
     /// declared union's variants by the planner.
     Named(String),
@@ -39,12 +40,30 @@ impl ArgType {
             ArgType::Json => "JSON",
             ArgType::Bool => "a boolean",
             ArgType::Number => "a number",
+            ArgType::Integer => "an integer",
             ArgType::Named(_) => "a value matching a declared type",
             ArgType::ResourceRef(_) => "a resource reference string",
         }
     }
 }
 
+/// One command argument declaration.
+///
+/// Schema authorship is intentionally split between explicit named and
+/// inline constructors. RFC 0008 named union arguments keep `named`; there is
+/// no overloaded `schema` constructor whose string/JSON meaning is ambiguous.
+///
+/// ```compile_fail
+/// use mcp_twill::ArgSpec;
+///
+/// let _ = ArgSpec::schema("value", "named-or-inline", "Value");
+/// ```
+///
+/// ```compile_fail
+/// use mcp_twill::arg;
+///
+/// let _ = arg::schema("value", "named-or-inline");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ArgSpec {
@@ -56,6 +75,10 @@ pub struct ArgSpec {
     pub workspace: Option<String>,
     #[serde(default)]
     pub repeated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<crate::ArgumentSchemaUse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_arguments: Vec<String>,
 }
 
 impl ArgSpec {
@@ -67,6 +90,8 @@ impl ArgSpec {
             summary: summary.into(),
             workspace: None,
             repeated: false,
+            schema: None,
+            requires_arguments: Vec::new(),
         }
     }
 
@@ -82,6 +107,8 @@ impl ArgSpec {
             summary: summary.into(),
             workspace: Some(workspace.into()),
             repeated: false,
+            schema: None,
+            requires_arguments: Vec::new(),
         }
     }
 
@@ -97,11 +124,106 @@ impl ArgSpec {
             summary: summary.into(),
             workspace: None,
             repeated: false,
+            schema: None,
+            requires_arguments: Vec::new(),
         }
     }
 
     pub fn repeated(mut self) -> Self {
         self.repeated = true;
+        self
+    }
+
+    pub fn integer(name: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value_type: ArgType::Integer,
+            required: true,
+            summary: summary.into(),
+            workspace: None,
+            repeated: false,
+            schema: None,
+            requires_arguments: Vec::new(),
+        }
+    }
+
+    pub fn enumerated(
+        name: impl Into<String>,
+        values: impl IntoIterator<Item = impl AsRef<str>>,
+        summary: impl Into<String>,
+    ) -> Self {
+        let summary = summary.into();
+        let values = values
+            .into_iter()
+            .map(|value| Value::String(value.as_ref().to_string()))
+            .collect::<Vec<_>>();
+        Self {
+            name: name.into(),
+            value_type: ArgType::String,
+            required: true,
+            summary: summary.clone(),
+            workspace: None,
+            repeated: false,
+            schema: Some(crate::ArgumentSchemaUse::inline(serde_json::json!({
+                "type": "string",
+                "enum": values,
+                "description": summary,
+            }))),
+            requires_arguments: Vec::new(),
+        }
+    }
+
+    pub fn named_schema(
+        name: impl Into<String>,
+        schema: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value_type: ArgType::Json,
+            required: true,
+            summary: summary.into(),
+            workspace: None,
+            repeated: false,
+            schema: Some(crate::ArgumentSchemaUse::named(schema)),
+            requires_arguments: Vec::new(),
+        }
+    }
+
+    pub fn inline_schema(
+        name: impl Into<String>,
+        schema: impl Into<serde_json::Value>,
+        summary: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value_type: ArgType::Json,
+            required: true,
+            summary: summary.into(),
+            workspace: None,
+            repeated: false,
+            schema: Some(crate::ArgumentSchemaUse::inline(schema)),
+            requires_arguments: Vec::new(),
+        }
+    }
+
+    pub fn with_named_schema(mut self, name: impl Into<String>) -> Self {
+        self.schema = Some(crate::ArgumentSchemaUse::named(name));
+        self
+    }
+
+    pub fn with_inline_schema(mut self, schema: impl Into<serde_json::Value>) -> Self {
+        self.schema = Some(crate::ArgumentSchemaUse::inline(schema));
+        self
+    }
+
+    pub fn requires_argument(mut self, name: impl Into<String>) -> Self {
+        self.requires_arguments.push(name.into());
+        self
+    }
+
+    pub fn optional(mut self) -> Self {
+        self.required = false;
         self
     }
 }
@@ -298,6 +420,8 @@ pub struct ResourceDecl {
     /// releasing command (lease expiry, session end).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_schema: Option<crate::ArgumentSchemaUse>,
 }
 
 impl ResourceDecl {
@@ -310,6 +434,7 @@ impl ResourceDecl {
             within: None,
             lifetime: None,
             expiry: None,
+            reference_schema: None,
         }
     }
 
@@ -342,6 +467,11 @@ impl ResourceDecl {
     /// releasing command.
     pub fn expiry(mut self, prose: impl Into<String>) -> Self {
         self.expiry = Some(prose.into());
+        self
+    }
+
+    pub fn reference_schema(mut self, schema: impl Into<crate::ArgumentSchemaUse>) -> Self {
+        self.reference_schema = Some(schema.into());
         self
     }
 
@@ -950,6 +1080,8 @@ pub struct BoundArg {
     /// for repeated arguments. Participates in the invocation fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variants: Option<ArgVariants>,
+    #[serde(default, skip_serializing_if = "crate::ArgSchemaMatch::is_empty")]
+    pub schema_match: crate::ArgSchemaMatch,
 }
 
 /// Which union variant a bound `Named` argument matched.
@@ -1241,6 +1373,12 @@ pub struct CommandContext {
     #[serde(skip)]
     #[schemars(skip)]
     invocation_context: crate::InvocationContext,
+    /// Whether this invocation's selected command activated RFC 0017's
+    /// checked typed-extraction boundary. This is dispatch-only state and is
+    /// structurally excluded from plans, responses, and schemas.
+    #[serde(skip)]
+    #[schemars(skip)]
+    checked_argument_contract: bool,
 }
 
 impl CommandContext {
@@ -1254,6 +1392,7 @@ impl CommandContext {
             stdin,
             resources,
             invocation_context: crate::InvocationContext::default(),
+            checked_argument_contract: false,
         }
     }
 
@@ -1268,7 +1407,17 @@ impl CommandContext {
             stdin,
             resources,
             invocation_context,
+            checked_argument_contract: false,
         }
+    }
+
+    pub(crate) fn with_checked_argument_contract(mut self) -> Self {
+        self.checked_argument_contract = true;
+        self
+    }
+
+    pub(crate) fn checked_argument_contract(&self) -> bool {
+        self.checked_argument_contract
     }
 
     pub fn conversation_identity(&self) -> Option<&crate::ConversationIdentity> {
@@ -1343,6 +1492,9 @@ pub fn value_matches_type(name: &str, value: &Value, value_type: &ArgType) -> Re
         ArgType::Json => true,
         ArgType::Bool => value.is_boolean(),
         ArgType::Number => value.is_number(),
+        ArgType::Integer => value
+            .as_number()
+            .is_some_and(crate::JsonInteger::number_is_integer),
         // Named types are matched against their declared variants by the
         // planner, which has the type table this function does not.
         ArgType::Named(_) => true,

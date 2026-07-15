@@ -1,3 +1,4 @@
+pub mod argument_schemas;
 pub mod builder;
 pub mod catalog;
 pub mod contract;
@@ -15,6 +16,7 @@ pub mod runtime;
 pub mod template;
 pub mod types;
 
+pub use argument_schemas::*;
 pub use builder::*;
 pub use catalog::*;
 pub use contract::{ContractViolation, verify_catalog_coverage};

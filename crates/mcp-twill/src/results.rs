@@ -641,6 +641,7 @@ pub(crate) struct PendingApplicationContract {
 pub struct ResultHandlerRegistration {
     pub(crate) handler: Arc<dyn ErasedCommandHandler>,
     pub(crate) pending: PendingApplicationContract,
+    pub(crate) argument_schema: Option<Value>,
     pub(crate) resource_uses: Vec<ResourceUse>,
     pub(crate) granted: Vec<&'static str>,
     pub(crate) enumerated: Vec<&'static str>,
@@ -677,6 +678,7 @@ struct DynamicResultHandler<M, H> {
 fn typed_registration<O, E, S>(
     handler: Arc<dyn ErasedCommandHandler>,
     resource_uses: Vec<ResourceUse>,
+    argument_schema: Option<Value>,
 ) -> ResultHandlerRegistration
 where
     O: ApplicationOutput,
@@ -690,6 +692,7 @@ where
             declarations: E::declarations(),
             uses: S::uses(),
         },
+        argument_schema,
         resource_uses,
         granted: O::granted(),
         enumerated: O::enumerated(),
@@ -791,6 +794,7 @@ where
                 _marker: PhantomData::<fn() -> ContextOnly<ApplicationOutputResult<O, E, S>>>,
             }),
             Vec::new(),
+            None,
         )
     }
 }
@@ -842,6 +846,7 @@ where
                 _marker: PhantomData::<fn() -> ContextAndArgs<A, ApplicationOutputResult<O, E, S>>>,
             }),
             Vec::new(),
+            Some(crate::argument_schemas::derived_argument_schema::<A>()),
         )
     }
 }
@@ -858,7 +863,11 @@ where
     S: ApplicationErrorSet<E>,
 {
     async fn call(&self, context: CommandContext) -> crate::Result<HandlerOutcome> {
-        let args = A::from_command_args(&context)?;
+        let args = if context.checked_argument_contract() {
+            crate::argument_schemas::extract_checked::<A>(&context)?
+        } else {
+            A::from_command_args(&context)?
+        };
         match (self.handler)(context, args).await {
             Ok(output) => application_success(output),
             Err(error) => typed_failure(error),
@@ -895,6 +904,7 @@ where
                 _marker: PhantomData::<fn() -> WithResources<P, ApplicationOutputResult<O, E, S>>>,
             }),
             P::resource_uses(),
+            None,
         )
     }
 }
@@ -952,6 +962,7 @@ where
                 >,
             }),
             P::resource_uses(),
+            Some(crate::argument_schemas::derived_argument_schema::<A>()),
         )
     }
 }
@@ -970,7 +981,11 @@ where
 {
     async fn call(&self, context: CommandContext) -> crate::Result<HandlerOutcome> {
         let params = P::extract(&context)?;
-        let args = A::from_command_args(&context)?;
+        let args = if context.checked_argument_contract() {
+            crate::argument_schemas::extract_checked::<A>(&context)?
+        } else {
+            A::from_command_args(&context)?
+        };
         match (self.handler)(params, context, args).await {
             Ok(output) => application_success(output),
             Err(error) => typed_failure(error),

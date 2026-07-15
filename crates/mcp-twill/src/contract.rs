@@ -674,7 +674,196 @@ pub fn verify_catalog_coverage(
     violations.extend(check_type_projection(registry));
     violations.extend(check_capability_projection(registry));
     violations.extend(check_result_projection(registry));
+    violations.extend(check_argument_schema_projection(registry));
     violations.extend(check_runtime_identity(registry));
+    violations
+}
+
+/// Argument constraints stay aligned across registration, declarations,
+/// catalog fields, command schemas, help, and typed handler agreement.
+pub fn check_argument_schema_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    check_argument_schema_projection_with_help(registry, |command| {
+        registry
+            .help(HelpRequest {
+                command: Some(command.to_string()),
+                topic: Some(HelpTopic::Arguments),
+                detail: None,
+            })
+            .text
+    })
+}
+
+fn check_argument_schema_projection_with_help(
+    registry: &CommandRegistry,
+    render_help: impl Fn(&str) -> String,
+) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_argument_schemas() {
+        violations.push(violation(None, "argumentSchemas", error.to_string()));
+        return violations;
+    }
+    let catalog = registry.catalog();
+    let mut expected_declarations = registry.argument_schemas().cloned().collect::<Vec<_>>();
+    for declaration in &mut expected_declarations {
+        if let Err(error) = crate::argument_schemas::canonicalize_schema(&mut declaration.schema) {
+            violations.push(violation(
+                None,
+                "argumentSchemas",
+                format!(
+                    "argument schema `{}` failed canonicalization: {error}",
+                    declaration.name
+                ),
+            ));
+        }
+    }
+    if catalog.argument_schemas != expected_declarations {
+        violations.push(violation(
+            None,
+            "argumentSchemas",
+            "catalog argument schema declarations differ from the registry",
+        ));
+    }
+    if catalog.identity != registry.catalog_identity() {
+        violations.push(violation(
+            None,
+            "catalogHash",
+            "catalog identity differs from the registry argument-schema identity",
+        ));
+    }
+    let server_help = registry
+        .help(HelpRequest {
+            command: None,
+            topic: None,
+            detail: None,
+        })
+        .text;
+    for declaration in &expected_declarations {
+        if !server_help.contains(&format!("`{}`", declaration.name)) {
+            violations.push(violation(
+                None,
+                "help",
+                format!(
+                    "server help does not render argument schema `{}`",
+                    declaration.name
+                ),
+            ));
+        }
+    }
+    for command in registry.command_specs() {
+        let operation_id = crate::OperationSpec::from_command_spec(command).id;
+        let help = render_help(&command.name());
+        let schema = registry.arg_schema(command);
+        let catalog_operation = catalog
+            .operations
+            .iter()
+            .find(|operation| operation.path == command.path);
+        let mut expected_catalog_args = command.args.clone();
+        crate::registry::canonicalize_catalog_argument_schemas(&mut expected_catalog_args);
+        if catalog_operation.map(|operation| &operation.args) != Some(&expected_catalog_args) {
+            violations.push(violation(
+                Some(&operation_id),
+                "catalog",
+                "catalog arguments differ from the registered command",
+            ));
+        }
+        for arg in &command.args {
+            if arg.schema.is_none()
+                && arg.requires_arguments.is_empty()
+                && !matches!(arg.value_type, crate::ArgType::Integer)
+            {
+                continue;
+            }
+            if !help.contains(&format!("`$args.{}`", arg.name)) {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "help",
+                    format!("constrained argument `{}` is missing from help", arg.name),
+                ));
+            }
+            if let Some(crate::ArgumentSchemaUse::Named { name }) = &arg.schema
+                && !help.contains(&format!("Schema `{name}`"))
+            {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "help",
+                    format!("named argument schema `{name}` is not rendered"),
+                ));
+            }
+            let projected_property = schema
+                .get("properties")
+                .and_then(|properties| properties.get(&arg.name));
+            if projected_property.is_none() {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "schema",
+                    format!("constrained argument `{}` is missing", arg.name),
+                ));
+            } else if let Ok(Some(compiled)) = crate::argument_schemas::compile_argument_schema(
+                arg,
+                &registry
+                    .argument_schemas()
+                    .cloned()
+                    .map(|declaration| (declaration.name.clone(), declaration))
+                    .collect(),
+            ) {
+                let mut expected = compiled.schema;
+                let definitions = expected
+                    .as_object_mut()
+                    .and_then(|schema| schema.remove("$defs"));
+                if projected_property != Some(&expected) {
+                    violations.push(violation(
+                        Some(&operation_id),
+                        "schema",
+                        format!(
+                            "argument `{}` property differs from its compiled schema",
+                            arg.name
+                        ),
+                    ));
+                }
+                if let Some(definitions) = definitions {
+                    let definitions_match = definitions.as_object().is_some_and(|expected| {
+                        let projected = schema.get("$defs").and_then(serde_json::Value::as_object);
+                        expected.iter().all(|(name, definition)| {
+                            projected.and_then(|values| values.get(name)) == Some(definition)
+                        })
+                    });
+                    if !definitions_match {
+                        violations.push(violation(
+                            Some(&operation_id),
+                            "schema",
+                            format!(
+                                "argument `{}` definitions differ from its compiled schema",
+                                arg.name
+                            ),
+                        ));
+                    }
+                }
+            }
+            for target in &arg.requires_arguments {
+                let projected = schema
+                    .get("dependentRequired")
+                    .and_then(|requirements| requirements.get(&arg.name))
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|targets| {
+                        targets
+                            .iter()
+                            .any(|candidate| candidate.as_str() == Some(target))
+                    });
+                if !projected
+                    || !help.contains(&format!("when supplied, also requires `$args.{target}`"))
+                {
+                    violations.push(violation(
+                        Some(&operation_id),
+                        "argumentRequirements",
+                        format!(
+                            "presence edge `{}` -> `{target}` is missing from schema or help",
+                            arg.name
+                        ),
+                    ));
+                }
+            }
+        }
+    }
     violations
 }
 
@@ -762,15 +951,25 @@ pub fn check_type_projection(registry: &CommandRegistry) -> Vec<ContractViolatio
                 "argument schema has a top-level `oneOf`; unions must inline at the property level",
             ));
         }
-        for forbidden in ["$ref", "$defs"] {
-            if schema_contains_key(&schema, forbidden) {
-                violations.push(violation(
-                    Some(&command.path.join(" ")),
-                    "schema",
-                    format!(
-                        "argument schema contains `{forbidden}`; named types must be fully inlined"
-                    ),
-                ));
+        for arg in command
+            .args
+            .iter()
+            .filter(|arg| matches!(arg.value_type, crate::ArgType::Named(_)))
+        {
+            let property = schema
+                .get("properties")
+                .and_then(|properties| properties.get(&arg.name));
+            for forbidden in ["$ref", "$defs"] {
+                if property.is_some_and(|property| schema_contains_key(property, forbidden)) {
+                    violations.push(violation(
+                        Some(&command.path.join(" ")),
+                        "schema",
+                        format!(
+                            "named argument `{}` contains `{forbidden}`; named types must be fully inlined",
+                            arg.name
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -1316,6 +1515,13 @@ macro_rules! contract_tests {
         }
 
         #[test]
+        fn contract_argument_schema_projection() {
+            $crate::contract::assert_no_violations(
+                $crate::contract::check_argument_schema_projection(&$registry()),
+            );
+        }
+
+        #[test]
         fn contract_guidance_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_guidance_projection(
                 &$registry(),
@@ -1427,6 +1633,32 @@ mod result_projection_tests {
             violations
                 .iter()
                 .any(|violation| violation.message.contains("result summary")),
+            "violations: {violations:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod argument_schema_projection_tests {
+    use super::*;
+    use crate::{ArgSpec, CommandOutput, CommandSpec};
+    use serde_json::json;
+
+    #[test]
+    fn missing_argument_schema_help_is_a_contract_violation() {
+        let registry = CommandRegistry::new("contract", "Contract").register(
+            CommandSpec::new(["search"], "Search", "Search").with_arg(ArgSpec::inline_schema(
+                "query",
+                json!({ "type": "string", "minLength": 1 }),
+                "Search query",
+            )),
+            |_context| async { Ok(CommandOutput::structured(json!({}))) },
+        );
+        let violations = check_argument_schema_projection_with_help(&registry, |_| String::new());
+        assert!(
+            violations.iter().any(|violation| violation
+                .message
+                .contains("constrained argument `query` is missing from help")),
             "violations: {violations:?}"
         );
     }

@@ -60,6 +60,7 @@ pub enum ErrorCode {
     HandlerFailed,
     ApplicationError,
     ResultContractViolation,
+    ArgumentContractViolation,
 }
 
 impl ErrorCode {
@@ -75,6 +76,7 @@ impl ErrorCode {
             FrameworkError::MissingArgument(_) => Self::MissingArgument,
             FrameworkError::InvalidArgumentType(_, _) => Self::InvalidArgumentType,
             FrameworkError::ArgumentUnionMismatch { .. } => Self::InvalidArgumentType,
+            FrameworkError::ArgumentSchemaMismatch { .. } => Self::InvalidArgumentType,
             FrameworkError::WorkspaceMismatch { .. } => Self::WorkspaceMismatch,
             FrameworkError::WorkspaceUnresolved { .. } => Self::UnresolvedWorkspaceRequirement,
             FrameworkError::CapabilityMissing { .. } => Self::CapabilityMissing,
@@ -92,6 +94,7 @@ impl ErrorCode {
             FrameworkError::Build(_) => Self::BuildFailed,
             FrameworkError::Handler(_) => Self::HandlerFailed,
             FrameworkError::ResultContractViolation { .. } => Self::ResultContractViolation,
+            FrameworkError::ArgumentContractViolation { .. } => Self::ArgumentContractViolation,
         }
     }
 }
@@ -400,6 +403,9 @@ impl ResponseEnvelope {
             FrameworkError::ResultContractViolation { .. } => {
                 "The declared result contract was violated".to_string()
             }
+            FrameworkError::ArgumentContractViolation { .. } => {
+                "The declared argument contract was violated".to_string()
+            }
             _ => error.to_string(),
         };
         let command = plan.as_ref().map(|plan| plan.command_path.clone());
@@ -422,7 +428,11 @@ impl ResponseEnvelope {
         let steering = steering_for_error(&error, retry.as_ref());
         let mut diagnostics = vec![diagnostic];
         diagnostics.extend(workspace_diagnostics(&error));
-        let plan = if matches!(&error, FrameworkError::ResultContractViolation { .. }) {
+        let plan = if matches!(
+            &error,
+            FrameworkError::ResultContractViolation { .. }
+                | FrameworkError::ArgumentContractViolation { .. }
+        ) {
             None
         } else {
             plan
@@ -558,7 +568,8 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
         FrameworkError::ApprovalInvalid(_) => ResponseStatus::ApprovalInvalid,
         FrameworkError::Handler(_)
         | FrameworkError::Build(_)
-        | FrameworkError::ResultContractViolation { .. } => ResponseStatus::Failed,
+        | FrameworkError::ResultContractViolation { .. }
+        | FrameworkError::ArgumentContractViolation { .. } => ResponseStatus::Failed,
         _ => ResponseStatus::InvalidInput,
     }
 }
@@ -622,6 +633,19 @@ fn error_details(error: &FrameworkError) -> Value {
                 .iter()
                 .map(|(variant, problem)| json!({ "variant": variant, "problem": problem }))
                 .collect::<Vec<_>>(),
+        }),
+        FrameworkError::ArgumentSchemaMismatch {
+            argument,
+            path,
+            keyword,
+            expected,
+            branches,
+        } => json!({
+            "argument": argument,
+            "path": path,
+            "keyword": keyword,
+            "expected": expected,
+            "branches": branches,
         }),
         FrameworkError::WorkspaceMismatch {
             argument,
@@ -738,6 +762,15 @@ fn error_details(error: &FrameworkError) -> Value {
             "boundary": boundary,
             "reason": reason,
         }),
+        FrameworkError::ArgumentContractViolation {
+            operation_id,
+            argument,
+            reason,
+        } => json!({
+            "operation": operation_id,
+            "argument": argument,
+            "reason": reason,
+        }),
         FrameworkError::EmptyCommand | FrameworkError::UnterminatedQuote => json!({}),
     }
 }
@@ -800,6 +833,18 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
                 name: name.to_string(),
             })
         }
+        FrameworkError::ArgumentSchemaMismatch { argument, .. } => {
+            Some(DiagnosticLocation::Argument {
+                name: argument.clone(),
+            })
+        }
+        FrameworkError::ArgumentContractViolation { argument, .. } => {
+            argument
+                .as_ref()
+                .map(|argument| DiagnosticLocation::Argument {
+                    name: argument.clone(),
+                })
+        }
         FrameworkError::WorkspaceMismatch { workspace, .. }
         | FrameworkError::WorkspaceUnresolved { workspace, .. } => {
             Some(DiagnosticLocation::Workspace {
@@ -846,6 +891,7 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
     let expected = match error {
         FrameworkError::InvalidArgumentType(_, expected) => Some(json!(expected)),
         FrameworkError::ArgumentUnionMismatch { type_name, .. } => Some(json!(type_name)),
+        FrameworkError::ArgumentSchemaMismatch { expected, .. } => Some(json!(expected)),
         FrameworkError::InvalidConversationIdentity { expected, .. } => {
             expected.as_ref().map(|expected| json!(expected))
         }
@@ -858,6 +904,9 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
             FrameworkError::Handler(_) => "Command handler failed".to_string(),
             FrameworkError::ResultContractViolation { .. } => {
                 "The declared result contract was violated".to_string()
+            }
+            FrameworkError::ArgumentContractViolation { .. } => {
+                "The declared argument contract was violated".to_string()
             }
             _ => error.to_string(),
         },

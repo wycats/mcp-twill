@@ -8,6 +8,7 @@
 use mcp_twill::{
     ArgSpec, CommandExample, CommandOutput, CommandRegistry, CommandSpec, Field, TypeDecl, Variant,
 };
+use serde_json::Value;
 use serde_json::json;
 
 pub const PREAMBLE: &str =
@@ -299,6 +300,73 @@ pub fn registry() -> CommandRegistry {
             ),
             _ => spec,
         };
+        registry = registry.register(spec, |_context| async {
+            Ok(CommandOutput::structured(json!({})))
+        });
+    }
+    registry
+}
+
+/// RFC 0017's owner-local adoption of the released per-operation input
+/// schemas. The observation supplies the frozen property contracts; Twill
+/// owns their property-level authoring and the one catalog presence relation
+/// that v0.4.9 enforced outside its ungrouped schemas.
+pub fn argument_schema_registry(baseline: &Value) -> CommandRegistry {
+    let paths = OPERATION_MAPPING
+        .iter()
+        .map(|(released, path, title)| (*released, (*path, *title)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut registry = CommandRegistry::new(
+        "vbl-argument-schemas",
+        "Visible Browser Lab argument schema adoption fixture",
+    );
+    for tool in baseline.as_array().expect("VBL baseline tools") {
+        let name = tool["name"].as_str().expect("VBL tool name");
+        let (path, title) = paths[name];
+        let input = tool["inputSchema"].as_object().expect("VBL input schema");
+        let required = input["required"]
+            .as_array()
+            .expect("VBL required list")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        let mut spec = CommandSpec::new(
+            path.split_whitespace(),
+            title,
+            format!("RFC 0017 VBL schema adoption for `{name}`."),
+        );
+        let properties = input["properties"]
+            .as_object()
+            .expect("VBL property schemas");
+        let argument_order = required
+            .iter()
+            .copied()
+            .chain(
+                properties
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|argument| !required.contains(argument)),
+            )
+            .collect::<Vec<_>>();
+        for argument in argument_order {
+            let schema = &properties[argument];
+            let summary = schema
+                .get("description")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("VBL `{argument}` argument"));
+            let mut arg = ArgSpec::inline_schema(argument, schema.clone(), summary);
+            if !required.contains(&argument) {
+                arg = arg.optional();
+            }
+            if name == "screencast_start" && argument == "max_width" {
+                arg = arg.requires_argument("max_height");
+            }
+            if name == "screencast_start" && argument == "max_height" {
+                arg = arg.requires_argument("max_width");
+            }
+            spec = spec.with_arg(arg);
+        }
         registry = registry.register(spec, |_context| async {
             Ok(CommandOutput::structured(json!({})))
         });

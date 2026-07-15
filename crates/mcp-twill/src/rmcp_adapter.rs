@@ -194,6 +194,7 @@ impl CliMcpServer {
         registry.validate_effects()?;
         registry.validate_guidance()?;
         registry.validate_types()?;
+        registry.validate_argument_schemas()?;
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
         registry.validate_resources()?;
