@@ -2472,16 +2472,17 @@ impl CommandRegistry {
     }
 
     fn command_help(&self, command: &str, topic: HelpTopic) -> HelpResult {
-        let spec = self
-            .commands
-            .values()
-            .find(|registered| registered.spec.path.join(".") == command)
-            .map(|registered| &registered.spec)
+        let spec = CommandTemplate::parse(command)
+            .ok()
+            .and_then(|template| {
+                self.match_command(&template)
+                    .map(|registered| &registered.spec)
+            })
             .or_else(|| {
-                CommandTemplate::parse(command).ok().and_then(|template| {
-                    self.match_command(&template)
-                        .map(|registered| &registered.spec)
-                })
+                self.commands
+                    .values()
+                    .find(|registered| registered.spec.path.join(".") == command)
+                    .map(|registered| &registered.spec)
             });
 
         let Some(spec) = spec else {

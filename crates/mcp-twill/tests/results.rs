@@ -442,10 +442,15 @@ async fn application_error_stays_out_of_framework_error_and_shapes_recovery() {
 
 #[test]
 fn recovery_help_preserves_literal_dots_in_command_path_segments() {
-    let registry = CommandRegistry::new("dotted", "Dotted command").register(
-        CommandSpec::new(["session.start"], "Literal dot", "Literal dotted command"),
-        |_| async { Ok(CommandOutput::structured(json!({}))) },
-    );
+    let registry = CommandRegistry::new("dotted", "Dotted command")
+        .register(
+            CommandSpec::new(["session.start"], "Literal dot", "Literal dotted command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        )
+        .register(
+            CommandSpec::new(["session", "start"], "Two segments", "Two segment command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        );
     let help = registry.help(HelpRequest {
         command: Some("session.start".to_string()),
         topic: None,
@@ -1079,6 +1084,14 @@ fn schema_dialect_canonicalizes_supported_forms_and_rejects_drift() {
         .success_schema;
     assert_eq!(schema, &json!({ "type": ["string", "null"] }));
 
+    let literal_ref = explicit_schema_registry(json!({
+        "type": "object",
+        "properties": {
+            "payload": { "const": { "$ref": "literal", "nested": [{ "$ref": "also-literal" }] } }
+        }
+    }));
+    literal_ref.validate_results().unwrap();
+
     for schema in [
         json!({ "type": "object", "title": 42 }),
         json!({ "type": "object", "description": false }),
@@ -1092,6 +1105,19 @@ fn schema_dialect_canonicalizes_supported_forms_and_rejects_drift() {
                 .contains("must be a string")
         );
     }
+
+    let duplicate_required = explicit_schema_registry(json!({
+        "type": "object",
+        "properties": { "value": { "type": "string" } },
+        "required": ["value", "value"]
+    }));
+    assert!(
+        duplicate_required
+            .validate_results()
+            .unwrap_err()
+            .to_string()
+            .contains("entries must be unique")
+    );
 
     for unsupported in [
         json!(true),
@@ -1138,7 +1164,7 @@ fn typed_schema_normalizes_rust_storage_constraints() {
     }
     let contract = ApplicationResultContract::for_type::<Numbers>();
     let text = contract.success_schema.to_string();
-    assert!(!text.contains("format"));
+    assert!(!text.contains("format"), "{text}");
     assert!(!text.contains("minimum"));
     assert!(!text.contains("maximum"));
     assert!(text.contains("null"));
@@ -1167,7 +1193,7 @@ fn typed_schema_rejects_authored_numeric_bounds_instead_of_broadening() {
 
     let contract = ApplicationResultContract::for_type::<PositiveCount>();
     assert_eq!(contract.success_schema["minimum"], 1);
-    assert!(contract.success_schema.get("format").is_none());
+    assert_eq!(contract.success_schema["format"], "uint32");
     let registry = CommandRegistry::new("bounded", "Bounded").register_dynamic(
         CommandSpec::new(["bounded"], "Bounded", "Bounded").with_output(OutputContract {
             application: Some(contract),
@@ -1181,9 +1207,65 @@ fn typed_schema_rejects_authored_numeric_bounds_instead_of_broadening() {
     assert!(
         error
             .to_string()
-            .contains("unsupported result schema keyword `minimum`"),
+            .contains("unsupported result schema keyword `format`"),
         "{error}"
     );
+}
+
+#[test]
+fn typed_schema_only_strips_formats_from_recognized_storage_shapes() {
+    #[derive(Serialize)]
+    struct StringWithIntegerFormat(String);
+
+    impl JsonSchema for StringWithIntegerFormat {
+        fn schema_name() -> Cow<'static, str> {
+            "StringWithIntegerFormat".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({ "type": "string", "format": "uint32" })
+                .try_into()
+                .unwrap()
+        }
+    }
+
+    #[derive(Serialize)]
+    struct IntegerWithoutStorageBounds(u32);
+
+    impl JsonSchema for IntegerWithoutStorageBounds {
+        fn schema_name() -> Cow<'static, str> {
+            "IntegerWithoutStorageBounds".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({ "type": "integer", "format": "uint32" })
+                .try_into()
+                .unwrap()
+        }
+    }
+
+    for contract in [
+        ApplicationResultContract::for_type::<StringWithIntegerFormat>(),
+        ApplicationResultContract::for_type::<IntegerWithoutStorageBounds>(),
+    ] {
+        assert_eq!(contract.success_schema["format"], "uint32");
+        let registry = CommandRegistry::new("format", "Format").register_dynamic(
+            CommandSpec::new(["format"], "Format", "Format").with_output(OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            }),
+            |_context| async {
+                Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+            },
+        );
+        assert!(
+            registry
+                .validate_results()
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported result schema keyword `format`")
+        );
+    }
 }
 
 #[test]

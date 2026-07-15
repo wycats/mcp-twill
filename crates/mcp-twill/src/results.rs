@@ -25,8 +25,8 @@ use crate::{
 
 const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const MAX_PUBLIC_SCALARS: usize = 512;
-type NumericBounds = (Option<Value>, Option<Value>);
-type RustStorageBounds = BTreeMap<String, NumericBounds>;
+type NumericShape = (Value, Option<Value>, Option<Value>);
+type RustStorageShapes = BTreeMap<String, NumericShape>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1633,6 +1633,16 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
                 "result schema `required` entries must be strings",
             ));
         }
+        let mut names = BTreeSet::new();
+        if required
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|name| !names.insert(name))
+        {
+            return Err(build_error(
+                "result schema `required` entries must be unique",
+            ));
+        }
         if let Some(properties) = object.get("properties").and_then(Value::as_object)
             && required
                 .iter()
@@ -1785,7 +1795,7 @@ fn visit_schema_refs(
                 visiting.remove(name);
             }
             for (key, nested) in object {
-                if key != "$defs" {
+                if !matches!(key.as_str(), "$defs" | "const" | "enum") {
                     visit_schema_refs(nested, definitions, reachable, visiting)?;
                 }
             }
@@ -1813,18 +1823,16 @@ fn normalize_typed_schema_at(value: &mut Value, definitions: &Map<String, Value>
     match value {
         Value::Object(object) => {
             if let Some(format) = object.get("format").and_then(Value::as_str)
-                && let Some((storage_minimum, storage_maximum)) = rust_storage_bounds().get(format)
+                && let Some((storage_type, storage_minimum, storage_maximum)) =
+                    rust_storage_shapes().get(format)
+                && schema_type_matches_storage(object.get("type"), storage_type)
+                && object.get("minimum") == storage_minimum.as_ref()
+                && object.get("maximum") == storage_maximum.as_ref()
             {
-                if storage_minimum
-                    .as_ref()
-                    .is_some_and(|minimum| object.get("minimum") == Some(minimum))
-                {
+                if storage_minimum.is_some() {
                     object.remove("minimum");
                 }
-                if storage_maximum
-                    .as_ref()
-                    .is_some_and(|maximum| object.get("maximum") == Some(maximum))
-                {
+                if storage_maximum.is_some() {
                     object.remove("maximum");
                 }
                 object.remove("format");
@@ -1865,17 +1873,30 @@ fn normalize_typed_schema_at(value: &mut Value, definitions: &Map<String, Value>
     }
 }
 
-fn rust_storage_bounds() -> &'static RustStorageBounds {
-    static BOUNDS: OnceLock<RustStorageBounds> = OnceLock::new();
-    BOUNDS.get_or_init(|| {
-        fn insert<T: JsonSchema>(bounds: &mut RustStorageBounds) {
+fn schema_type_matches_storage(actual: Option<&Value>, storage_type: &Value) -> bool {
+    actual == Some(storage_type)
+        || actual.and_then(Value::as_array).is_some_and(|types| {
+            types.len() == 2
+                && types.iter().any(|kind| kind == storage_type)
+                && types.iter().any(|kind| kind == "null")
+        })
+}
+
+fn rust_storage_shapes() -> &'static RustStorageShapes {
+    static SHAPES: OnceLock<RustStorageShapes> = OnceLock::new();
+    SHAPES.get_or_init(|| {
+        fn insert<T: JsonSchema>(shapes: &mut RustStorageShapes) {
             let generator = SchemaSettings::draft2020_12().into_generator();
             let schema = serde_json::to_value(generator.into_root_schema_for::<T>())
                 .expect("Schemars primitive schema serializes as JSON");
-            if let Some(format) = schema.get("format").and_then(Value::as_str) {
-                bounds.insert(
+            if let (Some(format), Some(storage_type)) = (
+                schema.get("format").and_then(Value::as_str),
+                schema.get("type").cloned(),
+            ) {
+                shapes.insert(
                     format.to_string(),
                     (
+                        storage_type,
                         schema.get("minimum").cloned(),
                         schema.get("maximum").cloned(),
                     ),
@@ -1883,20 +1904,20 @@ fn rust_storage_bounds() -> &'static RustStorageBounds {
             }
         }
 
-        let mut bounds = BTreeMap::new();
-        insert::<i8>(&mut bounds);
-        insert::<i16>(&mut bounds);
-        insert::<i32>(&mut bounds);
-        insert::<i64>(&mut bounds);
-        insert::<i128>(&mut bounds);
-        insert::<u8>(&mut bounds);
-        insert::<u16>(&mut bounds);
-        insert::<u32>(&mut bounds);
-        insert::<u64>(&mut bounds);
-        insert::<u128>(&mut bounds);
-        insert::<f32>(&mut bounds);
-        insert::<f64>(&mut bounds);
-        bounds
+        let mut shapes = BTreeMap::new();
+        insert::<i8>(&mut shapes);
+        insert::<i16>(&mut shapes);
+        insert::<i32>(&mut shapes);
+        insert::<i64>(&mut shapes);
+        insert::<i128>(&mut shapes);
+        insert::<u8>(&mut shapes);
+        insert::<u16>(&mut shapes);
+        insert::<u32>(&mut shapes);
+        insert::<u64>(&mut shapes);
+        insert::<u128>(&mut shapes);
+        insert::<f32>(&mut shapes);
+        insert::<f64>(&mut shapes);
+        shapes
     })
 }
 
