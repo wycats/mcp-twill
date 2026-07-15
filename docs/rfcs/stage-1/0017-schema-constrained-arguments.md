@@ -2,7 +2,7 @@
 
 # RFC 0017: Schema-Constrained Arguments
 
-- Status: Draft
+- Status: Accepted
 - Area: command arguments, JSON Schema, planning, diagnostics, native projection
 - Target milestone: v0.4
 - Depends on: RFC 0001 (authoritative command catalog), RFC 0002 (diagnostics and response profiles), RFC 0008 (named argument types and unions), RFC 0014 (shared JSON Schema contract machinery)
