@@ -296,6 +296,7 @@ impl ServerBuilder {
             .collect::<BTreeMap<_, _>>();
         for command in &mut self.commands {
             let spec = &mut command.spec;
+            let inject_carriers = matches!(&command.handler, BuiltHandler::Legacy(_));
             let mut injected = BTreeSet::new();
             let resolved = spec
                 .requires_resources
@@ -312,6 +313,9 @@ impl ServerBuilder {
                 let Some(decl) = decls.get(&resource) else {
                     continue;
                 };
+                if !inject_carriers {
+                    continue;
+                }
                 let carrier = decl.carrier_name();
                 // A hand-written argument under the carrier name would
                 // shadow the injected one with a different type or
@@ -734,6 +738,15 @@ impl CommandBuilder {
             .extend(granted.iter().map(|name| (*name).to_string()));
         self.enumerates
             .extend(enumerated.iter().map(|name| (*name).to_string()));
+        for values in [
+            &mut self.requires_resources,
+            &mut self.releases,
+            &mut self.grants,
+            &mut self.enumerates,
+        ] {
+            values.sort();
+            values.dedup();
+        }
     }
 
     pub fn handle_typed<A, H, Fut>(&mut self, handler: H) -> &mut Self

@@ -71,6 +71,7 @@ struct RegisteredCommand {
     spec: CommandSpec,
     handler: Arc<dyn crate::results::ErasedCommandHandler>,
     result_kind: ResultHandlerKind,
+    result_resource_uses: Vec<crate::resource::ResourceUse>,
 }
 
 #[derive(Clone)]
@@ -147,10 +148,31 @@ impl CommandRegistry {
     /// Declares a server-held resource (RFC 0012). Lifecycle edges derive
     /// from handler signatures, never from the declaration.
     pub fn declare_resource(mut self, decl: crate::ResourceDecl) -> Self {
-        if self.resources.contains_key(&decl.name) {
+        let duplicate = self.resources.contains_key(&decl.name);
+        if duplicate {
             self.duplicate_resources.push(decl.name.clone());
         }
-        self.resources.insert(decl.name.clone(), decl);
+        let resource_name = decl.name.clone();
+        self.resources.insert(resource_name.clone(), decl);
+        if !duplicate {
+            let decl = self
+                .resources
+                .get(&resource_name)
+                .expect("inserted resource declaration")
+                .clone();
+            let mut errors = Vec::new();
+            for command in self.commands.values_mut() {
+                if command
+                    .result_resource_uses
+                    .iter()
+                    .any(|resource_use| resource_use.resource == resource_name)
+                    && let Err(error) = inject_result_resource_carrier(&mut command.spec, &decl)
+                {
+                    errors.push(error);
+                }
+            }
+            self.registration_errors.extend(errors);
+        }
         self
     }
 
@@ -244,6 +266,7 @@ impl CommandRegistry {
                 spec,
                 handler: Arc::new(crate::results::LegacyHandlerAdapter(handler)),
                 result_kind: ResultHandlerKind::Legacy,
+                result_resource_uses: Vec::new(),
             },
         );
         self.refresh_typed_result_contracts();
@@ -273,6 +296,11 @@ impl CommandRegistry {
             &registration.granted,
             &registration.enumerated,
         );
+        if let Err(error) =
+            inject_result_resource_carriers(&mut spec, &registration.resource_uses, &self.resources)
+        {
+            self.registration_errors.push(error);
+        }
         normalize_command_spec(&mut spec);
         self.commands.insert(
             spec.path.clone(),
@@ -283,6 +311,7 @@ impl CommandRegistry {
                     pending: registration.pending,
                     explicit_application,
                 },
+                result_resource_uses: registration.resource_uses,
             },
         );
         self.refresh_typed_result_contracts();
@@ -308,6 +337,11 @@ impl CommandRegistry {
             &registration.granted,
             &registration.enumerated,
         );
+        if let Err(error) =
+            inject_result_resource_carriers(&mut spec, &registration.resource_uses, &self.resources)
+        {
+            self.registration_errors.push(error);
+        }
         if let Some(contract) = spec
             .output
             .as_mut()
@@ -323,6 +357,7 @@ impl CommandRegistry {
                 spec,
                 handler: registration.handler,
                 result_kind: ResultHandlerKind::Dynamic,
+                result_resource_uses: registration.resource_uses,
             },
         );
         self.refresh_typed_result_contracts();
@@ -2859,6 +2894,49 @@ fn project_result_resources(
     }
 }
 
+fn inject_result_resource_carriers(
+    spec: &mut CommandSpec,
+    uses: &[crate::resource::ResourceUse],
+    resources: &BTreeMap<String, crate::ResourceDecl>,
+) -> Result<()> {
+    let resource_names = uses
+        .iter()
+        .map(|resource_use| resource_use.resource)
+        .collect::<BTreeSet<_>>();
+    for resource_name in resource_names {
+        if let Some(decl) = resources.get(resource_name) {
+            inject_result_resource_carrier(spec, decl)?;
+        }
+    }
+    Ok(())
+}
+
+fn inject_result_resource_carrier(
+    spec: &mut CommandSpec,
+    decl: &crate::ResourceDecl,
+) -> Result<()> {
+    let carrier = decl.carrier_name();
+    if spec.args.iter().any(|arg| arg.name == carrier) {
+        return Err(FrameworkError::Build(format!(
+            "command `{}` hand-declares argument `{carrier}`, which is the injected carrier for resource `{}`; remove the argument or rename the carrier with `carrier` on the resource declaration",
+            spec.name(),
+            decl.name
+        )));
+    }
+    spec.args.push(crate::ArgSpec {
+        name: carrier,
+        value_type: crate::ArgType::ResourceRef(decl.name.clone()),
+        required: true,
+        summary: format!(
+            "The `{}` to operate on; accepts a bare id or its URI.",
+            decl.name
+        ),
+        workspace: None,
+        repeated: false,
+    });
+    Ok(())
+}
+
 fn compile_pending_result_contract(
     spec: &CommandSpec,
     pending: &crate::results::PendingApplicationContract,
@@ -2904,7 +2982,7 @@ fn bootstrap_providers(commands: &[CommandSpec], capability: &str) -> Vec<String
                     .iter()
                     .any(|required| required == capability)
         })
-        .map(CommandSpec::name)
+        .map(|candidate| candidate.path.join("."))
         .collect::<Vec<_>>();
     providers.sort();
     providers.dedup();
@@ -2951,7 +3029,7 @@ fn validate_recovery_operations(
 ) -> Result<()> {
     let operation_ids = commands
         .iter()
-        .map(CommandSpec::name)
+        .map(|command| command.path.join("."))
         .collect::<BTreeSet<_>>();
     for error in &contract.errors {
         for recovery in &error.recoveries {

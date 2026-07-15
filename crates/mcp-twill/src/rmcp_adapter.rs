@@ -894,15 +894,11 @@ impl ServerHandler for CliMcpServer {
             let result = server
                 .execute_run_tool(tool_name, request_meta, context_meta, client, run_request)
                 .await;
-            let is_error = result.is_error.unwrap_or(false);
+            let completion_message = task_completion_message(&result);
             let mut tasks = tasks.lock().await;
             if let Some(record) = tasks.get_mut(&task_id) {
                 record.task.status = TaskStatus::Completed;
-                record.task.status_message = Some(if is_error {
-                    "Run command completed with a framework error".to_string()
-                } else {
-                    "Run command completed".to_string()
-                });
+                record.task.status_message = Some(completion_message.to_string());
                 record.task.last_updated_at = Utc::now().to_rfc3339();
                 record.payload = Some(serde_json::to_value(result).unwrap_or_else(|error| {
                     json!({
@@ -978,6 +974,23 @@ impl ServerHandler for CliMcpServer {
             meta: None,
             task: record.task.clone(),
         })
+    }
+}
+
+fn task_completion_message(result: &CallToolResult) -> &'static str {
+    if result
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+        == Some("application_error")
+    {
+        "Run command completed with an application error"
+    } else if result.is_error.unwrap_or(false) {
+        "Run command completed with a framework error"
+    } else {
+        "Run command completed"
     }
 }
 
@@ -1459,5 +1472,23 @@ mod tests {
                 .text
                 .contains("application_error")
         );
+        assert_eq!(
+            task_completion_message(&result),
+            "Run command completed with an application error"
+        );
+    }
+
+    #[test]
+    fn task_completion_distinguishes_framework_errors_and_success() {
+        let framework = CallToolResult::structured_error(json!({
+            "status": "failed",
+            "error": { "code": "handler_failed" },
+        }));
+        assert_eq!(
+            task_completion_message(&framework),
+            "Run command completed with a framework error"
+        );
+        let success = CallToolResult::structured(json!({ "status": "ok" }));
+        assert_eq!(task_completion_message(&success), "Run command completed");
     }
 }

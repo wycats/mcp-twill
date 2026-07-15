@@ -6,12 +6,12 @@ use mcp_twill::{
     ApplicationError, ApplicationErrorBody, ApplicationErrorDecl, ApplicationErrorUse,
     ApplicationMessageDecl, ApplicationOutput, ApplicationOutputResult, ApplicationRecovery,
     ApplicationRecoveryKey, ApplicationRecoverySelection, ApplicationResult,
-    ApplicationResultContract, ApplicationSuccess, CommandContext, CommandExecutionOutcome,
-    CommandOutput, CommandRegistry, CommandSpec, DynamicApplicationError, DynamicApplicationResult,
-    FrameworkError, FrameworkEvent, Grant, HelpRequest, Listing, OutputContract, OutputFormat,
-    OutputSpec, PlanFacts, Resource, ResourceDecl, ResponseEnvelope, ResponseProfile,
-    ResultContractBoundary, ResultContractReason, RunMode, RunRequest, application_error_set,
-    contract,
+    ApplicationResultContract, ApplicationSuccess, ArgType, CommandContext,
+    CommandExecutionOutcome, CommandOutput, CommandRegistry, CommandSpec, DynamicApplicationError,
+    DynamicApplicationResult, FrameworkError, FrameworkEvent, Grant, HelpRequest, InvocationPlan,
+    Listing, OutputContract, OutputFormat, OutputSpec, PlanFacts, Res, ResolveResource, Resource,
+    ResourceDecl, ResourceRefusal, ResponseEnvelope, ResponseProfile, ResultContractBoundary,
+    ResultContractReason, RunMode, RunRequest, application_error_set, contract,
 };
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Serialize;
@@ -28,6 +28,18 @@ struct Tab;
 
 impl Resource for Tab {
     const NAME: &'static str = "tab";
+}
+
+struct TabResolver;
+
+impl ResolveResource<Tab> for TabResolver {
+    async fn resolve(
+        &self,
+        _reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Tab, ResourceRefusal> {
+        Ok(Tab)
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -80,6 +92,44 @@ async fn new_tab_with_references(
     })
     .grant(Grant::<Tab>::new("tab-1"))
     .listing(Listing::<Tab>::new(["tab-1", "tab-2"])))
+}
+
+async fn inspect_tab(_tab: Res<Tab>, _: CommandContext) -> ApplicationResult<NewTabResult> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "Inspected tab".to_string(),
+    }))
+}
+
+async fn repeated_resource_edges_a(
+    _: CommandContext,
+) -> ApplicationOutputResult<
+    mcp_twill::Listed<
+        Tab,
+        mcp_twill::Granted<Tab, mcp_twill::Granted<Tab, ApplicationSuccess<NewTabResult>>>,
+    >,
+> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "New tab".to_string(),
+    })
+    .grant(Grant::<Tab>::new("tab-1"))
+    .grant(Grant::<Tab>::new("tab-2"))
+    .listing(Listing::<Tab>::new(["tab-1", "tab-2"])))
+}
+
+async fn repeated_resource_edges_b(
+    _: CommandContext,
+) -> ApplicationOutputResult<
+    mcp_twill::Granted<
+        Tab,
+        mcp_twill::Listed<Tab, mcp_twill::Granted<Tab, ApplicationSuccess<NewTabResult>>>,
+    >,
+> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "New tab".to_string(),
+    })
+    .grant(Grant::<Tab>::new("tab-1"))
+    .listing(Listing::<Tab>::new(["tab-1", "tab-2"]))
+    .grant(Grant::<Tab>::new("tab-2")))
 }
 
 #[derive(Debug)]
@@ -147,10 +197,10 @@ impl ApplicationError for BrowserFailure {
 application_error_set! {
     struct BrowserErrors for BrowserFailure {
         ApplicationErrorUse::new("session_required")
-            .recover_with("session start")
+            .recover_with("session.start")
             .at_most_one_recovery(),
         ApplicationErrorUse::new("target_missing")
-            .recover_with("tabs list")
+            .recover_with("tabs.list")
             .recover_by("refresh_page", "Refresh the page")
             .at_most_one_recovery(),
     }
@@ -338,7 +388,7 @@ async fn application_error_stays_out_of_framework_error_and_shapes_recovery() {
     assert_eq!(
         error.recoveries,
         vec![ApplicationRecovery::Operation {
-            operation_id: "session start".to_string(),
+            operation_id: "session.start".to_string(),
         }]
     );
 
@@ -641,7 +691,7 @@ fn capability_bound_errors_derive_only_bootstrap_recovery() {
     assert_eq!(
         recoveries,
         &[mcp_twill::ApplicationRecoveryDecl::Operation {
-            operation_id: "build validate".to_string(),
+            operation_id: "build.validate".to_string(),
         }]
     );
 }
@@ -727,6 +777,76 @@ async fn typed_resource_wrappers_preserve_result_and_reference_authority() {
             .collect::<Vec<_>>(),
         ["test://tab/tab-1", "test://tab/tab-2"]
     );
+}
+
+#[tokio::test]
+async fn low_level_result_registration_injects_declared_resource_carriers_in_any_order() {
+    let registry = CommandRegistry::new("resources", "Low-level result resources")
+        .register_result(
+            CommandSpec::new(["tabs", "inspect"], "Inspect tab", "Inspect a browser tab"),
+            inspect_tab,
+        )
+        .declare_resource(
+            ResourceDecl::new("tab", "A browser tab")
+                .uri("test://tab/{id}")
+                .expiry("Tabs expire when the browser closes"),
+        )
+        .with_resolver::<Tab>(TabResolver);
+    registry.validate_resources().unwrap();
+    registry.validate_results().unwrap();
+
+    let operation = &registry.catalog().operations[0];
+    let carrier = operation
+        .args
+        .iter()
+        .find(|arg| arg.name == "tab_id")
+        .expect("low-level registration injects the resource carrier");
+    assert!(carrier.required);
+    assert_eq!(carrier.value_type, ArgType::ResourceRef("tab".to_string()));
+
+    let mut run = request("tabs inspect --tab-id $args.tab_id");
+    run.args.insert("tab_id".to_string(), json!("tab-1"));
+    let CommandExecutionOutcome::Success(response) =
+        registry.run(run).await.expect("resource result succeeds")
+    else {
+        panic!("expected success");
+    };
+    assert_eq!(
+        response.output.unwrap().structured.unwrap()["title"],
+        "Inspected tab"
+    );
+}
+
+#[test]
+fn builder_result_resource_edges_are_canonical_declaration_sets() {
+    fn build(handler: impl FnOnce(&mut mcp_twill::CommandBuilder)) -> CommandRegistry {
+        CommandRegistry::build("resources", "Canonical result resources", |server| {
+            server.resource(
+                ResourceDecl::new("tab", "A browser tab")
+                    .uri("test://tab/{id}")
+                    .expiry("Tabs expire when the browser closes"),
+            );
+            server.command("tabs new", |command| {
+                command
+                    .summary("New tab")
+                    .description("Create and enumerate tabs");
+                handler(command);
+            });
+        })
+        .unwrap()
+    }
+
+    let first = build(|command| {
+        command.handle_result(repeated_resource_edges_a);
+    });
+    let second = build(|command| {
+        command.handle_result(repeated_resource_edges_b);
+    });
+    assert_eq!(first.catalog(), second.catalog());
+    assert_eq!(first.catalog_identity(), second.catalog_identity());
+    let operation = &first.catalog().operations[0];
+    assert_eq!(operation.grants, ["tab"]);
+    assert_eq!(operation.enumerates, ["tab"]);
 }
 
 fn explicit_schema_registry(schema: Value) -> CommandRegistry {

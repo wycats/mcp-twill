@@ -381,6 +381,10 @@ async fn task_augmented_run_completes_when_negotiated() -> anyhow::Result<()> {
         };
     }
     assert_eq!(task.task.status, TaskStatus::Completed);
+    assert_eq!(
+        task.task.status_message.as_deref(),
+        Some("Run command completed")
+    );
 
     let payload = client
         .send_request(ClientRequest::GetTaskResultRequest(Request::new(
