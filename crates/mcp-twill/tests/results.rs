@@ -30,6 +30,12 @@ impl Resource for Tab {
     const NAME: &'static str = "tab";
 }
 
+struct Window;
+
+impl Resource for Window {
+    const NAME: &'static str = "window";
+}
+
 struct TabResolver;
 
 impl ResolveResource<Tab> for TabResolver {
@@ -39,6 +45,18 @@ impl ResolveResource<Tab> for TabResolver {
         _plan: &InvocationPlan,
     ) -> std::result::Result<Tab, ResourceRefusal> {
         Ok(Tab)
+    }
+}
+
+struct WindowResolver;
+
+impl ResolveResource<Window> for WindowResolver {
+    async fn resolve(
+        &self,
+        _reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Window, ResourceRefusal> {
+        Ok(Window)
     }
 }
 
@@ -97,6 +115,15 @@ async fn new_tab_with_references(
 async fn inspect_tab(_tab: Res<Tab>, _: CommandContext) -> ApplicationResult<NewTabResult> {
     Ok(ApplicationSuccess::value(NewTabResult {
         title: "Inspected tab".to_string(),
+    }))
+}
+
+async fn inspect_tab_and_window(
+    _resources: (Res<Tab>, Res<Window>),
+    _: CommandContext,
+) -> ApplicationResult<NewTabResult> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "Inspected tab and window".to_string(),
     }))
 }
 
@@ -402,9 +429,83 @@ async fn application_error_stays_out_of_framework_error_and_shapes_recovery() {
     );
     assert_eq!(
         value["steering"][0]["request"]["arguments"]["command"],
-        "session start"
+        "session.start"
     );
+    let help = registry.help(HelpRequest {
+        command: Some("session.start".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert_eq!(help.title, "session start");
     assert!(value.get("plan").is_none());
+}
+
+#[test]
+fn recovery_help_preserves_literal_dots_in_command_path_segments() {
+    let registry = CommandRegistry::new("dotted", "Dotted command").register(
+        CommandSpec::new(["session.start"], "Literal dot", "Literal dotted command"),
+        |_| async { Ok(CommandOutput::structured(json!({}))) },
+    );
+    let help = registry.help(HelpRequest {
+        command: Some("session.start".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert_eq!(help.title, "session.start");
+    assert_eq!(help.structured["command"]["path"], json!(["session.start"]));
+}
+
+#[test]
+fn recovery_registration_rejects_ambiguous_catalog_operation_ids() {
+    let contract = ApplicationResultContract::new(json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+    }))
+    .with_error_spec(mcp_twill::ApplicationErrorSpec {
+        code: "session_required".to_string(),
+        summary: "A session is required".to_string(),
+        message: ApplicationMessageDecl::DeclarationSummary,
+        details_schema: json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        }),
+        capability: None,
+        recoveries: vec![mcp_twill::ApplicationRecoveryDecl::Operation {
+            operation_id: "session.start".to_string(),
+        }],
+        recovery_cardinality: mcp_twill::RecoveryCardinality::Any,
+    });
+    let registry = CommandRegistry::new("ambiguous", "Ambiguous operation ids")
+        .register(
+            CommandSpec::new(["session.start"], "Literal dot", "Literal dotted command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        )
+        .register(
+            CommandSpec::new(["session", "start"], "Two segments", "Two segment command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        )
+        .register_dynamic(
+            CommandSpec::new(["browser", "status"], "Status", "Browser status").with_output(
+                OutputContract {
+                    application: Some(contract),
+                    ..OutputContract::default()
+                },
+            ),
+            |_| async {
+                Err::<ApplicationSuccess<Value>, _>(
+                    DynamicApplicationError::new("session_required").into(),
+                )
+            },
+        );
+    assert!(
+        registry
+            .validate_results()
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous operation id `session.start`")
+    );
 }
 
 #[tokio::test]
@@ -508,6 +609,19 @@ async fn typed_serialization_and_schema_failures_are_distinct_and_redacted() {
             None,
             Some(registry.build_plan(&request(name)).unwrap()),
         );
+        let event = FrameworkEvent::from_envelope(
+            &envelope,
+            Some(&PlanFacts::from(
+                &registry.build_plan(&request(name)).unwrap(),
+            )),
+        );
+        let event = serde_json::to_value(event).unwrap();
+        assert_eq!(event["resultContractBoundary"], "success");
+        assert_eq!(
+            event["resultContractReason"],
+            serde_json::to_value(reason).unwrap()
+        );
+        assert!(!event.to_string().contains(secret));
         assert!(!serde_json::to_string(&envelope).unwrap().contains(secret));
     }
 }
@@ -814,6 +928,61 @@ async fn low_level_result_registration_injects_declared_resource_carriers_in_any
     assert_eq!(
         response.output.unwrap().structured.unwrap()["title"],
         "Inspected tab"
+    );
+}
+
+#[test]
+fn deferred_low_level_resource_carriers_are_canonical_across_declaration_order() {
+    fn tab() -> ResourceDecl {
+        ResourceDecl::new("tab", "A browser tab")
+            .uri("test://tab/{id}")
+            .expiry("Tabs expire when the browser closes")
+    }
+    fn window() -> ResourceDecl {
+        ResourceDecl::new("window", "A browser window")
+            .uri("test://window/{id}")
+            .expiry("Windows expire when the browser closes")
+    }
+    fn bind(registry: CommandRegistry) -> CommandRegistry {
+        registry
+            .with_resolver::<Tab>(TabResolver)
+            .with_resolver::<Window>(WindowResolver)
+    }
+    let spec = || {
+        CommandSpec::new(
+            ["tabs", "inspect-window"],
+            "Inspect tab and window",
+            "Inspect a browser tab and window",
+        )
+    };
+    let declared_first = bind(
+        CommandRegistry::new("resources", "Canonical low-level carriers")
+            .declare_resource(window())
+            .declare_resource(tab())
+            .register_result(spec(), inspect_tab_and_window),
+    );
+    let command_first = bind(
+        CommandRegistry::new("resources", "Canonical low-level carriers")
+            .register_result(spec(), inspect_tab_and_window)
+            .declare_resource(window())
+            .declare_resource(tab()),
+    );
+    for registry in [&declared_first, &command_first] {
+        registry.validate_resources().unwrap();
+        registry.validate_results().unwrap();
+    }
+    assert_eq!(declared_first.catalog(), command_first.catalog());
+    assert_eq!(
+        declared_first.catalog_identity(),
+        command_first.catalog_identity()
+    );
+    assert_eq!(
+        command_first.catalog().operations[0]
+            .args
+            .iter()
+            .map(|arg| arg.name.as_str())
+            .collect::<Vec<_>>(),
+        ["tab_id", "window_id"]
     );
 }
 

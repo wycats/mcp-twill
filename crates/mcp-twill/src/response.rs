@@ -283,7 +283,7 @@ impl ResponseEnvelope {
                     label: format!("Recover with `{operation_id}`"),
                     request: json!({
                         "tool": "help",
-                        "arguments": { "command": operation_id.replace('.', " ") },
+                        "arguments": { "command": operation_id },
                     }),
                     priority: SteeringPriority::Primary,
                 }),

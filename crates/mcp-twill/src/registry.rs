@@ -166,9 +166,15 @@ impl CommandRegistry {
                     .result_resource_uses
                     .iter()
                     .any(|resource_use| resource_use.resource == resource_name)
-                    && let Err(error) = inject_result_resource_carrier(&mut command.spec, &decl)
                 {
-                    errors.push(error);
+                    match inject_result_resource_carrier(&mut command.spec, &decl) {
+                        Ok(()) => canonicalize_result_resource_carriers(
+                            &mut command.spec,
+                            &command.result_resource_uses,
+                            &self.resources,
+                        ),
+                        Err(error) => errors.push(error),
+                    }
                 }
             }
             self.registration_errors.extend(errors);
@@ -2464,11 +2470,17 @@ impl CommandRegistry {
     }
 
     fn command_help(&self, command: &str, topic: HelpTopic) -> HelpResult {
-        let parsed = CommandTemplate::parse(command);
-        let spec = parsed.ok().and_then(|template| {
-            self.match_command(&template)
-                .map(|registered| &registered.spec)
-        });
+        let spec = self
+            .commands
+            .values()
+            .find(|registered| registered.spec.path.join(".") == command)
+            .map(|registered| &registered.spec)
+            .or_else(|| {
+                CommandTemplate::parse(command).ok().and_then(|template| {
+                    self.match_command(&template)
+                        .map(|registered| &registered.spec)
+                })
+            });
 
         let Some(spec) = spec else {
             let tokens = command
@@ -2908,7 +2920,31 @@ fn inject_result_resource_carriers(
             inject_result_resource_carrier(spec, decl)?;
         }
     }
+    canonicalize_result_resource_carriers(spec, uses, resources);
     Ok(())
+}
+
+fn canonicalize_result_resource_carriers(
+    spec: &mut CommandSpec,
+    uses: &[crate::resource::ResourceUse],
+    resources: &BTreeMap<String, crate::ResourceDecl>,
+) {
+    let carrier_resources = uses
+        .iter()
+        .filter_map(|resource_use| resources.get(resource_use.resource))
+        .map(|decl| (decl.carrier_name(), decl.name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    spec.args.sort_by(|left, right| {
+        match (
+            carrier_resources.get(&left.name),
+            carrier_resources.get(&right.name),
+        ) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (Some(left_resource), Some(right_resource)) => left_resource.cmp(right_resource),
+        }
+    });
 }
 
 fn inject_result_resource_carrier(
@@ -3027,19 +3063,28 @@ fn validate_recovery_operations(
     contract: &crate::ApplicationResultContract,
     commands: &[CommandSpec],
 ) -> Result<()> {
-    let operation_ids = commands
-        .iter()
-        .map(|command| command.path.join("."))
-        .collect::<BTreeSet<_>>();
+    let mut operation_ids = BTreeMap::<String, usize>::new();
+    for command in commands {
+        *operation_ids.entry(command.path.join(".")).or_default() += 1;
+    }
     for error in &contract.errors {
         for recovery in &error.recoveries {
-            if let crate::ApplicationRecoveryDecl::Operation { operation_id } = recovery
-                && !operation_ids.contains(operation_id)
-            {
-                return Err(FrameworkError::Build(format!(
-                    "application error `{}` recovers with unknown operation `{operation_id}`",
-                    error.code
-                )));
+            if let crate::ApplicationRecoveryDecl::Operation { operation_id } = recovery {
+                match operation_ids.get(operation_id) {
+                    Some(1) => {}
+                    Some(_) => {
+                        return Err(FrameworkError::Build(format!(
+                            "application error `{}` recovers with ambiguous operation id `{operation_id}`",
+                            error.code
+                        )));
+                    }
+                    None => {
+                        return Err(FrameworkError::Build(format!(
+                            "application error `{}` recovers with unknown operation `{operation_id}`",
+                            error.code
+                        )));
+                    }
+                }
             }
         }
     }
