@@ -218,11 +218,6 @@ impl ServerBuilder {
         for workspace in self.workspaces.drain(..) {
             registry = registry.declare_workspace(workspace);
         }
-        let hand_declared_capabilities = self
-            .capabilities
-            .iter()
-            .map(|capability| capability.name.clone())
-            .collect::<BTreeSet<_>>();
         for capability in self.capabilities.drain(..) {
             registry = registry.declare_capability(capability);
         }
@@ -231,15 +226,6 @@ impl ServerBuilder {
         }
         for decl in &self.resources {
             registry = registry.declare_resource(decl.clone());
-            // A hand-declared capability with the resource's name is a
-            // collision `validate_resources` reports; declaring the derived
-            // capability over it would mask that.
-            if !hand_declared_capabilities.contains(&decl.name) {
-                registry = registry.declare_derived_capability(
-                    CapabilityDecl::new(decl.name.clone(), decl.summary.clone())
-                        .carried_by(decl.carrier_name()),
-                );
-            }
         }
         for binding in self.resource_bindings {
             registry = binding(registry);

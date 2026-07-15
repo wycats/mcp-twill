@@ -907,9 +907,18 @@ async fn low_level_result_registration_injects_declared_resource_carriers_in_any
         )
         .with_resolver::<Tab>(TabResolver);
     registry.validate_resources().unwrap();
+    registry.validate_capabilities().unwrap();
     registry.validate_results().unwrap();
 
     let operation = &registry.catalog().operations[0];
+    assert_eq!(operation.requires, ["tab"]);
+    assert!(
+        registry
+            .catalog()
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "tab")
+    );
     let carrier = operation
         .args
         .iter()
@@ -929,6 +938,27 @@ async fn low_level_result_registration_injects_declared_resource_carriers_in_any
         response.output.unwrap().structured.unwrap()["title"],
         "Inspected tab"
     );
+}
+
+#[test]
+fn low_level_result_output_resources_mirror_compatibility_provides() {
+    let registry = CommandRegistry::new("resources", "Low-level output resources")
+        .declare_resource(
+            ResourceDecl::new("tab", "A browser tab")
+                .uri("test://tab/{id}")
+                .expiry("Tabs expire when the browser closes"),
+        )
+        .register_result(
+            CommandSpec::new(["tabs", "new"], "New tab", "Create and enumerate tabs"),
+            new_tab_with_references,
+        );
+    registry.validate_capabilities().unwrap();
+    registry.validate_resources().unwrap();
+    registry.validate_results().unwrap();
+    let operation = &registry.catalog().operations[0];
+    assert_eq!(operation.provides, ["tab"]);
+    assert_eq!(operation.grants, ["tab"]);
+    assert_eq!(operation.enumerates, ["tab"]);
 }
 
 #[test]
@@ -1048,6 +1078,20 @@ fn schema_dialect_canonicalizes_supported_forms_and_rejects_drift() {
         .unwrap()
         .success_schema;
     assert_eq!(schema, &json!({ "type": ["string", "null"] }));
+
+    for schema in [
+        json!({ "type": "object", "title": 42 }),
+        json!({ "type": "object", "description": false }),
+    ] {
+        let invalid = explicit_schema_registry(schema);
+        assert!(
+            invalid
+                .validate_results()
+                .unwrap_err()
+                .to_string()
+                .contains("must be a string")
+        );
+    }
 
     for unsupported in [
         json!(true),
@@ -1335,6 +1379,12 @@ async fn invalid_dynamic_code_and_details_are_redacted_contract_violations() {
             ResultContractReason::InvalidDetails,
             "secret",
         ),
+        (
+            "known",
+            json!("scalar-secret"),
+            ResultContractReason::InvalidDetails,
+            "scalar-secret",
+        ),
     ] {
         let contract = ApplicationResultContract::new(json!({ "type": "object" }))
             .with_error_spec(spec.clone());
@@ -1362,6 +1412,16 @@ async fn invalid_dynamic_code_and_details_are_redacted_contract_violations() {
                 .errors[0]
                 .details_schema["additionalProperties"],
             false
+        );
+        assert_eq!(
+            registry.catalog().operations[0]
+                .output
+                .application
+                .as_ref()
+                .unwrap()
+                .errors[0]
+                .details_schema["type"],
+            "object"
         );
         let failure = registry.run(request("invalid")).await.unwrap_err();
         assert_eq!(

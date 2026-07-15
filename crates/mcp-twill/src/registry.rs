@@ -137,7 +137,8 @@ impl CommandRegistry {
     }
 
     pub fn declare_capability(mut self, decl: crate::CapabilityDecl) -> Self {
-        if self.capabilities.contains_key(&decl.name) {
+        let replaces_derived = self.resource_capabilities.remove(&decl.name);
+        if self.capabilities.contains_key(&decl.name) && !replaces_derived {
             self.duplicate_capabilities.push(decl.name.clone());
         }
         self.capabilities.insert(decl.name.clone(), decl);
@@ -153,7 +154,17 @@ impl CommandRegistry {
             self.duplicate_resources.push(decl.name.clone());
         }
         let resource_name = decl.name.clone();
+        let derived_capability =
+            crate::CapabilityDecl::new(decl.name.clone(), decl.summary.clone())
+                .carried_by(decl.carrier_name());
         self.resources.insert(resource_name.clone(), decl);
+        if !self.capabilities.contains_key(&resource_name)
+            || self.resource_capabilities.contains(&resource_name)
+        {
+            self.resource_capabilities.insert(resource_name.clone());
+            self.capabilities
+                .insert(resource_name.clone(), derived_capability);
+        }
         if !duplicate {
             let decl = self
                 .resources
@@ -179,15 +190,6 @@ impl CommandRegistry {
             }
             self.registration_errors.extend(errors);
         }
-        self
-    }
-
-    /// Declares the capability derived from a resource declaration. The
-    /// derived capability keeps the RFC 0010 vocabulary and projections
-    /// working; the resource rules own its lifecycle semantics.
-    pub(crate) fn declare_derived_capability(mut self, decl: crate::CapabilityDecl) -> Self {
-        self.resource_capabilities.insert(decl.name.clone());
-        self.capabilities.insert(decl.name.clone(), decl);
         self.refresh_typed_result_contracts();
         self
     }
@@ -2884,6 +2886,7 @@ fn project_result_resources(
     enumerated: &[&'static str],
 ) {
     for resource_use in uses {
+        spec.requires.push(resource_use.resource.to_string());
         if resource_use.released {
             spec.releases.push(resource_use.resource.to_string());
         } else {
@@ -2893,6 +2896,8 @@ fn project_result_resources(
     }
     spec.grants
         .extend(granted.iter().map(|name| (*name).to_string()));
+    spec.provides
+        .extend(granted.iter().map(|name| (*name).to_string()));
     spec.enumerates
         .extend(enumerated.iter().map(|name| (*name).to_string()));
     for values in [
@@ -2900,6 +2905,8 @@ fn project_result_resources(
         &mut spec.releases,
         &mut spec.grants,
         &mut spec.enumerates,
+        &mut spec.requires,
+        &mut spec.provides,
     ] {
         values.sort();
         values.dedup();

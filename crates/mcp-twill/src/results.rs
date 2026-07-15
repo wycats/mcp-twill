@@ -1198,6 +1198,11 @@ fn close_error_detail_objects(schema: &mut Value) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
+    if !object.contains_key("type")
+        && (object.contains_key("properties") || object.contains_key("required"))
+    {
+        object.insert("type".to_string(), Value::String("object".to_string()));
+    }
     let describes_object = match object.get("type") {
         Some(Value::String(kind)) => kind == "object",
         Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "object"),
@@ -1556,6 +1561,15 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
         return Err(build_error(
             "result schema `$defs` is supported only at the schema root",
         ));
+    }
+    for annotation in ["title", "description"] {
+        if let Some(value) = object.get(annotation)
+            && !value.is_string()
+        {
+            return Err(build_error(format!(
+                "result schema `{annotation}` must be a string"
+            )));
+        }
     }
     if let Some(reference) = object.get("$ref") {
         let reference = reference
