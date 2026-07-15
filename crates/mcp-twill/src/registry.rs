@@ -1532,13 +1532,13 @@ impl CommandRegistry {
         let FrameworkError::ArgumentContractViolation { reason, .. } = error else {
             return error;
         };
-        let checked_extractor = matches!(
-            &registered.argument_kind,
-            ArgumentHandlerKind::Constrained(_)
-        ) || matches!(
-            &registered.argument_kind,
-            ArgumentHandlerKind::ResultAware(Some(_))
-        ) && command_has_argument_constraints(&registered.spec);
+        let checked_extractor = match &registered.argument_kind {
+            ArgumentHandlerKind::Constrained(_) => true,
+            ArgumentHandlerKind::ResultAware(Some(_)) => {
+                command_has_argument_constraints(&registered.spec)
+            }
+            _ => false,
+        };
         if checked_extractor && reason == crate::ArgumentContractReason::TypedDeserializationFailed
         {
             FrameworkError::ArgumentContractViolation {
