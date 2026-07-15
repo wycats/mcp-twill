@@ -187,6 +187,8 @@ pub struct StdinContract {
 pub struct OutputContract {
     pub format: crate::OutputFormat,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application: Option<crate::ApplicationResultContract>,
 }
 
 impl Default for OutputContract {
@@ -194,6 +196,7 @@ impl Default for OutputContract {
         Self {
             format: crate::OutputFormat::Structured,
             summary: "Command handler output shaped by the requested output spec.".to_string(),
+            application: None,
         }
     }
 }

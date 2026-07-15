@@ -13,6 +13,42 @@ use serde_json::json;
 pub const PREAMBLE: &str =
     "Routine actions attach to the owned target and preserve the user's active application.";
 
+/// RFC 0014's authored ownership reconciliation for the released VBL error
+/// inventory. The fixture is evidence; these assignments are Twill design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorOwner {
+    Framework(&'static str),
+    Application,
+}
+
+pub const ERROR_OWNERS: [(&str, ErrorOwner); 22] = [
+    ("chrome_unavailable", ErrorOwner::Application),
+    (
+        "invalid_request_context",
+        ErrorOwner::Framework("invalid_request_context"),
+    ),
+    ("session_required", ErrorOwner::Application),
+    ("unknown_session", ErrorOwner::Application),
+    ("session_expired", ErrorOwner::Application),
+    ("unknown_tab", ErrorOwner::Application),
+    ("tab_not_owned", ErrorOwner::Application),
+    ("tab_not_active", ErrorOwner::Application),
+    ("target_missing", ErrorOwner::Application),
+    ("target_owned", ErrorOwner::Application),
+    ("invalid_input", ErrorOwner::Application),
+    ("operation_timeout", ErrorOwner::Application),
+    ("focus_required", ErrorOwner::Application),
+    ("element_not_found", ErrorOwner::Application),
+    ("element_ambiguous", ErrorOwner::Application),
+    ("element_stale", ErrorOwner::Application),
+    ("element_not_actionable", ErrorOwner::Application),
+    ("artifact_not_found", ErrorOwner::Application),
+    ("artifact_error", ErrorOwner::Application),
+    ("workspace_unavailable", ErrorOwner::Application),
+    ("workspace_context_conflict", ErrorOwner::Application),
+    ("path_outside_workspace", ErrorOwner::Application),
+];
+
 /// Released baseline operation name, authored Twill path, and display title.
 ///
 /// The later RFC 0015 compiler groups these 63 operations into the 27-tool

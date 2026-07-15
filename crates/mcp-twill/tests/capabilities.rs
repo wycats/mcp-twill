@@ -9,6 +9,15 @@ use mcp_twill::{
 };
 use serde_json::json;
 
+fn success(outcome: mcp_twill::CommandExecutionOutcome) -> mcp_twill::RunResponse {
+    match outcome {
+        mcp_twill::CommandExecutionOutcome::Success(response) => response,
+        mcp_twill::CommandExecutionOutcome::ApplicationError { error, .. } => {
+            panic!("unexpected application error: {}", error.code)
+        }
+    }
+}
+
 fn request(command: &str, args: serde_json::Value) -> RunRequest {
     RunRequest {
         command: command.to_string(),
@@ -1187,10 +1196,12 @@ async fn provides_is_only_an_edge_and_never_injects_proof() {
             Ok(CommandOutput::structured(json!({ "published": true })))
         });
 
-    let validation = registry
-        .run(request("build validate", json!({})))
-        .await
-        .expect("validation succeeds");
+    let validation = success(
+        registry
+            .run(request("build validate", json!({})))
+            .await
+            .expect("validation succeeds"),
+    );
     assert_eq!(
         validation.output.unwrap().structured.unwrap()["receipt"],
         json!(VALID_RECEIPT)

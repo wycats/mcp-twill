@@ -1,16 +1,20 @@
 use std::{
     collections::BTreeSet,
+    error::Error,
+    fmt,
     sync::{Arc, Mutex},
 };
 
 use mcp_twill::{
-    CapabilityDecl, CommandContext, CommandOutput, CommandRegistry, EventSink, Field,
-    FrameworkError, FrameworkEvent, Grant, InvocationPlan, Listing, ReadResource, Release, Res,
+    ApplicationError, ApplicationErrorDecl, ApplicationErrorUse, ApplicationResult,
+    ApplicationSuccess, CapabilityDecl, CommandContext, CommandOutput, CommandRegistry, EventSink,
+    Field, FrameworkEvent, Grant, InvocationPlan, Listing, ReadResource, Release, Res,
     ResolveResource, Resource, ResourceDecl, ResourceRefusal, Result, TypeDecl, Variant,
-    WorkspaceDecl, arg,
+    WorkspaceDecl, application_error_set, arg,
 };
 use rmcp::{ServiceExt, transport::stdio};
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[derive(Debug, Deserialize)]
@@ -21,22 +25,65 @@ struct CreateIssueArgs {
 
 const VALIDATION_RECEIPT: &str = "receipt-current-build";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct PublishArgs {
     validation_token: String,
 }
 
-async fn publish_build(_context: CommandContext, args: PublishArgs) -> Result<CommandOutput> {
-    if args.validation_token != VALIDATION_RECEIPT {
-        return Err(FrameworkError::capability_denied(
-            "validated-build",
-            "the validation receipt does not match the current build",
-        ));
+#[derive(Debug, Serialize, JsonSchema)]
+struct PublishedBuild {
+    published: bool,
+    build: String,
+}
+
+#[derive(Debug)]
+enum PublishFailure {
+    InvalidReceipt,
+}
+
+impl fmt::Display for PublishFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("build publication was refused")
     }
-    Ok(CommandOutput::structured(json!({
-        "published": true,
-        "build": "current"
-    })))
+}
+
+impl Error for PublishFailure {}
+
+impl ApplicationError for PublishFailure {
+    fn declarations() -> Vec<ApplicationErrorDecl> {
+        vec![ApplicationErrorDecl::new(
+            "invalid_validation_receipt",
+            "The validation receipt does not match the current build",
+        )]
+    }
+
+    fn code(&self) -> &'static str {
+        "invalid_validation_receipt"
+    }
+
+    fn details(&self) -> Value {
+        json!({})
+    }
+}
+
+application_error_set! {
+    struct PublishErrors for PublishFailure {
+        ApplicationErrorUse::new("invalid_validation_receipt")
+            .for_capability("validated-build"),
+    }
+}
+
+async fn publish_build(
+    _context: CommandContext,
+    args: PublishArgs,
+) -> ApplicationResult<PublishedBuild, PublishFailure, PublishErrors> {
+    if args.validation_token != VALIDATION_RECEIPT {
+        return Err(PublishFailure::InvalidReceipt.into());
+    }
+    Ok(ApplicationSuccess::value(PublishedBuild {
+        published: true,
+        build: "current".to_string(),
+    }))
 }
 
 async fn create_issue(_context: CommandContext, args: CreateIssueArgs) -> Result<CommandOutput> {
@@ -262,7 +309,7 @@ pub fn registry() -> Result<CommandRegistry> {
                         "Publish using an explicitly supplied validation receipt",
                         json!({ "validation_token": VALIDATION_RECEIPT }),
                     )
-                    .handle_typed(publish_build);
+                    .handle_result(publish_build);
             });
 
             server.command("issues close", |command| {

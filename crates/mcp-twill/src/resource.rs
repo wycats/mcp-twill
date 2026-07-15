@@ -306,6 +306,12 @@ pub struct Grant<T: Resource> {
 }
 
 impl<T: Resource> Grant<T> {
+    pub(crate) fn into_id(self) -> String {
+        self.id
+    }
+}
+
+impl<T: Resource> Grant<T> {
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -328,52 +334,100 @@ impl<T: Resource> Listing<T> {
             _marker: PhantomData,
         }
     }
+
+    pub(crate) fn into_ids(self) -> Vec<String> {
+        self.ids
+    }
 }
 
 /// A `CommandOutput` that grants a reference to `T`. Produced by
 /// [`CommandOutput::grant`]; the type parameter is what lets registration
 /// derive the grant edge statically.
-pub struct Granted<T: Resource> {
-    output: CommandOutput,
-    _marker: PhantomData<fn() -> T>,
+pub struct Granted<T: Resource, O = CommandOutput> {
+    output: O,
+    grant: Grant<T>,
 }
 
 /// A `CommandOutput` that enumerates references to `T`. Produced by
 /// [`CommandOutput::listing`].
-pub struct Listed<T: Resource> {
-    output: CommandOutput,
-    _marker: PhantomData<fn() -> T>,
+pub struct Listed<T: Resource, O = CommandOutput> {
+    output: O,
+    listing: Listing<T>,
+}
+
+impl<T: Resource, O> Granted<T, O> {
+    pub(crate) fn new(output: O, grant: Grant<T>) -> Self {
+        Self { output, grant }
+    }
+
+    pub(crate) fn into_parts(self) -> (O, Grant<T>) {
+        (self.output, self.grant)
+    }
+}
+
+impl<T: Resource, O> Listed<T, O> {
+    pub(crate) fn new(output: O, listing: Listing<T>) -> Self {
+        Self { output, listing }
+    }
+
+    pub(crate) fn into_parts(self) -> (O, Listing<T>) {
+        (self.output, self.listing)
+    }
 }
 
 impl CommandOutput {
     /// Attaches a granted reference. The framework mints the URI from the
     /// declared template after the handler returns.
-    pub fn grant<T: Resource>(mut self, grant: Grant<T>) -> Granted<T> {
-        self.grants.push(ResourceRef {
-            resource: T::NAME.to_string(),
-            id: grant.id,
-            uri: String::new(),
-        });
-        Granted {
-            output: self,
-            _marker: PhantomData,
-        }
+    pub fn grant<T: Resource>(self, grant: Grant<T>) -> Granted<T> {
+        Granted::new(self, grant)
     }
 
     /// Attaches enumerated references. The framework mints URIs from the
     /// declared template after the handler returns.
-    pub fn listing<T: Resource>(mut self, listing: Listing<T>) -> Listed<T> {
-        for id in listing.ids {
-            self.listings.push(ResourceRef {
+    pub fn listing<T: Resource>(self, listing: Listing<T>) -> Listed<T> {
+        Listed::new(self, listing)
+    }
+}
+
+impl<T: Resource> ResourceOutput for Granted<T> {
+    fn granted() -> Vec<&'static str> {
+        vec![T::NAME]
+    }
+
+    fn enumerated() -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    fn into_command_output(self) -> CommandOutput {
+        let (mut output, grant) = self.into_parts();
+        output.grants.push(ResourceRef {
+            resource: T::NAME.to_string(),
+            id: grant.into_id(),
+            uri: String::new(),
+        });
+        output
+    }
+}
+
+impl<T: Resource> ResourceOutput for Listed<T> {
+    fn granted() -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    fn enumerated() -> Vec<&'static str> {
+        vec![T::NAME]
+    }
+
+    fn into_command_output(self) -> CommandOutput {
+        let (mut output, listing) = self.into_parts();
+        for id in listing.into_ids() {
+            output.listings.push(ResourceRef {
                 resource: T::NAME.to_string(),
                 id,
                 uri: String::new(),
             });
         }
-        Listed {
-            output: self,
-            _marker: PhantomData,
-        }
+        output
     }
 }
 
@@ -397,34 +451,6 @@ impl ResourceOutput for CommandOutput {
 
     fn into_command_output(self) -> CommandOutput {
         self
-    }
-}
-
-impl<T: Resource> ResourceOutput for Granted<T> {
-    fn granted() -> Vec<&'static str> {
-        vec![T::NAME]
-    }
-
-    fn enumerated() -> Vec<&'static str> {
-        Vec::new()
-    }
-
-    fn into_command_output(self) -> CommandOutput {
-        self.output
-    }
-}
-
-impl<T: Resource> ResourceOutput for Listed<T> {
-    fn granted() -> Vec<&'static str> {
-        Vec::new()
-    }
-
-    fn enumerated() -> Vec<&'static str> {
-        vec![T::NAME]
-    }
-
-    fn into_command_output(self) -> CommandOutput {
-        self.output
     }
 }
 

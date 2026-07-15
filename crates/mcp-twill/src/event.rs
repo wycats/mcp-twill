@@ -25,6 +25,12 @@ pub struct FrameworkEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
     pub status: ResponseStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_contract_boundary: Option<crate::ResultContractBoundary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_contract_reason: Option<crate::ResultContractReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<EffectSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -35,6 +41,17 @@ impl FrameworkEvent {
     /// Builds the terminal event for a call from the response envelope and
     /// the plan facts, when planning got far enough to produce them.
     pub fn from_envelope(envelope: &ResponseEnvelope, plan: Option<&PlanFacts>) -> Self {
+        let result_contract = envelope.error.as_ref().and_then(|error| {
+            (error.code == crate::ErrorCode::ResultContractViolation)
+                .then(|| {
+                    let boundary =
+                        serde_json::from_value(error.details.get("boundary")?.clone()).ok()?;
+                    let reason =
+                        serde_json::from_value(error.details.get("reason")?.clone()).ok()?;
+                    Some((boundary, reason))
+                })
+                .flatten()
+        });
         Self {
             id: new_event_id(),
             timestamp_unix_ms: Utc::now().timestamp_millis(),
@@ -45,6 +62,19 @@ impl FrameworkEvent {
                 .clone()
                 .or_else(|| plan.map(|plan| plan.command_path.clone())),
             status: envelope.status.clone(),
+            application_error_code: envelope.error.as_ref().and_then(|error| {
+                (error.code == crate::ErrorCode::ApplicationError)
+                    .then(|| {
+                        error
+                            .details
+                            .get("applicationCode")?
+                            .as_str()
+                            .map(str::to_owned)
+                    })
+                    .flatten()
+            }),
+            result_contract_boundary: result_contract.map(|(boundary, _)| boundary),
+            result_contract_reason: result_contract.map(|(_, reason)| reason),
             effects: plan
                 .map(|plan| vec![plan.effect.clone()])
                 .unwrap_or_default(),
@@ -62,6 +92,9 @@ impl FrameworkEvent {
             operation_id: None,
             command: None,
             status: ResponseStatus::InvalidInput,
+            application_error_code: None,
+            result_contract_boundary: None,
+            result_contract_reason: None,
             effects: Vec::new(),
             diagnostics: vec![Diagnostic {
                 code: crate::ErrorCode::InvalidArgumentType,

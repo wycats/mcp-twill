@@ -12,6 +12,15 @@ use std::{
     },
 };
 
+fn success(outcome: mcp_twill::CommandExecutionOutcome) -> mcp_twill::RunResponse {
+    match outcome {
+        mcp_twill::CommandExecutionOutcome::Success(response) => response,
+        mcp_twill::CommandExecutionOutcome::ApplicationError { error, .. } => {
+            panic!("unexpected application error: {}", error.code)
+        }
+    }
+}
+
 fn request(command: &str, args: serde_json::Value) -> RunRequest {
     RunRequest {
         command: command.to_string(),
@@ -189,11 +198,13 @@ async fn dry_run_returns_plan_without_dispatch_or_permission_gate() {
     );
     run.dry_run = true;
 
-    let response = registry()
-        .with_policy(PermissionPolicy::read_only())
-        .run(run)
-        .await
-        .unwrap();
+    let response = success(
+        registry()
+            .with_policy(PermissionPolicy::read_only())
+            .run(run)
+            .await
+            .unwrap(),
+    );
 
     assert!(response.dry_run);
     assert!(response.output.is_none());
@@ -223,7 +234,7 @@ async fn output_selects_fields_and_limits_arrays() {
         fields: Some(vec!["id".to_string(), "title".to_string()]),
         ..Default::default()
     });
-    let response = registry().run(run).await.unwrap();
+    let response = success(registry().run(run).await.unwrap());
     let structured = response.output.unwrap().structured.unwrap();
     assert_eq!(structured, json!({"id": 1, "title": "Created"}));
 }

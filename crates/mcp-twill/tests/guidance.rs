@@ -11,6 +11,15 @@ use mcp_twill::{
 use rmcp::ServerHandler;
 use serde_json::json;
 
+fn success(outcome: mcp_twill::CommandExecutionOutcome) -> mcp_twill::RunResponse {
+    match outcome {
+        mcp_twill::CommandExecutionOutcome::Success(response) => response,
+        mcp_twill::CommandExecutionOutcome::ApplicationError { error, .. } => {
+            panic!("unexpected application error: {}", error.code)
+        }
+    }
+}
+
 fn read_permission() -> PermissionSpec {
     PermissionSpec::new(PermissionEffect::Read, "issues", "Reads issue records")
 }
@@ -804,7 +813,7 @@ async fn guidance_never_gates_planning_or_execution() {
         let help_before = help_for(&registry, "preferred");
 
         for command in ["escape", "preferred", "alternative", "escape"] {
-            let response = registry.run(run_request(command, json!({}))).await.unwrap();
+            let response = success(registry.run(run_request(command, json!({}))).await.unwrap());
             assert!(!response.dry_run);
             assert!(response.output.is_some());
         }
@@ -856,11 +865,13 @@ async fn runtime_values_never_become_guidance_or_guidance_owned_state() {
         second_plan.invocation_fingerprint
     );
 
-    let first_response = registry.run(first_request).await.unwrap();
-    let response = registry
-        .run_with_context(second_request, context)
-        .await
-        .unwrap();
+    let first_response = success(registry.run(first_request).await.unwrap());
+    let response = success(
+        registry
+            .run_with_context(second_request, context)
+            .await
+            .unwrap(),
+    );
     assert_ne!(first_response.output, response.output);
     let envelope = ResponseEnvelope::success(response.clone(), ResponseProfile::Debug);
     let preview = ResponseEnvelope::preview(second_plan, false);

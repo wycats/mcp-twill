@@ -1,0 +1,1654 @@
+//! RFC 0014 acceptance tests: application-owned result contracts.
+
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    error::Error,
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use mcp_twill::{
+    ApplicationError, ApplicationErrorBody, ApplicationErrorDecl, ApplicationErrorUse,
+    ApplicationMessageDecl, ApplicationOutput, ApplicationOutputResult, ApplicationRecovery,
+    ApplicationRecoveryKey, ApplicationRecoverySelection, ApplicationResult,
+    ApplicationResultContract, ApplicationSuccess, ArgSpec, ArgType, CommandContext,
+    CommandExecutionOutcome, CommandOutput, CommandRegistry, CommandSpec, DynamicApplicationError,
+    DynamicApplicationResult, FrameworkError, FrameworkEvent, Grant, HelpRequest, InvocationPlan,
+    Listing, OutputContract, OutputFormat, OutputSpec, PlanFacts, Res, ResolveResource, Resource,
+    ResourceDecl, ResourceRefusal, ResponseEnvelope, ResponseProfile, ResultContractBoundary,
+    ResultContractReason, RunMode, RunRequest, application_error_set, contract,
+};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct BrowserStatus {
+    ready: bool,
+    active_tab: Option<String>,
+}
+
+struct Tab;
+
+impl Resource for Tab {
+    const NAME: &'static str = "tab";
+}
+
+struct Window;
+
+impl Resource for Window {
+    const NAME: &'static str = "window";
+}
+
+struct TabResolver;
+
+impl ResolveResource<Tab> for TabResolver {
+    async fn resolve(
+        &self,
+        _reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Tab, ResourceRefusal> {
+        Ok(Tab)
+    }
+}
+
+struct WindowResolver;
+
+impl ResolveResource<Window> for WindowResolver {
+    async fn resolve(
+        &self,
+        _reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Window, ResourceRefusal> {
+        Ok(Window)
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct NewTabResult {
+    title: String,
+}
+
+#[derive(JsonSchema)]
+struct SerializationFailure;
+
+impl Serialize for SerializationFailure {
+    fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(serde::ser::Error::custom("adversarial serializer secret"))
+    }
+}
+
+#[derive(JsonSchema)]
+struct SchemaMismatch {
+    #[schemars(rename = "ok")]
+    _ok: bool,
+}
+
+impl Serialize for SchemaMismatch {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        json!({ "secretPayload": true }).serialize(serializer)
+    }
+}
+
+async fn serialization_failure(_: CommandContext) -> ApplicationResult<SerializationFailure> {
+    Ok(ApplicationSuccess::value(SerializationFailure))
+}
+
+async fn schema_mismatch(_: CommandContext) -> ApplicationResult<SchemaMismatch> {
+    Ok(ApplicationSuccess::value(SchemaMismatch { _ok: true }))
+}
+
+async fn new_tab_with_references(
+    _: CommandContext,
+) -> ApplicationOutputResult<
+    mcp_twill::Listed<Tab, mcp_twill::Granted<Tab, ApplicationSuccess<NewTabResult>>>,
+> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "New tab".to_string(),
+    })
+    .grant(Grant::<Tab>::new("tab-1"))
+    .listing(Listing::<Tab>::new(["tab-1", "tab-2"])))
+}
+
+async fn inspect_tab(_tab: Res<Tab>, _: CommandContext) -> ApplicationResult<NewTabResult> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "Inspected tab".to_string(),
+    }))
+}
+
+async fn inspect_tab_and_window(
+    _resources: (Res<Tab>, Res<Window>),
+    _: CommandContext,
+) -> ApplicationResult<NewTabResult> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "Inspected tab and window".to_string(),
+    }))
+}
+
+async fn repeated_resource_edges_a(
+    _: CommandContext,
+) -> ApplicationOutputResult<
+    mcp_twill::Listed<
+        Tab,
+        mcp_twill::Granted<Tab, mcp_twill::Granted<Tab, ApplicationSuccess<NewTabResult>>>,
+    >,
+> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "New tab".to_string(),
+    })
+    .grant(Grant::<Tab>::new("tab-1"))
+    .grant(Grant::<Tab>::new("tab-2"))
+    .listing(Listing::<Tab>::new(["tab-1", "tab-2"])))
+}
+
+async fn repeated_resource_edges_b(
+    _: CommandContext,
+) -> ApplicationOutputResult<
+    mcp_twill::Granted<
+        Tab,
+        mcp_twill::Listed<Tab, mcp_twill::Granted<Tab, ApplicationSuccess<NewTabResult>>>,
+    >,
+> {
+    Ok(ApplicationSuccess::value(NewTabResult {
+        title: "New tab".to_string(),
+    })
+    .grant(Grant::<Tab>::new("tab-1"))
+    .listing(Listing::<Tab>::new(["tab-1", "tab-2"]))
+    .grant(Grant::<Tab>::new("tab-2")))
+}
+
+#[derive(Debug)]
+enum BrowserFailure {
+    SessionRequired,
+    TargetMissing(String),
+}
+
+impl fmt::Display for BrowserFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("browser operation failed")
+    }
+}
+
+impl Error for BrowserFailure {}
+
+impl ApplicationError for BrowserFailure {
+    fn declarations() -> Vec<ApplicationErrorDecl> {
+        vec![
+            ApplicationErrorDecl::new("session_required", "No browser session is available"),
+            ApplicationErrorDecl::new("target_missing", "The page target is unavailable")
+                .runtime_message(24)
+                .details_schema(json!({
+                    "type": "object",
+                    "properties": { "target": { "type": "string" } },
+                    "required": ["target"],
+                    "additionalProperties": false,
+                })),
+        ]
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::SessionRequired => "session_required",
+            Self::TargetMissing(_) => "target_missing",
+        }
+    }
+
+    fn details(&self) -> Value {
+        match self {
+            Self::SessionRequired => json!({}),
+            Self::TargetMissing(target) => json!({ "target": target }),
+        }
+    }
+
+    fn runtime_message(&self) -> Option<Cow<'_, str>> {
+        match self {
+            Self::SessionRequired => None,
+            Self::TargetMissing(target) => Some(Cow::Owned(format!("missing {target}\n\u{202E}"))),
+        }
+    }
+
+    fn recovery(&self) -> ApplicationRecoverySelection {
+        match self {
+            Self::SessionRequired => ApplicationRecoverySelection::Declared,
+            Self::TargetMissing(_) => {
+                ApplicationRecoverySelection::Only(vec![ApplicationRecoveryKey::Action(
+                    "refresh_page".to_string(),
+                )])
+            }
+        }
+    }
+}
+
+application_error_set! {
+    struct BrowserErrors for BrowserFailure {
+        ApplicationErrorUse::new("session_required")
+            .recover_with("session.start")
+            .at_most_one_recovery(),
+        ApplicationErrorUse::new("target_missing")
+            .recover_with("tabs.list")
+            .recover_by("refresh_page", "Refresh the page")
+            .at_most_one_recovery(),
+    }
+}
+
+application_error_set! {
+    struct CapabilityErrors for BrowserFailure {
+        ApplicationErrorUse::new("session_required")
+            .for_capability("validated-build"),
+    }
+}
+
+async fn status_success(
+    _: CommandContext,
+) -> ApplicationResult<BrowserStatus, BrowserFailure, BrowserErrors> {
+    Ok(ApplicationSuccess::value(BrowserStatus {
+        ready: true,
+        active_tab: Some("tab-1".to_string()),
+    }))
+}
+
+async fn session_failure(
+    _: CommandContext,
+) -> ApplicationResult<BrowserStatus, BrowserFailure, BrowserErrors> {
+    Err(BrowserFailure::SessionRequired.into())
+}
+
+async fn target_failure(
+    _: CommandContext,
+) -> ApplicationResult<BrowserStatus, BrowserFailure, BrowserErrors> {
+    Err(BrowserFailure::TargetMissing("tab-secret".to_string()).into())
+}
+
+async fn capability_failure(
+    _: CommandContext,
+) -> ApplicationResult<BrowserStatus, BrowserFailure, CapabilityErrors> {
+    Err(BrowserFailure::SessionRequired.into())
+}
+
+async fn dynamic_application_failure(_: CommandContext) -> DynamicApplicationResult {
+    Err(DynamicApplicationError::new("session_required").into())
+}
+
+fn request(command: &str) -> RunRequest {
+    RunRequest {
+        command: command.to_string(),
+        args: BTreeMap::new(),
+        stdin: None,
+        output: None,
+        mode: RunMode::Execute,
+        approval: None,
+        dry_run: false,
+    }
+}
+
+fn build_error(result: mcp_twill::Result<CommandRegistry>) -> FrameworkError {
+    match result {
+        Ok(_) => panic!("expected registry construction to fail"),
+        Err(error) => error,
+    }
+}
+
+fn result_registry() -> CommandRegistry {
+    CommandRegistry::build("results", "Result-aware commands", |server| {
+        server.command("session start", |command| {
+            command
+                .summary("Start session")
+                .description("Start a browser session")
+                .handle(|_| async { Ok(CommandOutput::structured(json!({ "started": true }))) });
+        });
+        server.command("tabs list", |command| {
+            command
+                .summary("List tabs")
+                .description("List browser tabs")
+                .handle(|_| async { Ok(CommandOutput::structured(json!([]))) });
+        });
+        server.command("browser status", |command| {
+            command
+                .summary("Browser status")
+                .description("Inspect browser status")
+                .handle_result(status_success);
+        });
+        server.command("browser require session", |command| {
+            command
+                .summary("Require session")
+                .description("Return the declared session error")
+                .handle_result(session_failure);
+        });
+        server.command("browser find target", |command| {
+            command
+                .summary("Find target")
+                .description("Return a bounded runtime error")
+                .handle_result(target_failure);
+        });
+    })
+    .expect("result registry builds")
+}
+
+#[test]
+fn public_declaration_spellings_are_stable() {
+    assert_eq!(
+        serde_json::to_value(ApplicationMessageDecl::RuntimeBounded {
+            max_scalar_values: 256,
+        })
+        .unwrap(),
+        json!({ "runtimeBounded": { "maxScalarValues": 256 } })
+    );
+    assert_eq!(
+        serde_json::to_value(ResultContractBoundary::ApplicationError).unwrap(),
+        json!("applicationError")
+    );
+    assert_eq!(
+        serde_json::to_value(ResultContractReason::InvalidRecoverySelection).unwrap(),
+        json!("invalidRecoverySelection")
+    );
+    let schema = serde_json::to_value(schemars::schema_for!(ResultContractReason)).unwrap();
+    assert!(schema.to_string().contains("invalidRecoverySelection"));
+}
+
+#[test]
+fn absent_application_contract_preserves_legacy_serialization() {
+    let value = serde_json::to_value(OutputContract::default()).unwrap();
+    assert!(value.get("application").is_none());
+    let event = FrameworkEvent::parse_failure("invalid input");
+    assert!(
+        serde_json::to_value(event)
+            .unwrap()
+            .get("applicationErrorCode")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn typed_success_is_validated_once_and_projects_compact_json() {
+    let registry = result_registry();
+    let CommandExecutionOutcome::Success(response) = registry
+        .run(request("browser status"))
+        .await
+        .expect("framework succeeds")
+    else {
+        panic!("expected success");
+    };
+    let output = response.output.expect("result output");
+    assert_eq!(
+        output.structured,
+        Some(json!({ "ready": true, "activeTab": "tab-1" }))
+    );
+    assert_eq!(
+        output.text.as_deref(),
+        Some(r#"{"activeTab":"tab-1","ready":true}"#)
+    );
+}
+
+#[tokio::test]
+async fn result_aware_text_is_generated_after_output_selection() {
+    let registry = result_registry();
+    let mut run = request("browser status");
+    run.output = Some(OutputSpec {
+        format: OutputFormat::Text,
+        fields: Some(vec!["ready".to_string()]),
+        ..OutputSpec::default()
+    });
+    let CommandExecutionOutcome::Success(response) =
+        registry.run(run).await.expect("framework succeeds")
+    else {
+        panic!("expected success");
+    };
+    let output = response.output.expect("result output");
+    assert_eq!(output.structured, Some(json!({ "ready": true })));
+    assert_eq!(output.text.as_deref(), Some(r#"{"ready":true}"#));
+}
+
+#[tokio::test]
+async fn application_error_stays_out_of_framework_error_and_shapes_recovery() {
+    let registry = result_registry();
+    let CommandExecutionOutcome::ApplicationError { plan, error } = registry
+        .run(request("browser require session"))
+        .await
+        .expect("application failure is not a framework error")
+    else {
+        panic!("expected declared application error");
+    };
+    assert_eq!(error.code, "session_required");
+    assert_eq!(error.message, "No browser session is available");
+    assert_eq!(
+        error.recoveries,
+        vec![ApplicationRecovery::Operation {
+            operation_id: "session.start".to_string(),
+        }]
+    );
+
+    let envelope = ResponseEnvelope::application_error(plan, error, ResponseProfile::Structured);
+    let value = serde_json::to_value(&envelope).unwrap();
+    assert_eq!(value["status"], "failed");
+    assert_eq!(value["error"]["code"], "application_error");
+    assert_eq!(
+        value["error"]["details"]["applicationCode"],
+        "session_required"
+    );
+    assert_eq!(
+        value["steering"][0]["request"]["arguments"]["command"],
+        "session.start"
+    );
+    let help = registry.help(HelpRequest {
+        command: Some("session.start".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert_eq!(help.title, "session start");
+    assert!(value.get("plan").is_none());
+}
+
+#[test]
+fn recovery_help_preserves_literal_dots_in_command_path_segments() {
+    let registry = CommandRegistry::new("dotted", "Dotted command")
+        .register(
+            CommandSpec::new(["session.start"], "Literal dot", "Literal dotted command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        )
+        .register(
+            CommandSpec::new(["session", "start"], "Two segments", "Two segment command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        );
+    let help = registry.help(HelpRequest {
+        command: Some("session.start".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert_eq!(help.title, "session.start");
+    assert_eq!(help.structured["command"]["path"], json!(["session.start"]));
+}
+
+#[test]
+fn recovery_registration_rejects_ambiguous_catalog_operation_ids() {
+    let contract = ApplicationResultContract::new(json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+    }))
+    .with_error_spec(mcp_twill::ApplicationErrorSpec {
+        code: "session_required".to_string(),
+        summary: "A session is required".to_string(),
+        message: ApplicationMessageDecl::DeclarationSummary,
+        details_schema: json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        }),
+        capability: None,
+        recoveries: vec![mcp_twill::ApplicationRecoveryDecl::Operation {
+            operation_id: "session.start".to_string(),
+        }],
+        recovery_cardinality: mcp_twill::RecoveryCardinality::Any,
+    });
+    let registry = CommandRegistry::new("ambiguous", "Ambiguous operation ids")
+        .register(
+            CommandSpec::new(["session.start"], "Literal dot", "Literal dotted command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        )
+        .register(
+            CommandSpec::new(["session", "start"], "Two segments", "Two segment command"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        )
+        .register_dynamic(
+            CommandSpec::new(["browser", "status"], "Status", "Browser status").with_output(
+                OutputContract {
+                    application: Some(contract),
+                    ..OutputContract::default()
+                },
+            ),
+            |_| async {
+                Err::<ApplicationSuccess<Value>, _>(
+                    DynamicApplicationError::new("session_required").into(),
+                )
+            },
+        );
+    assert!(
+        registry
+            .validate_results()
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous operation id `session.start`")
+    );
+}
+
+#[tokio::test]
+async fn bounded_messages_escape_and_events_retain_only_declared_code() {
+    let registry = result_registry();
+    let CommandExecutionOutcome::ApplicationError { plan, error } = registry
+        .run(request("browser find target"))
+        .await
+        .expect("application failure is valid")
+    else {
+        panic!("expected declared application error");
+    };
+    assert_eq!(error.message, "missing tab-secret\\n…");
+    assert!(!error.message.contains('\n'));
+    assert!(!error.message.contains('\u{202E}'));
+    assert_eq!(
+        error.recoveries,
+        vec![ApplicationRecovery::Action {
+            code: "refresh_page".to_string(),
+            summary: "Refresh the page".to_string(),
+        }]
+    );
+    let envelope = ResponseEnvelope::application_error(plan.clone(), error, ResponseProfile::Debug);
+    let plan_facts = PlanFacts::from(&plan);
+    let event = FrameworkEvent::from_envelope(&envelope, Some(&plan_facts));
+    let value = serde_json::to_value(event).unwrap();
+    assert_eq!(value["applicationErrorCode"], "target_missing");
+    let serialized = value.to_string();
+    assert!(!serialized.contains("tab-secret"));
+    assert!(!serialized.contains("refresh_page"));
+}
+
+#[tokio::test]
+async fn dynamic_contract_is_authoritative_and_mismatch_is_redacted() {
+    let contract = ApplicationResultContract::new(json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"],
+        "additionalProperties": false,
+    }));
+    let registry = CommandRegistry::new("dynamic", "Dynamic results").register_dynamic(
+        CommandSpec::new(["dynamic"], "Dynamic", "Dynamic result").with_output(OutputContract {
+            application: Some(contract),
+            ..OutputContract::default()
+        }),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "secret": "must-not-leak"
+            })))
+        },
+    );
+    registry.validate_results().unwrap();
+    let error = registry.run(request("dynamic")).await.unwrap_err();
+    assert_eq!(
+        error,
+        FrameworkError::ResultContractViolation {
+            boundary: ResultContractBoundary::Success,
+            reason: ResultContractReason::SchemaMismatch,
+        }
+    );
+    let plan = registry.build_plan(&request("dynamic")).unwrap();
+    let envelope = ResponseEnvelope::framework_error(error, None, Some(plan));
+    let serialized = serde_json::to_string(&envelope).unwrap();
+    assert!(!serialized.contains("must-not-leak"));
+    assert!(serialized.contains("result_contract_violation"));
+}
+
+#[tokio::test]
+async fn result_contract_violation_envelope_omits_plan_and_bound_arguments() {
+    let contract = ApplicationResultContract::new(json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"],
+        "additionalProperties": false,
+    }));
+    let registry = CommandRegistry::new("redacted", "Redacted").register_dynamic(
+        CommandSpec::new(["redacted"], "Redacted", "Redacted")
+            .with_arg(ArgSpec::string("token", "Sensitive token"))
+            .with_output(OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            }),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "wrong": true
+            })))
+        },
+    );
+    let mut run = request("redacted --token $args.token");
+    run.args.insert("token".to_string(), json!("secret-token"));
+    let plan = registry.build_plan(&run).unwrap();
+    let error = registry.run(run).await.unwrap_err();
+    let envelope = ResponseEnvelope::framework_error(error, None, Some(plan));
+    let value = serde_json::to_value(envelope).unwrap();
+    assert_eq!(value["error"]["details"]["operation"], "redacted");
+    assert!(value.get("plan").is_none());
+    assert!(!value.to_string().contains("secret-token"));
+}
+
+#[tokio::test]
+async fn typed_serialization_and_schema_failures_are_distinct_and_redacted() {
+    for (name, registry, reason, secret) in [
+        (
+            "serialize",
+            CommandRegistry::new("invalid", "Invalid").register_result(
+                CommandSpec::new(["serialize"], "Serialize", "Serialize"),
+                serialization_failure,
+            ),
+            ResultContractReason::SerializationFailed,
+            "adversarial serializer secret",
+        ),
+        (
+            "mismatch",
+            CommandRegistry::new("invalid", "Invalid").register_result(
+                CommandSpec::new(["mismatch"], "Mismatch", "Mismatch"),
+                schema_mismatch,
+            ),
+            ResultContractReason::SchemaMismatch,
+            "secretPayload",
+        ),
+    ] {
+        registry.validate_results().unwrap();
+        let error = registry.run(request(name)).await.unwrap_err();
+        assert_eq!(
+            error,
+            FrameworkError::ResultContractViolation {
+                boundary: ResultContractBoundary::Success,
+                reason,
+            }
+        );
+        let envelope = ResponseEnvelope::framework_error(
+            error,
+            None,
+            Some(registry.build_plan(&request(name)).unwrap()),
+        );
+        let event = FrameworkEvent::from_envelope(
+            &envelope,
+            Some(&PlanFacts::from(
+                &registry.build_plan(&request(name)).unwrap(),
+            )),
+        );
+        let event = serde_json::to_value(event).unwrap();
+        assert_eq!(event["resultContractBoundary"], "success");
+        assert_eq!(
+            event["resultContractReason"],
+            serde_json::to_value(reason).unwrap()
+        );
+        assert!(!event.to_string().contains(secret));
+        assert!(!serde_json::to_string(&envelope).unwrap().contains(secret));
+    }
+}
+
+#[test]
+fn builder_and_low_level_typed_registration_are_projection_equivalent() {
+    let builder = CommandRegistry::build("equivalent", "Equivalent", |server| {
+        server.command("status", |command| {
+            command
+                .summary("Status")
+                .description("Status")
+                .handle_result(status_success);
+        });
+        server.command("session start", |command| {
+            command
+                .summary("Start")
+                .description("Start")
+                .handle(|_| async { Ok(CommandOutput::structured(json!({}))) });
+        });
+        server.command("tabs list", |command| {
+            command
+                .summary("List")
+                .description("List")
+                .handle(|_| async { Ok(CommandOutput::structured(json!([]))) });
+        });
+    })
+    .unwrap();
+    let low_level = CommandRegistry::new("equivalent", "Equivalent")
+        .register_result(
+            CommandSpec::new(["status"], "Status", "Status"),
+            status_success,
+        )
+        .register(
+            CommandSpec::new(["session", "start"], "Start", "Start"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        )
+        .register(
+            CommandSpec::new(["tabs", "list"], "List", "List"),
+            |_| async { Ok(CommandOutput::structured(json!([]))) },
+        );
+    low_level.validate_results().unwrap();
+    assert_eq!(builder.catalog(), low_level.catalog());
+    assert_eq!(builder.catalog_identity(), low_level.catalog_identity());
+    assert!(contract::check_result_projection(&builder).is_empty());
+}
+
+#[test]
+fn invalid_handler_contract_pairings_fail_before_serving() {
+    let explicit = ApplicationResultContract::for_type::<BrowserStatus>();
+    let typed = CommandRegistry::new("invalid", "Invalid").register_result(
+        CommandSpec::new(["typed"], "Typed", "Typed").with_output(OutputContract {
+            application: Some(explicit.clone()),
+            ..OutputContract::default()
+        }),
+        status_success,
+    );
+    assert!(
+        typed
+            .validate_results()
+            .unwrap_err()
+            .to_string()
+            .contains("explicit")
+    );
+
+    let legacy = CommandRegistry::new("invalid", "Invalid").register(
+        CommandSpec::new(["legacy"], "Legacy", "Legacy").with_output(OutputContract {
+            application: Some(explicit),
+            ..OutputContract::default()
+        }),
+        |_| async { Ok(CommandOutput::structured(json!({}))) },
+    );
+    assert!(
+        legacy
+            .validate_results()
+            .unwrap_err()
+            .to_string()
+            .contains("legacy")
+    );
+}
+
+#[tokio::test]
+async fn direct_registry_run_validates_result_registration_before_dispatch() {
+    let dispatched = Arc::new(AtomicBool::new(false));
+    let handler_dispatched = Arc::clone(&dispatched);
+    let registry = CommandRegistry::new("invalid", "Invalid").register_dynamic(
+        CommandSpec::new(["dynamic"], "Dynamic", "Dynamic without a contract"),
+        move |_context| {
+            let handler_dispatched = Arc::clone(&handler_dispatched);
+            async move {
+                handler_dispatched.store(true, Ordering::SeqCst);
+                Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+            }
+        },
+    );
+
+    let error = registry.run(request("dynamic")).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("missing an application result contract")
+    );
+    assert!(!dispatched.load(Ordering::SeqCst));
+}
+
+#[test]
+fn result_catalog_help_and_hash_change_reversibly() {
+    let registry = result_registry();
+    let operation = registry
+        .catalog()
+        .operations
+        .into_iter()
+        .find(|operation| operation.name() == "browser status")
+        .unwrap();
+    assert!(operation.output.application.is_some());
+    let help = registry.help(HelpRequest {
+        command: Some("browser require session".to_string()),
+        topic: None,
+        detail: None,
+    });
+    assert!(help.text.contains("Expected application errors:"));
+    assert!(help.text.contains("`session_required`"));
+    assert!(contract::check_result_projection(&registry).is_empty());
+}
+
+#[tokio::test]
+async fn dynamic_application_errors_use_the_explicit_contract() {
+    let contract = ApplicationResultContract::new(json!({ "type": "object" })).with_error_spec(
+        mcp_twill::ApplicationErrorSpec {
+            code: "session_required".to_string(),
+            summary: "No browser session is available".to_string(),
+            message: ApplicationMessageDecl::DeclarationSummary,
+            details_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            capability: None,
+            recoveries: Vec::new(),
+            recovery_cardinality: mcp_twill::RecoveryCardinality::Any,
+        },
+    );
+    let registry = CommandRegistry::new("dynamic", "Dynamic").register_dynamic(
+        CommandSpec::new(["dynamic", "fail"], "Fail", "Fail dynamically").with_output(
+            OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            },
+        ),
+        dynamic_application_failure,
+    );
+    registry.validate_results().unwrap();
+    let CommandExecutionOutcome::ApplicationError { error, .. } = registry
+        .run(request("dynamic fail"))
+        .await
+        .expect("declared failure")
+    else {
+        panic!("expected application error");
+    };
+    assert_eq!(error.code, "session_required");
+    assert_eq!(error.message, "No browser session is available");
+}
+
+#[test]
+fn capability_bound_errors_derive_only_bootstrap_recovery() {
+    let registry = CommandRegistry::build("capability", "Capability-bound errors", |server| {
+        server.capability(
+            mcp_twill::CapabilityDecl::new("validated-build", "Validated build proof")
+                .carried_by("validation_token"),
+        );
+        server.command("build validate", |command| {
+            command
+                .summary("Validate")
+                .description("Bootstrap validation")
+                .provides("validated-build")
+                .handle(|_| async { Ok(CommandOutput::structured(json!({}))) });
+        });
+        for name in ["build refresh", "build recheck"] {
+            server.command(name, |command| {
+                command
+                    .summary("Refresh")
+                    .description("Refresh validation")
+                    .arg(mcp_twill::arg::string("validation_token").summary("Existing proof"))
+                    .requires("validated-build")
+                    .provides("validated-build")
+                    .handle(|_| async { Ok(CommandOutput::structured(json!({}))) });
+            });
+        }
+        server.command("deploy publish", |command| {
+            command
+                .summary("Publish")
+                .description("Publish validated build")
+                .arg(mcp_twill::arg::string("validation_token").summary("Validation proof"))
+                .requires("validated-build")
+                .handle_result(capability_failure);
+        });
+    })
+    .unwrap();
+    let publish = registry
+        .catalog()
+        .operations
+        .into_iter()
+        .find(|operation| operation.name() == "deploy publish")
+        .unwrap();
+    let recoveries = &publish.output.application.unwrap().errors[0].recoveries;
+    assert_eq!(
+        recoveries,
+        &[mcp_twill::ApplicationRecoveryDecl::Operation {
+            operation_id: "build.validate".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn result_aware_legacy_denial_and_handler_sources_are_redacted_publicly() {
+    async fn denied(_: CommandContext) -> ApplicationResult<BrowserStatus> {
+        Err(FrameworkError::capability_denied("secret-cap", "secret-detail").into())
+    }
+    let registry = CommandRegistry::new("redaction", "Redaction")
+        .register_result(CommandSpec::new(["denied"], "Denied", "Denied"), denied);
+    registry.validate_results().unwrap();
+    let direct = registry.run(request("denied")).await.unwrap_err();
+    assert_eq!(
+        direct,
+        FrameworkError::Handler(
+            "result-aware handler returned legacy capability denial".to_string()
+        )
+    );
+    let plan = registry.build_plan(&request("denied")).unwrap();
+    let envelope = ResponseEnvelope::framework_error(direct, None, Some(plan));
+    let value = serde_json::to_value(envelope).unwrap();
+    assert_eq!(value["error"]["code"], "handler_failed");
+    assert_eq!(value["error"]["message"], "Command handler failed");
+    assert_eq!(value["error"]["details"], json!({}));
+    let serialized = value.to_string();
+    assert!(!serialized.contains("secret-cap"));
+    assert!(!serialized.contains("secret-detail"));
+}
+
+#[test]
+fn application_error_body_schema_is_public_and_stable() {
+    let body = ApplicationErrorBody {
+        code: "session_required".to_string(),
+        message: "No browser session is available".to_string(),
+        details: json!({}),
+        recoveries: Vec::new(),
+    };
+    assert_eq!(
+        serde_json::to_value(body).unwrap()["code"],
+        "session_required"
+    );
+    let schema = serde_json::to_value(schemars::schema_for!(ApplicationErrorBody)).unwrap();
+    assert!(schema.to_string().contains("recoveries"));
+}
+
+#[tokio::test]
+async fn typed_resource_wrappers_preserve_result_and_reference_authority() {
+    let registry = CommandRegistry::build("resources", "Result resources", |server| {
+        server.resource(
+            ResourceDecl::new("tab", "A browser tab")
+                .uri("test://tab/{id}")
+                .expiry("Tabs expire when the browser closes"),
+        );
+        server.command("tabs new", |command| {
+            command
+                .summary("New tab")
+                .description("Create and enumerate tabs")
+                .handle_result(new_tab_with_references);
+        });
+    })
+    .unwrap();
+    let catalog = registry.catalog();
+    let operation = &catalog.operations[0];
+    assert_eq!(operation.grants, ["tab"]);
+    assert_eq!(operation.enumerates, ["tab"]);
+    assert!(operation.output.application.is_some());
+    let CommandExecutionOutcome::Success(response) = registry
+        .run(request("tabs new"))
+        .await
+        .expect("result succeeds")
+    else {
+        panic!("expected success");
+    };
+    let output = response.output.unwrap();
+    assert_eq!(output.structured.unwrap()["title"], "New tab");
+    assert_eq!(output.grants[0].uri, "test://tab/tab-1");
+    assert_eq!(
+        output
+            .listings
+            .iter()
+            .map(|reference| reference.uri.as_str())
+            .collect::<Vec<_>>(),
+        ["test://tab/tab-1", "test://tab/tab-2"]
+    );
+}
+
+#[tokio::test]
+async fn low_level_result_registration_injects_declared_resource_carriers_in_any_order() {
+    let registry = CommandRegistry::new("resources", "Low-level result resources")
+        .register_result(
+            CommandSpec::new(["tabs", "inspect"], "Inspect tab", "Inspect a browser tab"),
+            inspect_tab,
+        )
+        .declare_resource(
+            ResourceDecl::new("tab", "A browser tab")
+                .uri("test://tab/{id}")
+                .expiry("Tabs expire when the browser closes"),
+        )
+        .with_resolver::<Tab>(TabResolver);
+    registry.validate_resources().unwrap();
+    registry.validate_capabilities().unwrap();
+    registry.validate_results().unwrap();
+
+    let operation = &registry.catalog().operations[0];
+    assert_eq!(operation.requires, ["tab"]);
+    assert!(
+        registry
+            .catalog()
+            .capabilities
+            .iter()
+            .any(|capability| capability.name == "tab")
+    );
+    let carrier = operation
+        .args
+        .iter()
+        .find(|arg| arg.name == "tab_id")
+        .expect("low-level registration injects the resource carrier");
+    assert!(carrier.required);
+    assert_eq!(carrier.value_type, ArgType::ResourceRef("tab".to_string()));
+
+    let mut run = request("tabs inspect --tab-id $args.tab_id");
+    run.args.insert("tab_id".to_string(), json!("tab-1"));
+    let CommandExecutionOutcome::Success(response) =
+        registry.run(run).await.expect("resource result succeeds")
+    else {
+        panic!("expected success");
+    };
+    assert_eq!(
+        response.output.unwrap().structured.unwrap()["title"],
+        "Inspected tab"
+    );
+}
+
+#[test]
+fn low_level_result_output_resources_mirror_compatibility_provides() {
+    let registry = CommandRegistry::new("resources", "Low-level output resources")
+        .declare_resource(
+            ResourceDecl::new("tab", "A browser tab")
+                .uri("test://tab/{id}")
+                .expiry("Tabs expire when the browser closes"),
+        )
+        .register_result(
+            CommandSpec::new(["tabs", "new"], "New tab", "Create and enumerate tabs"),
+            new_tab_with_references,
+        );
+    registry.validate_capabilities().unwrap();
+    registry.validate_resources().unwrap();
+    registry.validate_results().unwrap();
+    let operation = &registry.catalog().operations[0];
+    assert_eq!(operation.provides, ["tab"]);
+    assert_eq!(operation.grants, ["tab"]);
+    assert_eq!(operation.enumerates, ["tab"]);
+}
+
+#[test]
+fn deferred_low_level_resource_carriers_are_canonical_across_declaration_order() {
+    fn tab() -> ResourceDecl {
+        ResourceDecl::new("tab", "A browser tab")
+            .uri("test://tab/{id}")
+            .expiry("Tabs expire when the browser closes")
+    }
+    fn window() -> ResourceDecl {
+        ResourceDecl::new("window", "A browser window")
+            .uri("test://window/{id}")
+            .expiry("Windows expire when the browser closes")
+    }
+    fn bind(registry: CommandRegistry) -> CommandRegistry {
+        registry
+            .with_resolver::<Tab>(TabResolver)
+            .with_resolver::<Window>(WindowResolver)
+    }
+    let spec = || {
+        CommandSpec::new(
+            ["tabs", "inspect-window"],
+            "Inspect tab and window",
+            "Inspect a browser tab and window",
+        )
+    };
+    let declared_first = bind(
+        CommandRegistry::new("resources", "Canonical low-level carriers")
+            .declare_resource(window())
+            .declare_resource(tab())
+            .register_result(spec(), inspect_tab_and_window),
+    );
+    let command_first = bind(
+        CommandRegistry::new("resources", "Canonical low-level carriers")
+            .register_result(spec(), inspect_tab_and_window)
+            .declare_resource(window())
+            .declare_resource(tab()),
+    );
+    for registry in [&declared_first, &command_first] {
+        registry.validate_resources().unwrap();
+        registry.validate_results().unwrap();
+    }
+    assert_eq!(declared_first.catalog(), command_first.catalog());
+    assert_eq!(
+        declared_first.catalog_identity(),
+        command_first.catalog_identity()
+    );
+    assert_eq!(
+        command_first.catalog().operations[0]
+            .args
+            .iter()
+            .map(|arg| arg.name.as_str())
+            .collect::<Vec<_>>(),
+        ["tab_id", "window_id"]
+    );
+}
+
+#[test]
+fn builder_result_resource_edges_are_canonical_declaration_sets() {
+    fn build(handler: impl FnOnce(&mut mcp_twill::CommandBuilder)) -> CommandRegistry {
+        CommandRegistry::build("resources", "Canonical result resources", |server| {
+            server.resource(
+                ResourceDecl::new("tab", "A browser tab")
+                    .uri("test://tab/{id}")
+                    .expiry("Tabs expire when the browser closes"),
+            );
+            server.command("tabs new", |command| {
+                command
+                    .summary("New tab")
+                    .description("Create and enumerate tabs");
+                handler(command);
+            });
+        })
+        .unwrap()
+    }
+
+    let first = build(|command| {
+        command.handle_result(repeated_resource_edges_a);
+    });
+    let second = build(|command| {
+        command.handle_result(repeated_resource_edges_b);
+    });
+    assert_eq!(first.catalog(), second.catalog());
+    assert_eq!(first.catalog_identity(), second.catalog_identity());
+    let operation = &first.catalog().operations[0];
+    assert_eq!(operation.grants, ["tab"]);
+    assert_eq!(operation.enumerates, ["tab"]);
+}
+
+fn explicit_schema_registry(schema: Value) -> CommandRegistry {
+    CommandRegistry::new("schema", "Schema validation").register_dynamic(
+        CommandSpec::new(["schema"], "Schema", "Schema").with_output(OutputContract {
+            application: Some(ApplicationResultContract::new(schema)),
+            ..OutputContract::default()
+        }),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+        },
+    )
+}
+
+#[test]
+fn schema_dialect_canonicalizes_supported_forms_and_rejects_drift() {
+    let left = explicit_schema_registry(json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": ["null", "string"],
+    }));
+    let right = explicit_schema_registry(json!({ "type": ["string", "null"] }));
+    left.validate_results().unwrap();
+    right.validate_results().unwrap();
+    assert_eq!(left.catalog_identity(), right.catalog_identity());
+    let catalog = left.catalog();
+    let schema = &catalog.operations[0]
+        .output
+        .application
+        .as_ref()
+        .unwrap()
+        .success_schema;
+    assert_eq!(schema, &json!({ "type": ["string", "null"] }));
+
+    let literal_ref = explicit_schema_registry(json!({
+        "type": "object",
+        "properties": {
+            "payload": {
+                "const": {
+                    "$ref": "literal",
+                    "type": ["null", "string"],
+                    "nested": [{ "$ref": "also-literal" }]
+                }
+            }
+        }
+    }));
+    literal_ref.validate_results().unwrap();
+    assert_eq!(
+        literal_ref.catalog().operations[0]
+            .output
+            .application
+            .as_ref()
+            .unwrap()
+            .success_schema["properties"]["payload"]["const"]["type"],
+        json!(["null", "string"])
+    );
+
+    for schema in [
+        json!({ "type": "object", "title": 42 }),
+        json!({ "type": "object", "description": false }),
+    ] {
+        let invalid = explicit_schema_registry(schema);
+        assert!(
+            invalid
+                .validate_results()
+                .unwrap_err()
+                .to_string()
+                .contains("must be a string")
+        );
+    }
+
+    let duplicate_required = explicit_schema_registry(json!({
+        "type": "object",
+        "properties": { "value": { "type": "string" } },
+        "required": ["value", "value"]
+    }));
+    assert!(
+        duplicate_required
+            .validate_results()
+            .unwrap_err()
+            .to_string()
+            .contains("entries must be unique")
+    );
+
+    for unsupported in [
+        json!(true),
+        json!({ "type": "number", "minimum": 0 }),
+        json!({ "anyOf": [{ "type": "string" }, { "type": "null" }] }),
+        json!({ "$ref": "https://example.com/schema" }),
+        json!({
+            "type": "object",
+            "properties": { "value": { "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "string" } }
+        }),
+        json!({
+            "$defs": { "unused": { "type": "string" } },
+            "type": "object"
+        }),
+        json!({ "const": 9_007_199_254_740_992_u64 }),
+        json!({ "const": 9_007_199_254_740_992.0_f64 }),
+    ] {
+        assert!(
+            explicit_schema_registry(unsupported)
+                .validate_results()
+                .is_err(),
+            "unsupported schema must fail"
+        );
+    }
+}
+
+#[test]
+fn typed_schema_normalizes_rust_storage_constraints() {
+    #[derive(Serialize, JsonSchema)]
+    struct Numbers {
+        signed_8: i8,
+        signed_16: i16,
+        signed_32: i32,
+        signed_64: i64,
+        signed_128: i128,
+        unsigned_8: u8,
+        unsigned_16: u16,
+        unsigned_32: u32,
+        unsigned_64: u64,
+        unsigned_128: u128,
+        ratio_32: f32,
+        ratio_64: f64,
+        optional: Option<i32>,
+    }
+    let contract = ApplicationResultContract::for_type::<Numbers>();
+    let text = contract.success_schema.to_string();
+    assert!(!text.contains("format"), "{text}");
+    assert!(!text.contains("minimum"));
+    assert!(!text.contains("maximum"));
+    assert!(text.contains("null"));
+}
+
+#[test]
+fn typed_schema_rejects_authored_numeric_bounds_instead_of_broadening() {
+    #[derive(Serialize)]
+    struct PositiveCount(u32);
+
+    impl JsonSchema for PositiveCount {
+        fn schema_name() -> Cow<'static, str> {
+            "PositiveCount".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 1,
+            })
+            .try_into()
+            .unwrap()
+        }
+    }
+
+    let contract = ApplicationResultContract::for_type::<PositiveCount>();
+    assert_eq!(contract.success_schema["minimum"], 1);
+    assert_eq!(contract.success_schema["format"], "uint32");
+    let registry = CommandRegistry::new("bounded", "Bounded").register_dynamic(
+        CommandSpec::new(["bounded"], "Bounded", "Bounded").with_output(OutputContract {
+            application: Some(contract),
+            ..OutputContract::default()
+        }),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!(0)))
+        },
+    );
+    let error = registry.validate_results().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported result schema keyword `format`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn typed_schema_only_strips_formats_from_recognized_storage_shapes() {
+    #[derive(Serialize)]
+    struct StringWithIntegerFormat(String);
+
+    impl JsonSchema for StringWithIntegerFormat {
+        fn schema_name() -> Cow<'static, str> {
+            "StringWithIntegerFormat".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({ "type": "string", "format": "uint32" })
+                .try_into()
+                .unwrap()
+        }
+    }
+
+    #[derive(Serialize)]
+    struct IntegerWithoutStorageBounds(u32);
+
+    impl JsonSchema for IntegerWithoutStorageBounds {
+        fn schema_name() -> Cow<'static, str> {
+            "IntegerWithoutStorageBounds".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({ "type": "integer", "format": "uint32" })
+                .try_into()
+                .unwrap()
+        }
+    }
+
+    for contract in [
+        ApplicationResultContract::for_type::<StringWithIntegerFormat>(),
+        ApplicationResultContract::for_type::<IntegerWithoutStorageBounds>(),
+    ] {
+        assert_eq!(contract.success_schema["format"], "uint32");
+        let registry = CommandRegistry::new("format", "Format").register_dynamic(
+            CommandSpec::new(["format"], "Format", "Format").with_output(OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            }),
+            |_context| async {
+                Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+            },
+        );
+        assert!(
+            registry
+                .validate_results()
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported result schema keyword `format`")
+        );
+    }
+}
+
+#[test]
+fn typed_schema_normalizes_nullable_local_references() {
+    #[derive(Serialize, JsonSchema)]
+    struct Nested {
+        value: String,
+    }
+
+    #[derive(Serialize, JsonSchema)]
+    struct OptionalNested {
+        nested: Option<Nested>,
+    }
+
+    let contract = ApplicationResultContract::for_type::<OptionalNested>();
+    let text = contract.success_schema.to_string();
+    assert!(!text.contains("anyOf"));
+    assert!(text.contains("oneOf"));
+
+    let registry = CommandRegistry::new("typed-ref", "Typed reference").register_dynamic(
+        CommandSpec::new(["typed-ref"], "Typed reference", "Typed reference").with_output(
+            OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            },
+        ),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "nested": { "value": "ready" }
+            })))
+        },
+    );
+    registry.validate_results().unwrap();
+}
+
+#[test]
+fn typed_schema_normalizes_nullable_non_null_unions() {
+    #[derive(Serialize)]
+    struct OptionalUnion;
+
+    impl JsonSchema for OptionalUnion {
+        fn schema_name() -> Cow<'static, str> {
+            "OptionalUnion".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({
+                "type": "object",
+                "properties": {
+                    "choice": {
+                        "anyOf": [
+                            {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    { "type": "integer" }
+                                ]
+                            },
+                            { "type": "null" }
+                        ]
+                    }
+                }
+            })
+            .try_into()
+            .unwrap()
+        }
+    }
+
+    let contract = ApplicationResultContract::for_type::<OptionalUnion>();
+    assert!(contract.success_schema.to_string().contains("oneOf"));
+    assert!(!contract.success_schema.to_string().contains("anyOf"));
+    let registry = CommandRegistry::new("typed-union", "Typed union").register_dynamic(
+        CommandSpec::new(["typed-union"], "Typed union", "Typed union").with_output(
+            OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            },
+        ),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "choice": "ready"
+            })))
+        },
+    );
+    registry.validate_results().unwrap();
+}
+
+#[tokio::test]
+async fn local_reference_siblings_are_applied_during_validation() {
+    let contract = ApplicationResultContract::new(json!({
+        "$defs": {
+            "base": {
+                "type": "object",
+                "properties": { "base": { "type": "boolean" } },
+                "required": ["base"]
+            }
+        },
+        "$ref": "#/$defs/base",
+        "required": ["sibling"]
+    }));
+    let registry = CommandRegistry::new("ref-sibling", "Reference sibling").register_dynamic(
+        CommandSpec::new(["ref-sibling"], "Reference sibling", "Reference sibling").with_output(
+            OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            },
+        ),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "base": true
+            })))
+        },
+    );
+    registry.validate_results().unwrap();
+    assert_eq!(
+        registry.run(request("ref-sibling")).await.unwrap_err(),
+        FrameworkError::ResultContractViolation {
+            boundary: ResultContractBoundary::Success,
+            reason: ResultContractReason::SchemaMismatch,
+        }
+    );
+}
+
+#[tokio::test]
+async fn integer_schema_accepts_zero_fraction_json_numbers() {
+    fn registry(value: Value) -> CommandRegistry {
+        CommandRegistry::new("integer", "Integer").register_dynamic(
+            CommandSpec::new(["integer"], "Integer", "Integer").with_output(OutputContract {
+                application: Some(ApplicationResultContract::new(json!({ "type": "integer" }))),
+                ..OutputContract::default()
+            }),
+            move |_context| {
+                let value = value.clone();
+                async move {
+                    Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(value))
+                }
+            },
+        )
+    }
+
+    let whole = registry(json!(1.0));
+    whole.validate_results().unwrap();
+    assert!(whole.run(request("integer")).await.is_ok());
+
+    let fractional = registry(json!(1.5));
+    fractional.validate_results().unwrap();
+    assert_eq!(
+        fractional.run(request("integer")).await.unwrap_err(),
+        FrameworkError::ResultContractViolation {
+            boundary: ResultContractBoundary::Success,
+            reason: ResultContractReason::SchemaMismatch,
+        }
+    );
+}
+
+#[test]
+fn builder_rejects_duplicate_handler_and_contract_authority() {
+    let duplicate_handler = build_error(CommandRegistry::build("invalid", "Invalid", |server| {
+        server.command("duplicate", |command| {
+            command
+                .summary("Duplicate")
+                .description("Duplicate")
+                .handle_result(status_success)
+                .handle(|_| async { Ok(CommandOutput::structured(json!({}))) });
+        });
+    }));
+    assert!(
+        duplicate_handler
+            .to_string()
+            .contains("more than one handler")
+    );
+
+    let duplicate_contract = build_error(CommandRegistry::build("invalid", "Invalid", |server| {
+        server.command("duplicate", |command| {
+            command
+                .summary("Duplicate")
+                .description("Duplicate")
+                .result_contract(ApplicationResultContract::new(json!({ "type": "object" })))
+                .result_contract(ApplicationResultContract::new(json!({ "type": "object" })))
+                .handle_dynamic(|_| async {
+                    Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+                });
+        });
+    }));
+    assert!(duplicate_contract.to_string().contains("result_contract"));
+}
+
+#[test]
+fn dynamic_builder_contract_order_is_not_authority() {
+    fn build(contract_first: bool) -> CommandRegistry {
+        CommandRegistry::build("dynamic", "Dynamic", |server| {
+            server.command("dynamic", |command| {
+                command.summary("Dynamic").description("Dynamic");
+                if contract_first {
+                    command.result_contract(ApplicationResultContract::new(json!({
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false,
+                    })));
+                }
+                command.handle_dynamic(|_| async {
+                    Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+                });
+                if !contract_first {
+                    command.result_contract(ApplicationResultContract::new(json!({
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": false,
+                    })));
+                }
+            });
+        })
+        .unwrap()
+    }
+    let before = build(true);
+    let after = build(false);
+    assert_eq!(before.catalog(), after.catalog());
+    assert_eq!(before.catalog_identity(), after.catalog_identity());
+}
+
+#[tokio::test]
+async fn invalid_dynamic_code_and_details_are_redacted_contract_violations() {
+    let spec = mcp_twill::ApplicationErrorSpec {
+        code: "known".to_string(),
+        summary: "Known failure".to_string(),
+        message: ApplicationMessageDecl::DeclarationSummary,
+        details_schema: json!({
+            "type": "object",
+            "properties": {},
+        }),
+        capability: None,
+        recoveries: Vec::new(),
+        recovery_cardinality: mcp_twill::RecoveryCardinality::Any,
+    };
+    for (code, details, reason, secret) in [
+        (
+            "undeclared_secret",
+            json!({}),
+            ResultContractReason::UndeclaredCode,
+            "undeclared_secret",
+        ),
+        (
+            "known",
+            json!({ "secret": true }),
+            ResultContractReason::InvalidDetails,
+            "secret",
+        ),
+        (
+            "known",
+            json!("scalar-secret"),
+            ResultContractReason::InvalidDetails,
+            "scalar-secret",
+        ),
+    ] {
+        let contract = ApplicationResultContract::new(json!({ "type": "object" }))
+            .with_error_spec(spec.clone());
+        let registry = CommandRegistry::new("invalid", "Invalid").register_dynamic(
+            CommandSpec::new(["invalid"], "Invalid", "Invalid").with_output(OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            }),
+            move |_| {
+                let details = details.clone();
+                async move {
+                    Err::<ApplicationSuccess<Value>, _>(
+                        DynamicApplicationError::new(code).details(details).into(),
+                    )
+                }
+            },
+        );
+        registry.validate_results().unwrap();
+        assert_eq!(
+            registry.catalog().operations[0]
+                .output
+                .application
+                .as_ref()
+                .unwrap()
+                .errors[0]
+                .details_schema["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            registry.catalog().operations[0]
+                .output
+                .application
+                .as_ref()
+                .unwrap()
+                .errors[0]
+                .details_schema["type"],
+            "object"
+        );
+        let failure = registry.run(request("invalid")).await.unwrap_err();
+        assert_eq!(
+            failure,
+            FrameworkError::ResultContractViolation {
+                boundary: ResultContractBoundary::ApplicationError,
+                reason,
+            }
+        );
+        let envelope = ResponseEnvelope::framework_error(
+            failure,
+            None,
+            Some(registry.build_plan(&request("invalid")).unwrap()),
+        );
+        assert!(!serde_json::to_string(&envelope).unwrap().contains(secret));
+    }
+}

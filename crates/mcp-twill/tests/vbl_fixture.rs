@@ -2,8 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use mcp_twill::ArgType;
-use serde_json::Value;
+use mcp_twill::{
+    ApplicationResultContract, ApplicationSuccess, ArgType, CommandRegistry, CommandSpec,
+    DynamicCommandFailure, OutputContract,
+};
+use serde_json::{Value, json};
 
 #[path = "support/vbl.rs"]
 mod vbl;
@@ -26,6 +29,74 @@ fn baseline_observation() -> Value {
         "baseline-tools.json"
     )))
     .expect("parse baseline tools")
+}
+
+fn error_observation() -> Value {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/vbl/v0.4.9/",
+        "application-error-vectors.json"
+    )))
+    .expect("parse application error vectors")
+}
+
+#[test]
+fn released_error_inventory_has_one_authored_twill_owner() {
+    let observation = error_observation();
+    let released = observation["errorCodes"]
+        .as_array()
+        .expect("released error codes")
+        .iter()
+        .map(|code| code.as_str().expect("error code"))
+        .collect::<BTreeSet<_>>();
+    let authored = vbl::ERROR_OWNERS
+        .iter()
+        .map(|(code, _)| *code)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        authored.len(),
+        vbl::ERROR_OWNERS.len(),
+        "duplicate error code"
+    );
+    assert_eq!(authored, released, "every released code has one owner");
+    assert_eq!(
+        vbl::ERROR_OWNERS
+            .iter()
+            .find(|(code, _)| *code == "invalid_request_context")
+            .map(|(_, owner)| *owner),
+        Some(vbl::ErrorOwner::Framework("invalid_request_context"))
+    );
+    assert!(vbl::ERROR_OWNERS.iter().all(|(code, owner)| {
+        *code == "invalid_request_context" || *owner == vbl::ErrorOwner::Application
+    }));
+}
+
+#[test]
+fn every_released_baseline_output_is_an_rfc_0014_source_contract() {
+    let baseline = baseline_observation();
+    for tool in baseline.as_array().expect("baseline tools") {
+        let name = tool["name"].as_str().expect("tool name");
+        let schema = tool["outputSchema"].clone();
+        let registry = CommandRegistry::new("vbl-output", "VBL output contract").register_dynamic(
+            CommandSpec::new([name], name, name).with_output(OutputContract {
+                application: Some(ApplicationResultContract::new(schema)),
+                ..OutputContract::default()
+            }),
+            |_context| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+            },
+        );
+        registry
+            .validate_results()
+            .unwrap_or_else(|error| panic!("released output `{name}` must compile: {error}"));
+        assert!(
+            registry.catalog().operations[0]
+                .output
+                .application
+                .is_some(),
+            "released output `{name}` must project"
+        );
+    }
 }
 
 #[test]

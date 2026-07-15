@@ -10,8 +10,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    Alternative, ArgSpec, ArgType, CapabilityDecl, CommandContext, CommandExample, CommandGuidance,
-    CommandHandler, CommandOutput, CommandRegistry, CommandSpec, Fallback, FrameworkError,
+    Alternative, ApplicationResultContract, ApplicationResultDialect, ArgSpec, ArgType,
+    CapabilityDecl, CommandContext, CommandExample, CommandGuidance, CommandHandler, CommandOutput,
+    CommandRegistry, CommandSpec, DynamicApplicationDialect, Fallback, FrameworkError,
     OutputContract, PermissionSpec, ProgressPhaseSpec, ResourceDecl, Result, StdinContract,
     TypeDecl, WorkspaceDecl,
     resource::{ReadResource, ResolveResource, Resource, ResourceDialect},
@@ -77,7 +78,13 @@ pub struct ServerBuilder {
 
 struct BuiltCommand {
     spec: CommandSpec,
-    handler: SharedCommandHandler,
+    handler: BuiltHandler,
+}
+
+enum BuiltHandler {
+    Legacy(SharedCommandHandler),
+    Result(crate::results::ResultHandlerRegistration),
+    Dynamic(crate::results::DynamicHandlerRegistration),
 }
 
 impl ServerBuilder {
@@ -211,11 +218,6 @@ impl ServerBuilder {
         for workspace in self.workspaces.drain(..) {
             registry = registry.declare_workspace(workspace);
         }
-        let hand_declared_capabilities = self
-            .capabilities
-            .iter()
-            .map(|capability| capability.name.clone())
-            .collect::<BTreeSet<_>>();
         for capability in self.capabilities.drain(..) {
             registry = registry.declare_capability(capability);
         }
@@ -224,15 +226,6 @@ impl ServerBuilder {
         }
         for decl in &self.resources {
             registry = registry.declare_resource(decl.clone());
-            // A hand-declared capability with the resource's name is a
-            // collision `validate_resources` reports; declaring the derived
-            // capability over it would mask that.
-            if !hand_declared_capabilities.contains(&decl.name) {
-                registry = registry.declare_derived_capability(
-                    CapabilityDecl::new(decl.name.clone(), decl.summary.clone())
-                        .carried_by(decl.carrier_name()),
-                );
-            }
         }
         for binding in self.resource_bindings {
             registry = binding(registry);
@@ -241,7 +234,15 @@ impl ServerBuilder {
             registry = registry.declare_guidance(guidance);
         }
         for command in self.commands {
-            registry = registry.register(command.spec, command.handler);
+            registry = match command.handler {
+                BuiltHandler::Legacy(handler) => registry.register(command.spec, handler),
+                BuiltHandler::Result(handler) => {
+                    registry.register_result_registration(command.spec, handler)
+                }
+                BuiltHandler::Dynamic(handler) => {
+                    registry.register_dynamic_registration(command.spec, handler)
+                }
+            };
         }
         registry.validate_types()?;
         registry.validate_workspaces()?;
@@ -249,6 +250,7 @@ impl ServerBuilder {
         registry.validate_examples()?;
         registry.validate_guidance()?;
         registry.validate_resources()?;
+        registry.validate_results()?;
         Ok(registry)
     }
 
@@ -280,6 +282,7 @@ impl ServerBuilder {
             .collect::<BTreeMap<_, _>>();
         for command in &mut self.commands {
             let spec = &mut command.spec;
+            let inject_carriers = matches!(&command.handler, BuiltHandler::Legacy(_));
             let mut injected = BTreeSet::new();
             let resolved = spec
                 .requires_resources
@@ -296,6 +299,9 @@ impl ServerBuilder {
                 let Some(decl) = decls.get(&resource) else {
                     continue;
                 };
+                if !inject_carriers {
+                    continue;
+                }
                 let carrier = decl.carrier_name();
                 // A hand-written argument under the carrier name would
                 // shadow the injected one with a different type or
@@ -352,6 +358,7 @@ pub struct CommandBuilder {
     permissions: Vec<PermissionSpec>,
     examples: Vec<CommandExample>,
     output: Option<OutputContract>,
+    result_contract: Option<ApplicationResultContract>,
     stdin: Option<StdinContract>,
     progress: Vec<ProgressPhaseSpec>,
     idempotent: bool,
@@ -367,7 +374,7 @@ pub struct CommandBuilder {
     grants: Vec<String>,
     releases: Vec<String>,
     enumerates: Vec<String>,
-    handler: Option<SharedCommandHandler>,
+    handler: Option<BuiltHandler>,
     errors: Vec<FrameworkError>,
 }
 
@@ -381,6 +388,7 @@ impl CommandBuilder {
             permissions: Vec::new(),
             examples: Vec::new(),
             output: None,
+            result_contract: None,
             stdin: None,
             progress: Vec::new(),
             idempotent: false,
@@ -561,8 +569,46 @@ impl CommandBuilder {
     }
 
     pub fn output(&mut self, output: OutputContract) -> &mut Self {
+        if self.output.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "command `{}` assigns `output` more than once",
+                self.path.join(" ")
+            )));
+            return self;
+        }
+        let mut output = output;
+        if let Some(application) = output.application.take() {
+            self.install_result_contract(application);
+        }
         self.output = Some(output);
         self
+    }
+
+    pub fn result_contract(&mut self, contract: ApplicationResultContract) -> &mut Self {
+        self.install_result_contract(contract);
+        self
+    }
+
+    fn install_result_contract(&mut self, contract: ApplicationResultContract) {
+        if self.result_contract.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "command `{}` assigns `result_contract` more than once",
+                self.path.join(" ")
+            )));
+        } else {
+            self.result_contract = Some(contract);
+        }
+    }
+
+    fn install_handler(&mut self, handler: BuiltHandler) {
+        if self.handler.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "command `{}` installs more than one handler",
+                self.path.join(" ")
+            )));
+        } else {
+            self.handler = Some(handler);
+        }
     }
 
     pub fn stdin(&mut self, mime_type: impl Into<String>, summary: impl Into<String>) -> &mut Self {
@@ -626,10 +672,67 @@ impl CommandBuilder {
             .extend(H::granted().into_iter().map(ToOwned::to_owned));
         self.enumerates
             .extend(H::enumerated().into_iter().map(ToOwned::to_owned));
-        self.handler = Some(SharedCommandHandler::from_arc(
+        self.install_handler(BuiltHandler::Legacy(SharedCommandHandler::from_arc(
             handler.into_command_handler(),
-        ));
+        )));
         self
+    }
+
+    pub fn handle_result<M, H>(&mut self, handler: H) -> &mut Self
+    where
+        H: ApplicationResultDialect<M>,
+    {
+        let registration = handler.into_result_registration();
+        self.apply_result_resource_edges(
+            &registration.resource_uses,
+            &registration.granted,
+            &registration.enumerated,
+        );
+        self.install_handler(BuiltHandler::Result(registration));
+        self
+    }
+
+    pub fn handle_dynamic<M, H>(&mut self, handler: H) -> &mut Self
+    where
+        H: DynamicApplicationDialect<M>,
+    {
+        let registration = handler.into_dynamic_registration();
+        self.apply_result_resource_edges(
+            &registration.resource_uses,
+            &registration.granted,
+            &registration.enumerated,
+        );
+        self.install_handler(BuiltHandler::Dynamic(registration));
+        self
+    }
+
+    fn apply_result_resource_edges(
+        &mut self,
+        uses: &[crate::resource::ResourceUse],
+        granted: &[&'static str],
+        enumerated: &[&'static str],
+    ) {
+        for resource_use in uses {
+            if resource_use.released {
+                self.releases.push(resource_use.resource.to_string());
+            } else {
+                self.requires_resources
+                    .push(resource_use.resource.to_string());
+            }
+        }
+        self.grants
+            .extend(granted.iter().map(|name| (*name).to_string()));
+        self.enumerates
+            .extend(enumerated.iter().map(|name| (*name).to_string()));
+        for values in [
+            &mut self.requires_resources,
+            &mut self.releases,
+            &mut self.grants,
+            &mut self.enumerates,
+        ] {
+            values.sort();
+            values.dedup();
+        }
     }
 
     pub fn handle_typed<A, H, Fut>(&mut self, handler: H) -> &mut Self
@@ -638,10 +741,12 @@ impl CommandBuilder {
         H: Fn(CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<CommandOutput>> + Send,
     {
-        self.handler = Some(SharedCommandHandler::new(TypedHandler::<A, H> {
-            handler,
-            _marker: PhantomData,
-        }));
+        self.install_handler(BuiltHandler::Legacy(SharedCommandHandler::new(
+            TypedHandler::<A, H> {
+                handler,
+                _marker: PhantomData,
+            },
+        )));
         self
     }
 
@@ -706,7 +811,24 @@ impl CommandBuilder {
         }
 
         let mut spec = CommandSpec::new(self.path, summary, description);
-        if let Some(output) = self.output {
+        let mut output = self.output.unwrap_or_default();
+        match &handler {
+            BuiltHandler::Legacy(_) | BuiltHandler::Result(_) if self.result_contract.is_some() => {
+                return Err(FrameworkError::Build(format!(
+                    "command `{command_name}` pairs an explicit application result contract with a handler that cannot use it"
+                )));
+            }
+            BuiltHandler::Dynamic(_) if self.result_contract.is_none() => {
+                return Err(FrameworkError::Build(format!(
+                    "dynamic result command `{command_name}` is missing an application result contract"
+                )));
+            }
+            _ => {}
+        }
+        output.application = self.result_contract;
+        if output != OutputContract::default()
+            || matches!(&handler, BuiltHandler::Result(_) | BuiltHandler::Dynamic(_))
+        {
             spec = spec.with_output(output);
         }
         if let Some(stdin) = self.stdin {

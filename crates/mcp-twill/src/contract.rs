@@ -673,7 +673,71 @@ pub fn verify_catalog_coverage(
     violations.extend(check_conversation_identity_projection(registry));
     violations.extend(check_type_projection(registry));
     violations.extend(check_capability_projection(registry));
+    violations.extend(check_result_projection(registry));
     violations.extend(check_runtime_identity(registry));
+    violations
+}
+
+/// Result declarations stay aligned across registry validation, the catalog,
+/// hashes, and full command help.
+pub fn check_result_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    check_result_projection_with_help(registry, |command| {
+        registry
+            .help(HelpRequest {
+                command: Some(command.to_string()),
+                topic: Some(HelpTopic::Usage),
+                detail: None,
+            })
+            .text
+    })
+}
+
+fn check_result_projection_with_help(
+    registry: &CommandRegistry,
+    render_help: impl Fn(&str) -> String,
+) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_results() {
+        violations.push(violation(None, "results", error.to_string()));
+        return violations;
+    }
+    let catalog = registry.catalog();
+    for command in registry.command_specs() {
+        let name = command.name();
+        let expected = command.output.clone().unwrap_or_default();
+        let projected = catalog
+            .operations
+            .iter()
+            .find(|operation| operation.path == command.path)
+            .map(|operation| &operation.output);
+        if projected != Some(&expected) {
+            violations.push(violation(
+                Some(&name),
+                "results",
+                "catalog output contract differs from the registered command",
+            ));
+        }
+        let Some(application) = expected.application else {
+            continue;
+        };
+        let help = render_help(&name);
+        if !help.contains(&expected.summary) {
+            violations.push(violation(
+                Some(&name),
+                "help",
+                "command help omits the result summary",
+            ));
+        }
+        for error in application.errors {
+            if !help.contains(&format!("`{}`", error.code)) {
+                violations.push(violation(
+                    Some(&name),
+                    "help",
+                    format!("command help omits application error `{}`", error.code),
+                ));
+            }
+        }
+    }
     violations
 }
 
@@ -1245,6 +1309,13 @@ macro_rules! contract_tests {
         }
 
         #[test]
+        fn contract_result_projection() {
+            $crate::contract::assert_no_violations($crate::contract::check_result_projection(
+                &$registry(),
+            ));
+        }
+
+        #[test]
         fn contract_guidance_projection() {
             $crate::contract::assert_no_violations($crate::contract::check_guidance_projection(
                 &$registry(),
@@ -1318,6 +1389,44 @@ mod capability_projection_tests {
             violations.iter().any(|violation| violation
                 .message
                 .contains("does not mention capability `validated-build`")),
+            "violations: {violations:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod result_projection_tests {
+    use super::*;
+    use crate::{
+        ApplicationResultContract, ApplicationSuccess, CommandSpec, DynamicCommandFailure,
+        OutputContract,
+    };
+    use serde_json::json;
+
+    fn registry() -> CommandRegistry {
+        CommandRegistry::new("contract", "Contract").register_dynamic(
+            CommandSpec::new(["status"], "Status", "Status").with_output(OutputContract {
+                application: Some(ApplicationResultContract::new(json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }))),
+                ..OutputContract::default()
+            }),
+            |_context| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+            },
+        )
+    }
+
+    #[test]
+    fn missing_result_help_is_a_contract_violation() {
+        let registry = registry();
+        let violations = check_result_projection_with_help(&registry, |_| String::new());
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.message.contains("result summary")),
             "violations: {violations:?}"
         );
     }

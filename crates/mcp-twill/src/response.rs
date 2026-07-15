@@ -58,6 +58,8 @@ pub enum ErrorCode {
     ApprovalInvalid,
     BuildFailed,
     HandlerFailed,
+    ApplicationError,
+    ResultContractViolation,
 }
 
 impl ErrorCode {
@@ -89,6 +91,7 @@ impl ErrorCode {
             FrameworkError::WrongEffectLane { .. } => Self::WrongEffectLane,
             FrameworkError::Build(_) => Self::BuildFailed,
             FrameworkError::Handler(_) => Self::HandlerFailed,
+            FrameworkError::ResultContractViolation { .. } => Self::ResultContractViolation,
         }
     }
 }
@@ -265,6 +268,55 @@ impl ResponseEnvelope {
         }
     }
 
+    pub fn application_error(
+        plan: InvocationPlan,
+        error: crate::ApplicationErrorBody,
+        profile: ResponseProfile,
+    ) -> Self {
+        let command = Some(plan.command_path.clone());
+        let steering = error
+            .recoveries
+            .iter()
+            .filter_map(|recovery| match recovery {
+                crate::ApplicationRecovery::Operation { operation_id } => Some(SteeringAction {
+                    kind: SteeringKind::Help,
+                    label: format!("Recover with `{operation_id}`"),
+                    request: json!({
+                        "tool": "help",
+                        "arguments": { "command": operation_id },
+                    }),
+                    priority: SteeringPriority::Primary,
+                }),
+                crate::ApplicationRecovery::Action { .. } => None,
+            })
+            .collect();
+        let details = json!({
+            "applicationCode": error.code,
+            "details": error.details,
+            "recoveries": error.recoveries,
+        });
+        Self {
+            status: ResponseStatus::Failed,
+            command,
+            output: None,
+            error: Some(ErrorBody {
+                code: ErrorCode::ApplicationError,
+                message: error.message.clone(),
+                details,
+            }),
+            diagnostics: Vec::new(),
+            steering,
+            display: Some(DisplayHint {
+                title: "Application error".to_string(),
+                summary: error.message,
+            }),
+            replay: None,
+            preview: None,
+            plan: matches!(profile, ResponseProfile::Debug).then_some(plan),
+            retry: None,
+        }
+    }
+
     pub fn preview(plan: InvocationPlan, requires_confirmation: bool) -> Self {
         let command = Some(plan.command_path.clone());
         let preview = permission_preview(&plan, requires_confirmation);
@@ -343,7 +395,13 @@ impl ResponseEnvelope {
         let error = normalize_public_capability_denial(error);
         let code = ErrorCode::from_framework_error(&error);
         let status = status_for_error(&error);
-        let message = error.to_string();
+        let message = match &error {
+            FrameworkError::Handler(_) => "Command handler failed".to_string(),
+            FrameworkError::ResultContractViolation { .. } => {
+                "The declared result contract was violated".to_string()
+            }
+            _ => error.to_string(),
+        };
         let command = plan.as_ref().map(|plan| plan.command_path.clone());
         let retry = match (&error, request) {
             (FrameworkError::WrongEffectLane { required_tool, .. }, Some(arguments)) => {
@@ -354,11 +412,21 @@ impl ResponseEnvelope {
             }
             _ => None,
         };
-        let details = error_details(&error);
+        let mut details = error_details(&error);
+        if let (FrameworkError::ResultContractViolation { .. }, Some(plan)) = (&error, &plan)
+            && let Some(details) = details.as_object_mut()
+        {
+            details.insert("operation".to_string(), json!(plan.operation_id));
+        }
         let diagnostic = diagnostic_for_error(&error, &code);
         let steering = steering_for_error(&error, retry.as_ref());
         let mut diagnostics = vec![diagnostic];
         diagnostics.extend(workspace_diagnostics(&error));
+        let plan = if matches!(&error, FrameworkError::ResultContractViolation { .. }) {
+            None
+        } else {
+            plan
+        };
 
         Self {
             status,
@@ -488,8 +556,9 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
         FrameworkError::PermissionDenied { .. } => ResponseStatus::PermissionDenied,
         FrameworkError::WrongEffectLane { .. } => ResponseStatus::WrongEffectLane,
         FrameworkError::ApprovalInvalid(_) => ResponseStatus::ApprovalInvalid,
-        FrameworkError::Handler(_) => ResponseStatus::Failed,
-        FrameworkError::Build(_) => ResponseStatus::Failed,
+        FrameworkError::Handler(_)
+        | FrameworkError::Build(_)
+        | FrameworkError::ResultContractViolation { .. } => ResponseStatus::Failed,
         _ => ResponseStatus::InvalidInput,
     }
 }
@@ -663,8 +732,12 @@ fn error_details(error: &FrameworkError) -> Value {
             "currentTool": current_tool,
             "requiredTool": required_tool,
         }),
-        FrameworkError::Handler(value) => json!({ "handler": value }),
+        FrameworkError::Handler(_) => json!({}),
         FrameworkError::Build(value) => json!({ "build": value }),
+        FrameworkError::ResultContractViolation { boundary, reason } => json!({
+            "boundary": boundary,
+            "reason": reason,
+        }),
         FrameworkError::EmptyCommand | FrameworkError::UnterminatedQuote => json!({}),
     }
 }
@@ -781,7 +854,13 @@ fn diagnostic_for_error(error: &FrameworkError, code: &ErrorCode) -> Diagnostic 
 
     Diagnostic {
         code: code.clone(),
-        message: error.to_string(),
+        message: match error {
+            FrameworkError::Handler(_) => "Command handler failed".to_string(),
+            FrameworkError::ResultContractViolation { .. } => {
+                "The declared result contract was violated".to_string()
+            }
+            _ => error.to_string(),
+        },
         location,
         expected,
         actual: None,

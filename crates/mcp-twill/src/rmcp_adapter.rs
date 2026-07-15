@@ -197,6 +197,7 @@ impl CliMcpServer {
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
         registry.validate_resources()?;
+        registry.validate_results()?;
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));
@@ -573,12 +574,21 @@ impl CliMcpServer {
             )
             .await;
         match result {
-            Ok(response) => {
+            Ok(crate::CommandExecutionOutcome::Success(response)) => {
                 if let Some(meta) = progress_meta {
                     Self::notify_progress(meta, &client, 4.0, 4.0, "Command complete").await;
                 }
                 RunOutcome::output(
                     ResponseEnvelope::success(response, profile),
+                    Some(plan_for_event),
+                )
+            }
+            Ok(crate::CommandExecutionOutcome::ApplicationError { plan, error }) => {
+                if let Some(meta) = progress_meta {
+                    Self::notify_progress(meta, &client, 4.0, 4.0, "Command complete").await;
+                }
+                RunOutcome::output(
+                    ResponseEnvelope::application_error(plan, error, profile),
                     Some(plan_for_event),
                 )
             }
@@ -884,15 +894,11 @@ impl ServerHandler for CliMcpServer {
             let result = server
                 .execute_run_tool(tool_name, request_meta, context_meta, client, run_request)
                 .await;
-            let is_error = result.is_error.unwrap_or(false);
+            let completion_message = task_completion_message(&result);
             let mut tasks = tasks.lock().await;
             if let Some(record) = tasks.get_mut(&task_id) {
                 record.task.status = TaskStatus::Completed;
-                record.task.status_message = Some(if is_error {
-                    "Run command completed with a framework error".to_string()
-                } else {
-                    "Run command completed".to_string()
-                });
+                record.task.status_message = Some(completion_message.to_string());
                 record.task.last_updated_at = Utc::now().to_rfc3339();
                 record.payload = Some(serde_json::to_value(result).unwrap_or_else(|error| {
                     json!({
@@ -968,6 +974,23 @@ impl ServerHandler for CliMcpServer {
             meta: None,
             task: record.task.clone(),
         })
+    }
+}
+
+fn task_completion_message(result: &CallToolResult) -> &'static str {
+    if result
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("error"))
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+        == Some("application_error")
+    {
+        "Run command completed with an application error"
+    } else if result.is_error.unwrap_or(false) {
+        "Run command completed with a framework error"
+    } else {
+        "Run command completed"
     }
 }
 
@@ -1215,6 +1238,9 @@ fn envelope_result(envelope: ResponseEnvelope) -> CallToolResult {
 }
 
 fn success_result(envelope: ResponseEnvelope, profile: ResponseProfile) -> CallToolResult {
+    if envelope.error.is_some() {
+        return envelope_result(envelope);
+    }
     if matches!(profile, ResponseProfile::Text) {
         let mut text = envelope
             .output
@@ -1410,5 +1436,59 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn text_profile_keeps_application_errors_in_the_mcp_error_family() {
+        let envelope = ResponseEnvelope {
+            status: crate::ResponseStatus::Failed,
+            command: Some(vec!["browser".to_string(), "status".to_string()]),
+            output: None,
+            error: Some(crate::ErrorBody {
+                code: crate::ErrorCode::ApplicationError,
+                message: "No browser session is available".to_string(),
+                details: json!({
+                    "applicationCode": "session_required",
+                    "details": {},
+                    "recoveries": [],
+                }),
+            }),
+            diagnostics: Vec::new(),
+            steering: Vec::new(),
+            display: None,
+            replay: None,
+            preview: None,
+            plan: None,
+            retry: None,
+        };
+        let result = success_result(envelope, ResponseProfile::Text);
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.structured_content.is_some());
+        assert!(
+            result.content[0]
+                .raw
+                .as_text()
+                .unwrap()
+                .text
+                .contains("application_error")
+        );
+        assert_eq!(
+            task_completion_message(&result),
+            "Run command completed with an application error"
+        );
+    }
+
+    #[test]
+    fn task_completion_distinguishes_framework_errors_and_success() {
+        let framework = CallToolResult::structured_error(json!({
+            "status": "failed",
+            "error": { "code": "handler_failed" },
+        }));
+        assert_eq!(
+            task_completion_message(&framework),
+            "Run command completed with a framework error"
+        );
+        let success = CallToolResult::structured(json!({ "status": "ok" }));
+        assert_eq!(task_completion_message(&success), "Run command completed");
     }
 }
