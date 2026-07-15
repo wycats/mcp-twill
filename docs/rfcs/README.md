@@ -378,7 +378,9 @@ schema or declaration value merely to obtain canonical bytes.
 Invocation fingerprints remain SHA-256 over Twill's existing stable JSON
 fingerprint object. RFC 0015 adds one mandatory `invocation` member identifying
 origin and serving surface. RFC 0017's canonical `schemaMatch` selections feed
-the existing bound-argument input, while RFC 0018 and RFC 0016 add
+the existing bound-argument input, and its optional `argumentRequirements`
+member binds the selected command's canonical presence-relation inventory for
+every origin without adding plan state. RFC 0018 and RFC 0016 add
 `presentationContract` and `resourceBindings` only when applicable. Each owning
 RFC defines the exact JSON shape and sorting rule. This changes fingerprint
 values intentionally when the suite lands while preserving plan, event, and
@@ -392,7 +394,7 @@ The identity layers have non-overlapping authority:
 | Catalog hash | Normalized server and operation semantics | Workspace/capability/resource/type declarations, guidance, result and argument contracts, command presentation, effects, and `TaskSupportSpec` | Serving tool names and grouping, protocol revision, runtime context, adapter sidecars, and invocation values |
 | Native or effect-lane surface hash | One complete versioned MCP serving contract | Catalog identity, protocol revision, exposure and routing, projected schemas/help/instructions, application-error dialect, presentation defaults, RFC 0016 binding declarations, and RFC 0020 delivery/runtime-contract facts | Authorizer, confirmation-bridge, binder, resolver, task-store, and access-provider objects; request values and runtime task selection |
 | Host adapter hash | One complete generated-artifact and private host-transport contract | The unchanged nested native snapshot plus host naming, guidance, confirmation policy, result projection, context gates, limits, transport, and accepted result-code inventories | Observed runtime version, invocation context, resolved launch paths/environment, cancellation tokens, application values, and reusable approval scope |
-| Invocation fingerprint | One prepared operation attempt under one serving identity | Origin and surface, validated bound arguments and named/schema branch selections, effects and output request, selected workspaces, a declaring command's RFC 0013 identity digest, command presentation contract, and selected RFC 0016 binding facts/digests | Host adapter hash, rendered presentation, task id/state, immediate-versus-deferred choice, private sidecar objects, and raw metadata |
+| Invocation fingerprint | One prepared operation attempt under one serving identity | Origin and surface, validated bound arguments and named/schema branch selections, the selected command's canonical argument-presence inventory, effects and output request, selected workspaces, a declaring command's RFC 0013 identity digest, command presentation contract, and selected RFC 0016 binding facts/digests | Host adapter hash, rendered presentation, task id/state, immediate-versus-deferred choice, private sidecar objects, and raw metadata |
 | Task runtime contract version | Task semantics that must remain compatible under one active delivery member | State transitions, per-record and per-runtime count bounds, atomic admission, oversized-outcome replacement, store/runner obligations, writer bytes, and the complete accepted decoder language; the value is embedded in and changes the surface hash | A standalone negotiation or lookup authority, store instances, access providers, task ids, and request-specific state |
 | Task storage key | Opaque private lookup isolation for one retained task | Compiled surface hash, access-mode tag, task id, and any verified private scope digest under RFC 0020's fixed framing | A separately supplied catalog hash or document, public discovery, invocation fingerprints, model-visible authorization, and cross-surface migration authority |
 
@@ -420,6 +422,7 @@ authority to absorb that fact.
 | --- | --- | --- | --- | --- | --- | --- |
 | Unrelated catalog declaration | Changes | Changes | Changes | Changes | Stable | Changes through the surface hash |
 | Selected command presentation declaration | Changes | Changes | Changes | Changes | Changes through `presentationContract` | Changes through the surface hash |
+| Selected command argument-presence relation | Changes | Changes | Changes | Changes through surface identity and `argumentRequirements` | Changes through `argumentRequirements` | Changes through the surface hash |
 | Native surface declaration or snapshot version | Stable | Changes | Changes | Changes | Stable | Changes through the surface hash |
 | Host profile declaration or host snapshot version | Stable | Stable | Changes | Stable | Stable | Stable |
 | Equivalent private authorizer, bridge, binder, resolver, store, access-provider, or launch object | Stable | Stable | Stable | Stable unless its normalized selected invocation fact changes | Stable under the same condition | Stable for the same surface, task id, mode, and verified scope |
