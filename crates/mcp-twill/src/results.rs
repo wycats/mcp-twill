@@ -1516,8 +1516,10 @@ fn canonicalize_nullable_types(value: &mut Value) {
             if let Some(Value::Array(kinds)) = object.get_mut("type") {
                 kinds.sort_by_key(|kind| kind == "null");
             }
-            for value in object.values_mut() {
-                canonicalize_nullable_types(value);
+            for (key, nested) in object {
+                if !matches!(key.as_str(), "const" | "enum") {
+                    canonicalize_nullable_types(nested);
+                }
             }
         }
         Value::Array(values) => {
@@ -1860,8 +1862,10 @@ fn normalize_typed_schema_at(value: &mut Value, definitions: &Map<String, Value>
             if let Some(Value::Array(kinds)) = object.get_mut("type") {
                 kinds.sort_by_key(|kind| kind == "null");
             }
-            for nested in object.values_mut() {
-                normalize_typed_schema_at(nested, definitions);
+            for (key, nested) in object {
+                if !matches!(key.as_str(), "const" | "enum") {
+                    normalize_typed_schema_at(nested, definitions);
+                }
             }
         }
         Value::Array(values) => {
@@ -1945,6 +1949,18 @@ fn schema_is_provably_non_null(
         _ => false,
     };
     if own_assertion_is_non_null {
+        return true;
+    }
+    if object
+        .get("oneOf")
+        .and_then(Value::as_array)
+        .is_some_and(|branches| {
+            !branches.is_empty()
+                && branches
+                    .iter()
+                    .all(|branch| schema_is_provably_non_null(branch, definitions, visiting))
+        })
+    {
         return true;
     }
     let Some(reference) = object.get("$ref").and_then(Value::as_str) else {

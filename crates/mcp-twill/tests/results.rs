@@ -1087,10 +1087,25 @@ fn schema_dialect_canonicalizes_supported_forms_and_rejects_drift() {
     let literal_ref = explicit_schema_registry(json!({
         "type": "object",
         "properties": {
-            "payload": { "const": { "$ref": "literal", "nested": [{ "$ref": "also-literal" }] } }
+            "payload": {
+                "const": {
+                    "$ref": "literal",
+                    "type": ["null", "string"],
+                    "nested": [{ "$ref": "also-literal" }]
+                }
+            }
         }
     }));
     literal_ref.validate_results().unwrap();
+    assert_eq!(
+        literal_ref.catalog().operations[0]
+            .output
+            .application
+            .as_ref()
+            .unwrap()
+            .success_schema["properties"]["payload"]["const"]["type"],
+        json!(["null", "string"])
+    );
 
     for schema in [
         json!({ "type": "object", "title": 42 }),
@@ -1295,6 +1310,57 @@ fn typed_schema_normalizes_nullable_local_references() {
         |_context| async {
             Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
                 "nested": { "value": "ready" }
+            })))
+        },
+    );
+    registry.validate_results().unwrap();
+}
+
+#[test]
+fn typed_schema_normalizes_nullable_non_null_unions() {
+    #[derive(Serialize)]
+    struct OptionalUnion;
+
+    impl JsonSchema for OptionalUnion {
+        fn schema_name() -> Cow<'static, str> {
+            "OptionalUnion".into()
+        }
+
+        fn json_schema(_: &mut SchemaGenerator) -> Schema {
+            json!({
+                "type": "object",
+                "properties": {
+                    "choice": {
+                        "anyOf": [
+                            {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    { "type": "integer" }
+                                ]
+                            },
+                            { "type": "null" }
+                        ]
+                    }
+                }
+            })
+            .try_into()
+            .unwrap()
+        }
+    }
+
+    let contract = ApplicationResultContract::for_type::<OptionalUnion>();
+    assert!(contract.success_schema.to_string().contains("oneOf"));
+    assert!(!contract.success_schema.to_string().contains("anyOf"));
+    let registry = CommandRegistry::new("typed-union", "Typed union").register_dynamic(
+        CommandSpec::new(["typed-union"], "Typed union", "Typed union").with_output(
+            OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            },
+        ),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "choice": "ready"
             })))
         },
     );
