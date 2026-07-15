@@ -2089,6 +2089,7 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
     ) -> Result<CommandExecutionOutcome> {
+        self.validate_results()?;
         let plan = self.build_plan_prepared(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
             && plan.lane != current_lane

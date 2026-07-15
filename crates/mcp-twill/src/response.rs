@@ -395,7 +395,7 @@ impl ResponseEnvelope {
         let error = normalize_public_capability_denial(error);
         let code = ErrorCode::from_framework_error(&error);
         let status = status_for_error(&error);
-        let message = match error {
+        let message = match &error {
             FrameworkError::Handler(_) => "Command handler failed".to_string(),
             FrameworkError::ResultContractViolation { .. } => {
                 "The declared result contract was violated".to_string()
@@ -422,6 +422,11 @@ impl ResponseEnvelope {
         let steering = steering_for_error(&error, retry.as_ref());
         let mut diagnostics = vec![diagnostic];
         diagnostics.extend(workspace_diagnostics(&error));
+        let plan = if matches!(&error, FrameworkError::ResultContractViolation { .. }) {
+            None
+        } else {
+            plan
+        };
 
         Self {
             status,

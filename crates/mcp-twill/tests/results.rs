@@ -1,12 +1,21 @@
 //! RFC 0014 acceptance tests: application-owned result contracts.
 
-use std::{borrow::Cow, collections::BTreeMap, error::Error, fmt};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    error::Error,
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use mcp_twill::{
     ApplicationError, ApplicationErrorBody, ApplicationErrorDecl, ApplicationErrorUse,
     ApplicationMessageDecl, ApplicationOutput, ApplicationOutputResult, ApplicationRecovery,
     ApplicationRecoveryKey, ApplicationRecoverySelection, ApplicationResult,
-    ApplicationResultContract, ApplicationSuccess, ArgType, CommandContext,
+    ApplicationResultContract, ApplicationSuccess, ArgSpec, ArgType, CommandContext,
     CommandExecutionOutcome, CommandOutput, CommandRegistry, CommandSpec, DynamicApplicationError,
     DynamicApplicationResult, FrameworkError, FrameworkEvent, Grant, HelpRequest, InvocationPlan,
     Listing, OutputContract, OutputFormat, OutputSpec, PlanFacts, Res, ResolveResource, Resource,
@@ -579,6 +588,38 @@ async fn dynamic_contract_is_authoritative_and_mismatch_is_redacted() {
 }
 
 #[tokio::test]
+async fn result_contract_violation_envelope_omits_plan_and_bound_arguments() {
+    let contract = ApplicationResultContract::new(json!({
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" } },
+        "required": ["ok"],
+        "additionalProperties": false,
+    }));
+    let registry = CommandRegistry::new("redacted", "Redacted").register_dynamic(
+        CommandSpec::new(["redacted"], "Redacted", "Redacted")
+            .with_arg(ArgSpec::string("token", "Sensitive token"))
+            .with_output(OutputContract {
+                application: Some(contract),
+                ..OutputContract::default()
+            }),
+        |_context| async {
+            Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "wrong": true
+            })))
+        },
+    );
+    let mut run = request("redacted --token $args.token");
+    run.args.insert("token".to_string(), json!("secret-token"));
+    let plan = registry.build_plan(&run).unwrap();
+    let error = registry.run(run).await.unwrap_err();
+    let envelope = ResponseEnvelope::framework_error(error, None, Some(plan));
+    let value = serde_json::to_value(envelope).unwrap();
+    assert_eq!(value["error"]["details"]["operation"], "redacted");
+    assert!(value.get("plan").is_none());
+    assert!(!value.to_string().contains("secret-token"));
+}
+
+#[tokio::test]
 async fn typed_serialization_and_schema_failures_are_distinct_and_redacted() {
     for (name, registry, reason, secret) in [
         (
@@ -705,6 +746,30 @@ fn invalid_handler_contract_pairings_fail_before_serving() {
             .to_string()
             .contains("legacy")
     );
+}
+
+#[tokio::test]
+async fn direct_registry_run_validates_result_registration_before_dispatch() {
+    let dispatched = Arc::new(AtomicBool::new(false));
+    let handler_dispatched = Arc::clone(&dispatched);
+    let registry = CommandRegistry::new("invalid", "Invalid").register_dynamic(
+        CommandSpec::new(["dynamic"], "Dynamic", "Dynamic without a contract"),
+        move |_context| {
+            let handler_dispatched = Arc::clone(&handler_dispatched);
+            async move {
+                handler_dispatched.store(true, Ordering::SeqCst);
+                Ok::<_, mcp_twill::DynamicCommandFailure>(ApplicationSuccess::value(json!({})))
+            }
+        },
+    );
+
+    let error = registry.run(request("dynamic")).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("missing an application result contract")
+    );
+    assert!(!dispatched.load(Ordering::SeqCst));
 }
 
 #[test]
