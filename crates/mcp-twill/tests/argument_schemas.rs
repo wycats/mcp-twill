@@ -2075,6 +2075,14 @@ fn typed_open_maps_and_closed_records_enforce_object_boundaries() {
         } if path.is_empty()
     ));
     assert!(!error.to_string().contains("secret"));
+    let multiple_extras = closed
+        .build_plan(&request(
+            "value take --value $args.value",
+            json!({ "value": { "label": "ok", "secret": true, "token": true } }),
+        ))
+        .unwrap_err();
+    assert_eq!(multiple_extras, error);
+    assert!(!multiple_extras.to_string().contains("token"));
 }
 
 #[test]

@@ -1807,6 +1807,7 @@ fn evaluate_node(
                         ArgumentSchemaKeyword::AdditionalProperties,
                         "no additional properties".to_string(),
                     ));
+                    break;
                 }
                 Some(schema @ Value::Object(_)) => match evaluate_node(
                     property_value,
