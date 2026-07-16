@@ -585,57 +585,127 @@ fn for_each_child_schema_mut(
 }
 
 fn elide_derived_optional_nulls(authored: &Value, derived: &mut Value) {
+    let authored_root = authored.clone();
+    elide_derived_optional_nulls_inner(authored, derived, &authored_root);
+}
+
+fn elide_derived_optional_nulls_inner(
+    authored: &Value,
+    derived: &mut Value,
+    authored_root: &Value,
+) {
     let Some(authored_properties) = authored.get("properties").and_then(Value::as_object) else {
+        recurse_derived_schema_children_except_properties(authored, derived, authored_root);
         return;
     };
     let Some(derived_properties) = derived.get_mut("properties").and_then(Value::as_object_mut)
     else {
+        recurse_derived_schema_children_except_properties(authored, derived, authored_root);
         return;
     };
     for (name, authored_property) in authored_properties {
-        if !schema_rejects_null(authored_property, authored) {
-            continue;
-        }
         let Some(derived_property) = derived_properties.get_mut(name) else {
             continue;
         };
-        if let Some(kinds) = derived_property.get("type").and_then(Value::as_array)
-            && kinds.len() == 2
-            && kinds.iter().any(|kind| kind == "null")
+        try_elide_derived_optional_null(authored_property, derived_property, authored_root);
+        elide_derived_optional_nulls_inner(authored_property, derived_property, authored_root);
+    }
+
+    recurse_derived_schema_children_except_properties(authored, derived, authored_root);
+}
+
+fn try_elide_derived_optional_null(authored: &Value, derived: &mut Value, authored_root: &Value) {
+    if !schema_rejects_null(authored, authored_root) {
+        return;
+    }
+
+    if let Some(kinds) = derived.get("type").and_then(Value::as_array)
+        && kinds.len() == 2
+        && kinds.iter().any(|kind| kind == "null")
+    {
+        let mut non_null = derived.clone();
+        let non_null_kind = kinds
+            .iter()
+            .find(|kind| *kind != "null")
+            .expect("two-member nullable type has a non-null member")
+            .clone();
+        non_null
+            .as_object_mut()
+            .expect("derived property is an object")
+            .insert("type".to_string(), non_null_kind);
+        if derived_without_optional_null_matches(authored, &mut non_null, authored_root) {
+            *derived = non_null;
+            return;
+        }
+    }
+
+    let Some(branches) = derived.get("oneOf").and_then(Value::as_array) else {
+        return;
+    };
+    if branches.len() != 2 {
+        return;
+    }
+    let Some(null_index) = branches.iter().position(is_null_schema) else {
+        return;
+    };
+    let mut non_null = branches[1 - null_index].clone();
+    if derived_without_optional_null_matches(authored, &mut non_null, authored_root) {
+        *derived = non_null;
+    }
+}
+
+fn derived_without_optional_null_matches(
+    authored: &Value,
+    derived: &mut Value,
+    authored_root: &Value,
+) -> bool {
+    elide_derived_optional_nulls_inner(authored, derived, authored_root);
+    let mut expected = authored.clone();
+    normalize_comparison_sets(derived);
+    normalize_comparison_sets(&mut expected);
+    *derived == expected
+}
+
+fn recurse_derived_schema_children_except_properties(
+    authored: &Value,
+    derived: &mut Value,
+    authored_root: &Value,
+) {
+    for keyword in ["items", "additionalProperties"] {
+        if let (Some(authored_child), Some(derived_child)) =
+            (authored.get(keyword), derived.get_mut(keyword))
+            && authored_child.is_object()
+            && derived_child.is_object()
         {
-            let mut non_null = derived_property.clone();
-            let non_null_kind = kinds
-                .iter()
-                .find(|kind| *kind != "null")
-                .expect("two-member nullable type has a non-null member")
-                .clone();
-            non_null
-                .as_object_mut()
-                .expect("derived property is an object")
-                .insert("type".to_string(), non_null_kind);
-            let mut expected = authored_property.clone();
-            normalize_comparison_sets(&mut non_null);
-            normalize_comparison_sets(&mut expected);
-            if non_null == expected {
-                *derived_property = non_null;
-                continue;
+            elide_derived_optional_nulls_inner(authored_child, derived_child, authored_root);
+        }
+    }
+
+    for keyword in ["oneOf", "anyOf"] {
+        if let (Some(authored_branches), Some(derived_branches)) = (
+            authored.get(keyword).and_then(Value::as_array),
+            derived.get_mut(keyword).and_then(Value::as_array_mut),
+        ) {
+            for (authored_branch, derived_branch) in
+                authored_branches.iter().zip(derived_branches.iter_mut())
+            {
+                elide_derived_optional_nulls_inner(authored_branch, derived_branch, authored_root);
             }
         }
-        let Some(branches) = derived_property.get("oneOf").and_then(Value::as_array) else {
-            continue;
-        };
-        if branches.len() != 2 {
-            continue;
-        }
-        let Some(null_index) = branches.iter().position(is_null_schema) else {
-            continue;
-        };
-        let mut non_null = branches[1 - null_index].clone();
-        let mut expected = authored_property.clone();
-        normalize_comparison_sets(&mut non_null);
-        normalize_comparison_sets(&mut expected);
-        if non_null == expected {
-            *derived_property = non_null;
+    }
+
+    if let (Some(authored_definitions), Some(derived_definitions)) = (
+        authored.get("$defs").and_then(Value::as_object),
+        derived.get_mut("$defs").and_then(Value::as_object_mut),
+    ) {
+        for (name, authored_definition) in authored_definitions {
+            if let Some(derived_definition) = derived_definitions.get_mut(name) {
+                elide_derived_optional_nulls_inner(
+                    authored_definition,
+                    derived_definition,
+                    authored_root,
+                );
+            }
         }
     }
 }
@@ -1503,11 +1573,6 @@ fn schema_implies_type(schema: &Value, root: &Value, expected: &str) -> bool {
     let Some(object) = schema.as_object() else {
         return false;
     };
-    if let Some(kind) = object.get("type") {
-        return (type_contains(kind, expected)
-            || (expected == "number" && type_contains(kind, "integer")))
-            && (!type_contains(kind, "null") || expected == "null");
-    }
     let expected_type = Value::String(expected.to_string());
     if let Some(constant) = object.get("const") {
         return matches_type(constant, &expected_type);
@@ -1517,6 +1582,11 @@ fn schema_implies_type(schema: &Value, root: &Value, expected: &str) -> bool {
             && values
                 .iter()
                 .all(|value| matches_type(value, &expected_type));
+    }
+    if let Some(kind) = object.get("type") {
+        return (type_contains(kind, expected)
+            || (expected == "number" && type_contains(kind, "integer")))
+            && (!type_contains(kind, "null") || expected == "null");
     }
     if object
         .get("oneOf")

@@ -654,18 +654,25 @@ impl CommandRegistry {
     pub fn resource_specs(&self) -> Vec<crate::ResourceSpec> {
         self.resources
             .values()
-            .map(|decl| crate::ResourceSpec {
-                name: decl.name.clone(),
-                summary: decl.summary.clone(),
-                uri: decl.uri.clone(),
-                carrier: decl.carrier_name(),
-                within: decl.within.clone(),
-                lifetime: decl.lifetime.clone(),
-                expiry: decl.expiry.clone(),
-                granted_by: self.resource_granters(&decl.name),
-                released_by: self.resource_releasers(&decl.name),
-                enumerated_by: self.resource_enumerators(&decl.name),
-                required_by: self.resource_requirers(&decl.name),
+            .map(|decl| {
+                let mut reference_schema = decl.reference_schema.clone();
+                if let Some(crate::ArgumentSchemaUse::Inline { schema }) = &mut reference_schema {
+                    let _ = crate::argument_schemas::canonicalize_schema(schema);
+                }
+                crate::ResourceSpec {
+                    name: decl.name.clone(),
+                    summary: decl.summary.clone(),
+                    uri: decl.uri.clone(),
+                    carrier: decl.carrier_name(),
+                    within: decl.within.clone(),
+                    lifetime: decl.lifetime.clone(),
+                    expiry: decl.expiry.clone(),
+                    reference_schema,
+                    granted_by: self.resource_granters(&decl.name),
+                    released_by: self.resource_releasers(&decl.name),
+                    enumerated_by: self.resource_enumerators(&decl.name),
+                    required_by: self.resource_requirers(&decl.name),
+                }
             })
             .collect()
     }

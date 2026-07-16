@@ -510,6 +510,18 @@ struct OptionalPairArgs {
     height: Option<JsonInteger>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NestedOptionalArgs {
+    payload: NestedOptionalPayload,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NestedOptionalPayload {
+    name: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RelationshipOwnedArgs {
@@ -596,6 +608,54 @@ fn typed_optional_null_and_presence_authority_are_exact() {
             ))
             .unwrap_err(),
         FrameworkError::InvalidArgumentType(_, _)
+    ));
+
+    let nested_optional = CommandRegistry::build("schema-test", "schema test", |server| {
+        server.command("value nested", |command| {
+            command
+                .summary("Nested")
+                .description("Nested")
+                .arg(
+                    arg::inline_schema(
+                        "payload",
+                        json!({
+                            "$ref": "#/$defs/NestedOptionalPayload",
+                            "$defs": {
+                                "NestedOptionalPayload": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": { "type": "string" }
+                                    },
+                                    "additionalProperties": false
+                                }
+                            }
+                        }),
+                    )
+                    .summary("Payload"),
+                )
+                .handle_constrained(|_context, args: NestedOptionalArgs| async move {
+                    Ok(CommandOutput::structured(json!({
+                        "name": args.payload.name
+                    })))
+                });
+        });
+    })
+    .unwrap();
+    nested_optional.validate_argument_schemas().unwrap();
+    nested_optional
+        .build_plan(&request(
+            "value nested --payload $args.payload",
+            json!({ "payload": {} }),
+        ))
+        .unwrap();
+    assert!(matches!(
+        nested_optional
+            .build_plan(&request(
+                "value nested --payload $args.payload",
+                json!({ "payload": { "name": null } }),
+            ))
+            .unwrap_err(),
+        FrameworkError::ArgumentSchemaMismatch { .. }
     ));
 
     for kind in [json!(["string", "null"]), json!(["null", "string"])] {
@@ -1371,6 +1431,32 @@ fn finite_values_imply_coarse_types_and_exact_size_limits_canonicalize() {
         array_registry.arg_schema(array_spec)["properties"]["value"]["minItems"],
         1
     );
+
+    let finite_nullable = CommandRegistry::new("schema-test", "schema test").register(
+        CommandSpec::new(["value", "finite"], "Finite", "Finite").with_arg(
+            ArgSpec::string("value", "Value").with_inline_schema(json!({
+                "type": ["string", "null"],
+                "enum": ["owned"]
+            })),
+        ),
+        |_context| async { Ok(CommandOutput::structured(json!({}))) },
+    );
+    finite_nullable.validate_argument_schemas().unwrap();
+    finite_nullable
+        .build_plan(&request(
+            "value finite --value $args.value",
+            json!({ "value": "owned" }),
+        ))
+        .unwrap();
+    assert!(matches!(
+        finite_nullable
+            .build_plan(&request(
+                "value finite --value $args.value",
+                json!({ "value": null }),
+            ))
+            .unwrap_err(),
+        FrameworkError::ArgumentSchemaMismatch { .. }
+    ));
 }
 
 #[test]
@@ -2456,6 +2542,31 @@ fn legacy_resource_schema_omission_is_stable_and_adoption_changes_identity() {
             .unwrap()
             .get("referenceSchema")
             .is_none()
+    );
+    let bare_legacy =
+        CommandRegistry::new("schema-test", "schema test").declare_resource(legacy.clone());
+    assert!(
+        serde_json::to_value(&bare_legacy.catalog().resources[0])
+            .unwrap()
+            .get("referenceSchema")
+            .is_none()
+    );
+    let bare_adopted = CommandRegistry::new("schema-test", "schema test").declare_resource(
+        ResourceDecl::new("search-index", "Search index")
+            .uri("search://index/{id}")
+            .reference_schema(json!({ "type": "string", "minLength": 1.0 })),
+    );
+    bare_adopted.validate_argument_schemas().unwrap();
+    assert_ne!(
+        bare_legacy.catalog_identity(),
+        bare_adopted.catalog_identity()
+    );
+    assert_eq!(
+        serde_json::to_value(&bare_adopted.catalog().resources[0]).unwrap()["referenceSchema"],
+        json!({
+            "kind": "inline",
+            "schema": { "minLength": 1, "type": "string" }
+        })
     );
     let with_consumer = |resource| {
         CommandRegistry::build("schema-test", "schema test", |server| {
