@@ -2561,12 +2561,16 @@ fn legacy_resource_schema_omission_is_stable_and_adoption_changes_identity() {
         bare_legacy.catalog_identity(),
         bare_adopted.catalog_identity()
     );
+    let bare_adopted_canonical = CommandRegistry::new("schema-test", "schema test")
+        .declare_resource(
+            ResourceDecl::new("search-index", "Search index")
+                .uri("search://index/{id}")
+                .reference_schema(json!({ "minLength": 1, "type": "string" })),
+        );
+    bare_adopted_canonical.validate_argument_schemas().unwrap();
     assert_eq!(
-        serde_json::to_value(&bare_adopted.catalog().resources[0]).unwrap()["referenceSchema"],
-        json!({
-            "kind": "inline",
-            "schema": { "minLength": 1, "type": "string" }
-        })
+        bare_adopted.catalog_identity(),
+        bare_adopted_canonical.catalog_identity()
     );
     let with_consumer = |resource| {
         CommandRegistry::build("schema-test", "schema test", |server| {

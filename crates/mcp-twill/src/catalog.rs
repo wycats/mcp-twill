@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Alternative, ArgSpec, ArgumentSchemaDecl, ArgumentSchemaUse, CapabilityDecl, CommandExample,
-    CommandSpec, Fallback, PermissionEffect, PermissionSpec, TypeDecl, WorkspaceDecl,
+    Alternative, ArgSpec, ArgumentSchemaDecl, CapabilityDecl, CommandExample, CommandSpec,
+    Fallback, PermissionEffect, PermissionSpec, TypeDecl, WorkspaceDecl,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -353,8 +353,6 @@ pub struct ResourceSpec {
     pub lifetime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiry: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_schema: Option<ArgumentSchemaUse>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub granted_by: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

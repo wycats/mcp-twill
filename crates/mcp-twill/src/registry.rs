@@ -654,25 +654,18 @@ impl CommandRegistry {
     pub fn resource_specs(&self) -> Vec<crate::ResourceSpec> {
         self.resources
             .values()
-            .map(|decl| {
-                let mut reference_schema = decl.reference_schema.clone();
-                if let Some(crate::ArgumentSchemaUse::Inline { schema }) = &mut reference_schema {
-                    let _ = crate::argument_schemas::canonicalize_schema(schema);
-                }
-                crate::ResourceSpec {
-                    name: decl.name.clone(),
-                    summary: decl.summary.clone(),
-                    uri: decl.uri.clone(),
-                    carrier: decl.carrier_name(),
-                    within: decl.within.clone(),
-                    lifetime: decl.lifetime.clone(),
-                    expiry: decl.expiry.clone(),
-                    reference_schema,
-                    granted_by: self.resource_granters(&decl.name),
-                    released_by: self.resource_releasers(&decl.name),
-                    enumerated_by: self.resource_enumerators(&decl.name),
-                    required_by: self.resource_requirers(&decl.name),
-                }
+            .map(|decl| crate::ResourceSpec {
+                name: decl.name.clone(),
+                summary: decl.summary.clone(),
+                uri: decl.uri.clone(),
+                carrier: decl.carrier_name(),
+                within: decl.within.clone(),
+                lifetime: decl.lifetime.clone(),
+                expiry: decl.expiry.clone(),
+                granted_by: self.resource_granters(&decl.name),
+                released_by: self.resource_releasers(&decl.name),
+                enumerated_by: self.resource_enumerators(&decl.name),
+                required_by: self.resource_requirers(&decl.name),
             })
             .collect()
     }
@@ -717,6 +710,17 @@ impl CommandRegistry {
                 .insert(
                     "argumentSchemas".to_string(),
                     serde_json::to_value(argument_schemas).expect("serialize argument schemas"),
+                );
+        }
+        let resource_reference_schemas = self.canonical_resource_reference_schemas();
+        if !resource_reference_schemas.is_empty() {
+            catalog_value
+                .as_object_mut()
+                .expect("catalog identity preimage is an object")
+                .insert(
+                    "resourceReferenceSchemas".to_string(),
+                    serde_json::to_value(resource_reference_schemas)
+                        .expect("serialize resource reference schemas"),
                 );
         }
         let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
@@ -975,6 +979,19 @@ impl CommandRegistry {
             .map(|mut declaration| {
                 let _ = crate::argument_schemas::canonicalize_schema(&mut declaration.schema);
                 declaration
+            })
+            .collect()
+    }
+
+    fn canonical_resource_reference_schemas(&self) -> BTreeMap<String, crate::ArgumentSchemaUse> {
+        self.resources
+            .values()
+            .filter_map(|resource| {
+                let mut schema_use = resource.reference_schema.clone()?;
+                if let crate::ArgumentSchemaUse::Inline { schema } = &mut schema_use {
+                    let _ = crate::argument_schemas::canonicalize_schema(schema);
+                }
+                Some((resource.name.clone(), schema_use))
             })
             .collect()
     }
