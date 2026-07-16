@@ -675,7 +675,162 @@ pub fn verify_catalog_coverage(
     violations.extend(check_capability_projection(registry));
     violations.extend(check_result_projection(registry));
     violations.extend(check_argument_schema_projection(registry));
+    violations.extend(check_confirmation_projection(registry));
     violations.extend(check_runtime_identity(registry));
+    violations
+}
+
+/// Declared presentation stays aligned across validation, catalog, help, and
+/// the owner-local pure evaluator consumed by permission previews.
+pub fn check_confirmation_projection(registry: &CommandRegistry) -> Vec<ContractViolation> {
+    check_confirmation_projection_with_help(registry, |command| {
+        registry
+            .help(HelpRequest {
+                command: Some(command.to_string()),
+                topic: Some(HelpTopic::Usage),
+                detail: None,
+            })
+            .text
+    })
+}
+
+fn check_confirmation_projection_with_help(
+    registry: &CommandRegistry,
+    render_help: impl Fn(&str) -> String,
+) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    if let Err(error) = registry.validate_presentations() {
+        violations.push(violation(None, "presentation", error.to_string()));
+        return violations;
+    }
+    let catalog = registry.catalog();
+    for command in registry.command_specs() {
+        let operation_id = command.path.join(".");
+        let expected = if command.invocation_message.is_none() && command.confirmation.is_none() {
+            None
+        } else {
+            Some(crate::OperationPresentation {
+                invocation_message: command.invocation_message.clone(),
+                confirmation: command.confirmation.clone(),
+            })
+        };
+        match catalog
+            .operations
+            .iter()
+            .find(|operation| operation.id == operation_id)
+        {
+            Some(operation) if operation.presentation == expected => {}
+            Some(_) => violations.push(violation(
+                Some(&operation_id),
+                "presentation",
+                "catalog operation does not project the command presentation declaration",
+            )),
+            None => violations.push(violation(
+                Some(&operation_id),
+                "presentation",
+                "command is missing from catalog operations",
+            )),
+        }
+        let help = render_help(&command.name());
+        if let Some(message) = &command.invocation_message
+            && !help.contains(message)
+        {
+            violations.push(violation(
+                Some(&operation_id),
+                "presentation",
+                "command help omits the invocation message",
+            ));
+        }
+        if let Some(confirmation) = &command.confirmation {
+            let mut titles = vec![&confirmation.default.title];
+            titles.extend(confirmation.cases.iter().map(|case| &case.message.title));
+            if titles.iter().any(|title| !help.contains(title.as_str())) {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "presentation",
+                    "command help omits confirmation presentation",
+                ));
+            }
+            let defaults = crate::SurfacePresentationDefaults::new(
+                "Running contract command",
+                "Confirmation required",
+                "Run contract command?",
+            )
+            .expect("contract presentation defaults are valid");
+            let omitted = command.prepare_unvalidated_presentation(
+                &defaults,
+                &operation_id,
+                &std::collections::BTreeMap::new(),
+                crate::presentation::ConfirmationPresentationRequest::Omit,
+            );
+            if omitted.confirmation.is_some() {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "presentation",
+                    "pure evaluator prepares confirmation when omission is requested",
+                ));
+            }
+            let prepared = command.prepare_unvalidated_presentation(
+                &defaults,
+                &operation_id,
+                &std::collections::BTreeMap::new(),
+                crate::presentation::ConfirmationPresentationRequest::DeclaredOnly,
+            );
+            let Some(prepared_confirmation) = prepared.confirmation else {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "presentation",
+                    "pure evaluator does not prepare the declared confirmation",
+                ));
+                continue;
+            };
+            if prepared_confirmation.operation_id != operation_id {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "presentation",
+                    "pure evaluator prepares confirmation for a different operation",
+                ));
+                continue;
+            }
+            let operation = crate::OperationSpec::from_command_spec(command);
+            let plan = crate::InvocationPlan {
+                operation_id: operation_id.clone(),
+                command_path: command.path.clone(),
+                raw_command: command.name(),
+                catalog_hash: catalog.identity.catalog_hash.clone(),
+                invocation_fingerprint: "contract-presentation-preview".to_string(),
+                effect: operation.effect.clone(),
+                lane: operation.lane(),
+                tokens: Vec::new(),
+                bound_args: std::collections::BTreeMap::new(),
+                permissions: command.permissions.clone(),
+                workspaces: Vec::new(),
+                workspace_roots: Vec::new(),
+                idempotent: command.idempotent,
+                output: crate::OutputSpec::default(),
+            };
+            let envelope = crate::ResponseEnvelope::preview_with_confirmation(
+                plan,
+                prepared_confirmation.clone(),
+            );
+            let projection_matches = envelope
+                .preview
+                .as_ref()
+                .and_then(|preview| preview.confirmation.as_ref())
+                == Some(&prepared_confirmation)
+                && envelope.display.as_ref().is_some_and(|display| {
+                    display.title == prepared_confirmation.title
+                        && display.summary == prepared_confirmation.message
+                });
+            if !projection_matches {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "presentation",
+                    "permission preview does not project the prepared confirmation exactly once",
+                ));
+            }
+        }
+    }
     violations
 }
 
@@ -1529,6 +1684,13 @@ macro_rules! contract_tests {
         }
 
         #[test]
+        fn contract_confirmation_projection() {
+            $crate::contract::assert_no_violations(
+                $crate::contract::check_confirmation_projection(&$registry()),
+            );
+        }
+
+        #[test]
         fn contract_runtime_identity() {
             $crate::contract::assert_no_violations($crate::contract::check_runtime_identity(
                 &$registry(),
@@ -1659,6 +1821,31 @@ mod argument_schema_projection_tests {
             violations.iter().any(|violation| violation
                 .message
                 .contains("constrained argument `query` is missing from help")),
+            "violations: {violations:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod confirmation_projection_tests {
+    use super::*;
+    use crate::{CommandOutput, CommandSpec, ConfirmationMessage, ConfirmationPresentation};
+
+    #[test]
+    fn missing_confirmation_help_is_a_contract_violation() {
+        let mut spec = CommandSpec::new(["deploy"], "Deploy", "Deploy the release");
+        spec.confirmation = Some(ConfirmationPresentation::new(
+            ConfirmationMessage::new("Deploy release?").text("Deploy this release."),
+        ));
+        let registry = CommandRegistry::new("contract", "Contract")
+            .register(spec, |_context| async {
+                Ok(CommandOutput::structured(serde_json::json!({})))
+            });
+        let violations = check_confirmation_projection_with_help(&registry, |_| String::new());
+        assert!(
+            violations.iter().any(|violation| violation
+                .message
+                .contains("omits confirmation presentation")),
             "violations: {violations:?}"
         );
     }

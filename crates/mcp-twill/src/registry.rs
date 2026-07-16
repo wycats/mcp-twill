@@ -606,6 +606,89 @@ impl CommandRegistry {
         self.commands.values().map(|command| &command.spec)
     }
 
+    pub(crate) fn prepare_effect_lane_presentation(
+        &self,
+        plan: &InvocationPlan,
+        tool_name: &str,
+        confirmation: crate::presentation::ConfirmationPresentationRequest,
+    ) -> Result<crate::PreparedInvocationPresentation> {
+        let command = self.commands.get(&plan.command_path).ok_or_else(|| {
+            FrameworkError::Build(format!(
+                "planned command `{}` is missing from the registry",
+                plan.command_path.join(" ")
+            ))
+        })?;
+        let defaults = effect_lane_presentation_defaults(tool_name)?;
+        let arguments = plan
+            .bound_args
+            .iter()
+            .map(|(name, argument)| (name.clone(), argument.value.clone()))
+            .collect();
+        Ok(command.spec.prepare_validated_presentation(
+            &defaults,
+            &plan.operation_id,
+            &arguments,
+            confirmation,
+        ))
+    }
+
+    pub(crate) fn prepare_effect_lane_confirmation(
+        &self,
+        plan: &InvocationPlan,
+        tool_name: &str,
+    ) -> Result<crate::PreparedConfirmation> {
+        self.prepare_effect_lane_presentation(
+            plan,
+            tool_name,
+            crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault,
+        )?
+        .confirmation
+        .ok_or_else(|| {
+            FrameworkError::Build(
+                "effect-lane presentation did not prepare confirmation".to_string(),
+            )
+        })
+    }
+
+    pub(crate) fn bind_effect_lane_presentation_fingerprint(
+        &self,
+        plan: &mut InvocationPlan,
+        tool_name: &str,
+    ) -> Result<()> {
+        let command = self.commands.get(&plan.command_path).ok_or_else(|| {
+            FrameworkError::Build(format!(
+                "planned command `{}` is missing from the registry",
+                plan.command_path.join(" ")
+            ))
+        })?;
+        if command.spec.invocation_message.is_some() && command.spec.confirmation.is_some() {
+            return Ok(());
+        }
+        let defaults = effect_lane_presentation_defaults(tool_name)?;
+        let mut fallback = serde_json::Map::new();
+        if command.spec.invocation_message.is_none() {
+            fallback.insert(
+                "invocationMessage".to_string(),
+                Value::String(defaults.invocation_message().to_string()),
+            );
+        }
+        if command.spec.confirmation.is_none() {
+            fallback.insert(
+                "confirmationTitle".to_string(),
+                Value::String(defaults.confirmation_title().to_string()),
+            );
+            fallback.insert(
+                "confirmationMessage".to_string(),
+                Value::String(defaults.confirmation_message().to_string()),
+            );
+        }
+        plan.invocation_fingerprint = stable_hash_value(&json!({
+            "invocationFingerprint": &plan.invocation_fingerprint,
+            "surfacePresentationDefaults": fallback,
+        }));
+        Ok(())
+    }
+
     pub fn operation_specs(&self) -> Vec<OperationSpec> {
         let mut operations = self
             .commands
@@ -981,6 +1064,18 @@ impl CommandRegistry {
                 declaration
             })
             .collect()
+    }
+
+    /// Validates presentation only after the command's authoritative
+    /// argument schemas are available.
+    pub fn validate_presentations(&self) -> Result<()> {
+        for command in self.commands.values() {
+            crate::presentation::validate_command_presentation(
+                &command.spec,
+                &self.argument_schemas,
+            )?;
+        }
+        Ok(())
     }
 
     fn canonical_resource_reference_schemas(&self) -> BTreeMap<String, crate::ArgumentSchemaUse> {
@@ -2446,6 +2541,18 @@ impl CommandRegistry {
                         .expect("argument requirements serialize"),
                 );
         }
+        if registered.spec.invocation_message.is_some() || registered.spec.confirmation.is_some() {
+            fingerprint_input
+                .as_object_mut()
+                .expect("fingerprint input is an object")
+                .insert(
+                    "presentationContract".to_string(),
+                    json!({
+                        "invocationMessage": &registered.spec.invocation_message,
+                        "confirmation": &registered.spec.confirmation,
+                    }),
+                );
+        }
         let invocation_fingerprint = stable_hash_value(&fingerprint_input);
 
         Ok(InvocationPlan {
@@ -2557,6 +2664,7 @@ impl CommandRegistry {
         context: &crate::InvocationContext,
     ) -> Result<CommandExecutionOutcome> {
         self.validate_argument_schemas()?;
+        self.validate_presentations()?;
         self.validate_results()?;
         let plan = self.build_plan_prepared(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
@@ -2570,6 +2678,16 @@ impl CommandRegistry {
             });
         }
 
+        self.dispatch_prepared_plan_with_context(request, plan, context)
+            .await
+    }
+
+    pub(crate) async fn dispatch_prepared_plan_with_context(
+        &self,
+        request: RunRequest,
+        plan: InvocationPlan,
+        context: &crate::InvocationContext,
+    ) -> Result<CommandExecutionOutcome> {
         if matches!(request.effective_mode(), crate::RunMode::DryRun) {
             return Ok(CommandExecutionOutcome::Success(RunResponse {
                 plan,
@@ -3034,6 +3152,23 @@ impl CommandRegistry {
 
     fn usage_text(&self, spec: &CommandSpec) -> String {
         let mut sections = vec![format!("# `{}`", spec.name()), spec.description.clone()];
+        if let Some(invocation_message) = &spec.invocation_message {
+            sections.push(format!("Invocation: {invocation_message}"));
+        }
+        if let Some(confirmation) = &spec.confirmation {
+            let mut lines = vec![
+                "Host confirmation may use this command's declared copy.".to_string(),
+                format!("- Default: {}", confirmation.default.title),
+            ];
+            for case in &confirmation.cases {
+                lines.push(format!(
+                    "- When {}: {}",
+                    confirmation_predicate_help(&case.when),
+                    case.message.title
+                ));
+            }
+            sections.push(lines.join("\n"));
+        }
         if let Some(use_when) = &spec.use_when {
             sections.push(format!("Use when: {use_when}"));
         }
@@ -3383,6 +3518,17 @@ impl CommandRegistry {
     }
 }
 
+fn effect_lane_presentation_defaults(
+    tool_name: &str,
+) -> Result<crate::SurfacePresentationDefaults> {
+    let display_title = format!("{tool_name} execution");
+    crate::SurfacePresentationDefaults::new(
+        format!("Running {display_title}"),
+        "Confirmation required",
+        format!("Run {display_title}?"),
+    )
+}
+
 fn validate_guidance_text(text: &str, subject: &str) -> Result<()> {
     let scalar_count = text.chars().take(MAX_GUIDANCE_SCALARS + 1).count();
     if scalar_count > MAX_GUIDANCE_SCALARS {
@@ -3412,6 +3558,17 @@ fn guidance_scalar_is_unsafe(scalar: char) -> bool {
         | '\u{2060}'..='\u{206F}'
         | '\u{FEFF}'
     )
+}
+
+fn confirmation_predicate_help(predicate: &crate::ConfirmationPredicate) -> String {
+    match predicate {
+        crate::ConfirmationPredicate::ArgumentPresent { argument } => {
+            format!("argument `{argument}` is present")
+        }
+        crate::ConfirmationPredicate::ArgumentEquals { argument, .. } => {
+            format!("argument `{argument}` equals its declared case value")
+        }
+    }
 }
 
 fn normalize_command_spec(spec: &mut CommandSpec) {

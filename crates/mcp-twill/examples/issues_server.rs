@@ -7,10 +7,11 @@ use std::{
 
 use mcp_twill::{
     ApplicationError, ApplicationErrorDecl, ApplicationErrorUse, ApplicationResult,
-    ApplicationSuccess, ArgumentSchemaDecl, CapabilityDecl, CommandContext, CommandOutput,
-    CommandRegistry, EventSink, Field, FrameworkEvent, Grant, InvocationPlan, JsonInteger, Listing,
-    ReadResource, Release, Res, ResolveResource, Resource, ResourceDecl, ResourceRefusal, Result,
-    TypeDecl, Variant, WorkspaceDecl, application_error_set, arg,
+    ApplicationSuccess, ArgumentRendering, ArgumentSchemaDecl, CapabilityDecl, CommandContext,
+    CommandOutput, CommandRegistry, ConfirmationMessage, ConfirmationPresentation, EventSink,
+    Field, FrameworkEvent, Grant, InvocationPlan, JsonInteger, Listing, ReadResource, Release, Res,
+    ResolveResource, Resource, ResourceDecl, ResourceRefusal, Result, TypeDecl, Variant,
+    WorkspaceDecl, application_error_set, arg,
 };
 use rmcp::{ServiceExt, transport::stdio};
 use schemars::JsonSchema;
@@ -372,6 +373,13 @@ pub fn registry() -> Result<CommandRegistry> {
                     .arg(arg::string("title").summary("Issue title"))
                     .arg(arg::string("body").summary("Issue body"))
                     .write("issues", "Creates a new issue record")
+                    .invocation_message("Creating an issue")
+                    .confirmation(ConfirmationPresentation::new(
+                        ConfirmationMessage::new("Create issue?")
+                            .text("Create issue ")
+                            .argument("title", ArgumentRendering::JsonString, "(missing title)")
+                            .text("?"),
+                    ))
                     .idempotent()
                     .example_with_args(
                         "issues create --title $args.title --body $args.body",

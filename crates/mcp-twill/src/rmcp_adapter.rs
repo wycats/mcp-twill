@@ -195,10 +195,19 @@ impl CliMcpServer {
         registry.validate_guidance()?;
         registry.validate_types()?;
         registry.validate_argument_schemas()?;
+        registry.validate_presentations()?;
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
         registry.validate_resources()?;
         registry.validate_results()?;
+        for lane in registry.lane_specs(&config.execution_tool_name) {
+            let display_title = format!("{} execution", lane.tool_name);
+            crate::SurfacePresentationDefaults::new(
+                format!("Running {display_title}"),
+                "Confirmation required",
+                format!("Run {display_title}?"),
+            )?;
+        }
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));
@@ -427,7 +436,7 @@ impl CliMcpServer {
         if let Some(meta) = progress_meta {
             Self::notify_progress(meta, &client, 1.0, 4.0, "Parsing command template").await;
         }
-        let plan = match registry.build_plan_with_workspaces_and_context(
+        let mut plan = match registry.build_plan_with_workspaces_and_context(
             &request,
             &resolved,
             &invocation_context,
@@ -440,12 +449,12 @@ impl CliMcpServer {
                 );
             }
         };
-        let plan_for_event = PlanFacts::from(&plan);
 
         if let Some(meta) = progress_meta {
             Self::notify_progress(meta, &client, 2.0, 4.0, "Invocation plan ready").await;
         }
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
+            let plan_for_event = PlanFacts::from(&plan);
             return RunOutcome::envelope(
                 ResponseEnvelope::framework_error(
                     FrameworkError::UnknownCommand {
@@ -461,6 +470,7 @@ impl CliMcpServer {
 
         if plan.lane != lane {
             let required_tool = registry.required_tool_name(&config.execution_tool_name, plan.lane);
+            let plan_for_event = PlanFacts::from(&plan);
             return RunOutcome::envelope(
                 ResponseEnvelope::framework_error(
                     FrameworkError::WrongEffectLane {
@@ -474,10 +484,34 @@ impl CliMcpServer {
             );
         }
 
+        if let Err(error) =
+            registry.bind_effect_lane_presentation_fingerprint(&mut plan, &tool_name)
+        {
+            let plan_for_event = PlanFacts::from(&plan);
+            return RunOutcome::envelope(
+                ResponseEnvelope::framework_error(error, Some(request), Some(plan)),
+                Some(plan_for_event),
+            );
+        }
+        let plan_for_event = PlanFacts::from(&plan);
+
         if matches!(mode, RunMode::Preview) {
-            let requires_confirmation = match authorizer.decide(&plan) {
-                PermissionDecision::Allow => false,
-                PermissionDecision::RequireConfirmation => true,
+            let prepared_confirmation = match authorizer.decide(&plan) {
+                PermissionDecision::Allow => None,
+                PermissionDecision::RequireConfirmation => {
+                    let confirmation = match registry
+                        .prepare_effect_lane_confirmation(&plan, &tool_name)
+                    {
+                        Ok(confirmation) => confirmation,
+                        Err(error) => {
+                            return RunOutcome::envelope(
+                                ResponseEnvelope::framework_error(error, Some(request), Some(plan)),
+                                Some(plan_for_event),
+                            );
+                        }
+                    };
+                    Some(confirmation)
+                }
                 PermissionDecision::Deny { reason } => {
                     return RunOutcome::envelope(
                         ResponseEnvelope::framework_error(
@@ -495,10 +529,12 @@ impl CliMcpServer {
             if let Some(meta) = progress_meta {
                 Self::notify_progress(meta, &client, 4.0, 4.0, "Preview ready").await;
             }
-            return RunOutcome::envelope(
-                ResponseEnvelope::preview(plan, requires_confirmation),
-                Some(plan_for_event),
-            );
+            let envelope = if let Some(confirmation) = prepared_confirmation {
+                ResponseEnvelope::preview_with_confirmation(plan, confirmation)
+            } else {
+                ResponseEnvelope::preview(plan, false)
+            };
+            return RunOutcome::envelope(envelope, Some(plan_for_event));
         }
 
         if matches!(mode, RunMode::DryRun) {
@@ -533,6 +569,17 @@ impl CliMcpServer {
                         );
                     }
                 } else {
+                    let confirmation = match registry
+                        .prepare_effect_lane_confirmation(&plan, &tool_name)
+                    {
+                        Ok(confirmation) => confirmation,
+                        Err(error) => {
+                            return RunOutcome::envelope(
+                                ResponseEnvelope::framework_error(error, Some(request), Some(plan)),
+                                Some(plan_for_event),
+                            );
+                        }
+                    };
                     let record =
                         issue_replay_record(config, replay, &plan, Utc::now().timestamp_millis())
                             .await;
@@ -541,7 +588,13 @@ impl CliMcpServer {
                             .await;
                     }
                     return RunOutcome::envelope(
-                        ResponseEnvelope::permission_required(plan, record, request, tool_name),
+                        ResponseEnvelope::permission_required_with_confirmation(
+                            plan,
+                            record,
+                            request,
+                            tool_name,
+                            confirmation,
+                        ),
                         Some(plan_for_event),
                     );
                 }
@@ -565,14 +618,7 @@ impl CliMcpServer {
             Self::notify_progress(meta, &client, 3.0, 4.0, "Dispatching command handler").await;
         }
         let result = registry
-            .run_in_lane_with_workspaces_and_context(
-                request.clone(),
-                tool_name,
-                lane,
-                &config.execution_tool_name,
-                &resolved,
-                &invocation_context,
-            )
+            .dispatch_prepared_plan_with_context(request.clone(), plan.clone(), &invocation_context)
             .await;
         match result {
             Ok(crate::CommandExecutionOutcome::Success(response)) => {
@@ -1491,5 +1537,92 @@ mod tests {
         );
         let success = CallToolResult::structured(json!({ "status": "ok" }));
         assert_eq!(task_completion_message(&success), "Run command completed");
+    }
+
+    #[tokio::test]
+    async fn generic_confirmation_copy_binds_the_dispatched_surface_fingerprint() {
+        let registry = CommandRegistry::new("presentation", "Presentation test").register(
+            crate::CommandSpec::new(["run"], "Run", "Run command"),
+            |context: crate::CommandContext| async move {
+                Ok(crate::CommandOutput::structured(json!({
+                    "fingerprint": context.plan.invocation_fingerprint,
+                })))
+            },
+        );
+        let request = RunRequest {
+            command: "run".to_string(),
+            args: BTreeMap::new(),
+            stdin: None,
+            output: None,
+            mode: RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        };
+        let bare = registry.build_plan(&request).unwrap();
+        let mut repo = bare.clone();
+        registry
+            .bind_effect_lane_presentation_fingerprint(&mut repo, "repo-write")
+            .unwrap();
+        let mut workspace = bare.clone();
+        registry
+            .bind_effect_lane_presentation_fingerprint(&mut workspace, "workspace-write")
+            .unwrap();
+
+        assert_ne!(bare.invocation_fingerprint, repo.invocation_fingerprint);
+        assert_ne!(
+            repo.invocation_fingerprint,
+            workspace.invocation_fingerprint
+        );
+        assert_eq!(
+            registry
+                .prepare_effect_lane_confirmation(&repo, "repo-write")
+                .unwrap()
+                .message,
+            "Run repo-write execution?"
+        );
+        let outcome = registry
+            .dispatch_prepared_plan_with_context(
+                request,
+                repo.clone(),
+                &crate::InvocationContext::default(),
+            )
+            .await
+            .unwrap();
+        let crate::CommandExecutionOutcome::Success(response) = outcome else {
+            panic!("expected successful prepared dispatch");
+        };
+        assert_eq!(
+            response.plan.invocation_fingerprint,
+            repo.invocation_fingerprint
+        );
+        assert_eq!(
+            response.output.unwrap().structured.unwrap()["fingerprint"],
+            repo.invocation_fingerprint
+        );
+    }
+
+    #[test]
+    fn effect_lane_presentation_failure_stays_in_the_framework_error_channel() {
+        let registry = CommandRegistry::new("presentation", "Presentation test").register(
+            crate::CommandSpec::new(["run"], "Run", "Run command"),
+            |_context| async { Ok(crate::CommandOutput::structured(json!({}))) },
+        );
+        let request = RunRequest {
+            command: "run".to_string(),
+            args: BTreeMap::new(),
+            stdin: None,
+            output: None,
+            mode: RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        };
+        let mut plan = registry.build_plan(&request).unwrap();
+        plan.command_path = vec!["missing".to_string()];
+        let error = registry
+            .prepare_effect_lane_confirmation(&plan, "repo")
+            .unwrap_err();
+        let envelope = ResponseEnvelope::framework_error(error, Some(request), Some(plan));
+        assert_eq!(envelope.status, crate::ResponseStatus::Failed);
+        assert_eq!(envelope.error.unwrap().code, crate::ErrorCode::BuildFailed);
     }
 }

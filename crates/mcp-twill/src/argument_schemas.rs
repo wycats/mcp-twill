@@ -754,6 +754,92 @@ pub(crate) struct CompiledArgumentSchema {
     pub schema: Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PresentationDomain {
+    String,
+    Boolean,
+    StringOrBoolean,
+}
+
+pub(crate) fn presentation_domain(
+    compiled: Option<&CompiledArgumentSchema>,
+) -> Option<PresentationDomain> {
+    let compiled = compiled?;
+    let domains = presentation_primitive_domains(&compiled.schema, &compiled.schema)?;
+    match domains.as_slice() {
+        ["string"] => Some(PresentationDomain::String),
+        ["boolean"] => Some(PresentationDomain::Boolean),
+        ["boolean", "string"] => Some(PresentationDomain::StringOrBoolean),
+        _ => None,
+    }
+}
+
+pub(crate) fn presentation_singleton_value(
+    compiled: Option<&CompiledArgumentSchema>,
+) -> Option<Value> {
+    let compiled = compiled?;
+    let mut values = finite_schema_values(&compiled.schema, &compiled.schema)?
+        .into_iter()
+        .filter(|value| validate_value(compiled, value).is_ok())
+        .collect::<Vec<_>>();
+    values.dedup_by(|left, right| schema_values_equal(left, right));
+    (values.len() == 1).then(|| values.remove(0))
+}
+
+fn presentation_primitive_domains<'a>(schema: &'a Value, root: &'a Value) -> Option<Vec<&'a str>> {
+    let object = schema.as_object()?;
+    let mut constraints = Vec::new();
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        constraints.push(presentation_primitive_domains(
+            resolve_ref(root, reference)?,
+            root,
+        )?);
+    }
+    if let Some(constant) = object.get("const") {
+        constraints.push(vec![presentation_literal_kind(constant)]);
+    }
+    if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        constraints.push(values.iter().map(presentation_literal_kind).collect());
+    }
+    if let Some(kind) = object.get("type") {
+        constraints.push(match kind {
+            Value::String(kind) => vec![kind.as_str()],
+            Value::Array(kinds) => kinds
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?,
+            _ => return None,
+        });
+    }
+    if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
+        let mut domains = Vec::new();
+        for branch in branches {
+            domains.extend(presentation_primitive_domains(branch, root)?);
+        }
+        constraints.push(domains);
+    }
+    let mut constraints = constraints.into_iter();
+    let mut domains = constraints.next()?;
+    for constraint in constraints {
+        domains.retain(|domain| constraint.contains(domain));
+    }
+    domains.sort_unstable();
+    domains.dedup();
+    Some(domains)
+}
+
+fn presentation_literal_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if JsonInteger::number_is_integer(number) => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SchemaFailure {
     pub path: String,
@@ -1729,8 +1815,17 @@ fn finite_schema_values(schema: &Value, root: &Value) -> Option<Vec<Value>> {
     if let Some(values) = finite_values(object) {
         return Some(values);
     }
-    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-        return finite_schema_values(resolve_ref(root, reference)?, root);
+    if object.get("type").is_some_and(|kind| match kind {
+        Value::String(kind) => kind == "null",
+        Value::Array(kinds) => kinds.len() == 1 && kinds.first().is_some_and(|kind| kind == "null"),
+        _ => false,
+    }) {
+        return Some(vec![Value::Null]);
+    }
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+        && let Some(values) = finite_schema_values(resolve_ref(root, reference)?, root)
+    {
+        return Some(values);
     }
     let branches = object.get("oneOf")?.as_array()?;
     let mut values = Vec::new();

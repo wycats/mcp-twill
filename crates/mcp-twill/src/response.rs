@@ -191,7 +191,7 @@ pub struct ReplayEnvelope {
     pub expires_at_unix_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionPreview {
     pub operation_id: String,
@@ -210,9 +210,73 @@ pub struct PermissionPreview {
     pub output: OutputSpec,
     pub confirmation_policy: ConfirmationPolicy,
     pub requires_confirmation: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<crate::PreparedConfirmation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionPreviewWire {
+    operation_id: String,
+    command: Vec<String>,
+    effect: crate::EffectSpec,
+    lane: crate::EffectLane,
+    permissions: Vec<PermissionSpec>,
+    workspaces: Vec<WorkspaceDecl>,
+    #[serde(default)]
+    workspace_roots: Vec<crate::PlanWorkspaceRoot>,
+    #[serde(default)]
+    argument_variants: BTreeMap<String, crate::ArgVariants>,
+    output: OutputSpec,
+    confirmation_policy: ConfirmationPolicy,
+    requires_confirmation: bool,
+    #[serde(default)]
+    confirmation: Option<crate::PreparedConfirmation>,
+}
+
+impl TryFrom<PermissionPreviewWire> for PermissionPreview {
+    type Error = String;
+
+    fn try_from(wire: PermissionPreviewWire) -> Result<Self, Self::Error> {
+        if let Some(confirmation) = &wire.confirmation {
+            if !wire.requires_confirmation {
+                return Err("permission preview confirmation requiresConfirmation=true".to_string());
+            }
+            if confirmation.operation_id != wire.operation_id {
+                return Err(
+                    "permission preview confirmation operationId does not match preview operationId"
+                        .to_string(),
+                );
+            }
+        }
+        Ok(Self {
+            operation_id: wire.operation_id,
+            command: wire.command,
+            effect: wire.effect,
+            lane: wire.lane,
+            permissions: wire.permissions,
+            workspaces: wire.workspaces,
+            workspace_roots: wire.workspace_roots,
+            argument_variants: wire.argument_variants,
+            output: wire.output,
+            confirmation_policy: wire.confirmation_policy,
+            requires_confirmation: wire.requires_confirmation,
+            confirmation: wire.confirmation,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for PermissionPreview {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = PermissionPreviewWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseEnvelope {
     pub status: ResponseStatus,
@@ -236,6 +300,76 @@ pub struct ResponseEnvelope {
     pub plan: Option<InvocationPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryAction>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResponseEnvelopeWire {
+    status: ResponseStatus,
+    #[serde(default)]
+    command: Option<Vec<String>>,
+    #[serde(default)]
+    output: Option<CommandOutput>,
+    #[serde(default)]
+    error: Option<ErrorBody>,
+    #[serde(default)]
+    diagnostics: Vec<Diagnostic>,
+    #[serde(default)]
+    steering: Vec<SteeringAction>,
+    #[serde(default)]
+    display: Option<DisplayHint>,
+    #[serde(default)]
+    replay: Option<ReplayEnvelope>,
+    #[serde(default)]
+    preview: Option<PermissionPreview>,
+    #[serde(default)]
+    plan: Option<InvocationPlan>,
+    #[serde(default)]
+    retry: Option<RetryAction>,
+}
+
+impl TryFrom<ResponseEnvelopeWire> for ResponseEnvelope {
+    type Error = String;
+
+    fn try_from(wire: ResponseEnvelopeWire) -> Result<Self, Self::Error> {
+        if let Some(confirmation) = wire
+            .preview
+            .as_ref()
+            .and_then(|preview| preview.confirmation.as_ref())
+        {
+            let display = wire.display.as_ref().ok_or_else(|| {
+                "response envelope with prepared confirmation requires display".to_string()
+            })?;
+            if display.title != confirmation.title || display.summary != confirmation.message {
+                return Err(
+                    "response envelope display does not match prepared confirmation".to_string(),
+                );
+            }
+        }
+        Ok(Self {
+            status: wire.status,
+            command: wire.command,
+            output: wire.output,
+            error: wire.error,
+            diagnostics: wire.diagnostics,
+            steering: wire.steering,
+            display: wire.display,
+            replay: wire.replay,
+            preview: wire.preview,
+            plan: wire.plan,
+            retry: wire.retry,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ResponseEnvelope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ResponseEnvelopeWire::deserialize(deserializer)?;
+        Self::try_from(wire).map_err(serde::de::Error::custom)
+    }
 }
 
 impl ResponseEnvelope {
@@ -322,7 +456,7 @@ impl ResponseEnvelope {
 
     pub fn preview(plan: InvocationPlan, requires_confirmation: bool) -> Self {
         let command = Some(plan.command_path.clone());
-        let preview = permission_preview(&plan, requires_confirmation);
+        let preview = permission_preview(&plan, requires_confirmation, None);
         Self {
             status: ResponseStatus::Ok,
             command,
@@ -341,6 +475,31 @@ impl ResponseEnvelope {
         }
     }
 
+    pub(crate) fn preview_with_confirmation(
+        plan: InvocationPlan,
+        confirmation: crate::PreparedConfirmation,
+    ) -> Self {
+        let command = Some(plan.command_path.clone());
+        let display = DisplayHint {
+            title: confirmation.title.clone(),
+            summary: confirmation.message.clone(),
+        };
+        let preview = permission_preview(&plan, true, Some(confirmation));
+        Self {
+            status: ResponseStatus::Ok,
+            command,
+            output: None,
+            error: None,
+            diagnostics: Vec::new(),
+            steering: Vec::new(),
+            display: Some(display),
+            replay: None,
+            preview: Some(preview),
+            plan: None,
+            retry: None,
+        }
+    }
+
     pub fn permission_required(
         plan: InvocationPlan,
         record: ReplayRecord,
@@ -348,7 +507,7 @@ impl ResponseEnvelope {
         tool_name: impl Into<String>,
     ) -> Self {
         let command = Some(plan.command_path.clone());
-        let preview = permission_preview(&plan, true);
+        let preview = permission_preview(&plan, true, None);
         let tool_name = tool_name.into();
         Self {
             status: ResponseStatus::PermissionRequired,
@@ -380,6 +539,54 @@ impl ResponseEnvelope {
                     plan.command_path.join(" ")
                 ),
             }),
+            replay: Some(ReplayEnvelope {
+                token: record.token,
+                expires_at_unix_ms: record.expires_at_unix_ms,
+            }),
+            preview: Some(preview),
+            plan: None,
+            retry: None,
+        }
+    }
+
+    pub(crate) fn permission_required_with_confirmation(
+        plan: InvocationPlan,
+        record: ReplayRecord,
+        request: RunRequest,
+        tool_name: impl Into<String>,
+        confirmation: crate::PreparedConfirmation,
+    ) -> Self {
+        let command = Some(plan.command_path.clone());
+        let display = DisplayHint {
+            title: confirmation.title.clone(),
+            summary: confirmation.message.clone(),
+        };
+        let preview = permission_preview(&plan, true, Some(confirmation));
+        let tool_name = tool_name.into();
+        Self {
+            status: ResponseStatus::PermissionRequired,
+            command,
+            output: None,
+            error: Some(ErrorBody {
+                code: ErrorCode::PermissionRequired,
+                message: "This command requires confirmation.".to_string(),
+                details: json!({
+                    "operationId": plan.operation_id,
+                    "lane": plan.lane,
+                    "expiresAtUnixMs": record.expires_at_unix_ms,
+                }),
+            }),
+            diagnostics: Vec::new(),
+            steering: vec![SteeringAction {
+                kind: SteeringKind::RequestPermission,
+                label: "Confirm and replay this invocation".to_string(),
+                request: json!({
+                    "tool": tool_name,
+                    "arguments": with_approval(request, &record),
+                }),
+                priority: SteeringPriority::Primary,
+            }],
+            display: Some(display),
             replay: Some(ReplayEnvelope {
                 token: record.token,
                 expires_at_unix_ms: record.expires_at_unix_ms,
@@ -775,7 +982,11 @@ fn error_details(error: &FrameworkError) -> Value {
     }
 }
 
-fn permission_preview(plan: &InvocationPlan, requires_confirmation: bool) -> PermissionPreview {
+fn permission_preview(
+    plan: &InvocationPlan,
+    requires_confirmation: bool,
+    confirmation: Option<crate::PreparedConfirmation>,
+) -> PermissionPreview {
     let argument_variants = plan
         .bound_args
         .iter()
@@ -797,6 +1008,7 @@ fn permission_preview(plan: &InvocationPlan, requires_confirmation: bool) -> Per
         output: plan.output.clone(),
         confirmation_policy: ConfirmationPolicy::EffectDefault,
         requires_confirmation,
+        confirmation,
     }
 }
 
