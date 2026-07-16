@@ -99,11 +99,32 @@ Help may show that a command has custom confirmation presentation and summarize 
 
 ### Model
 
-The command model gains optional presentation declarations:
+The command model gains optional presentation declarations. The excerpts below show only the additive fields and omit the existing derives, fields, and implementations on `CommandSpec` and `OperationSpec`:
 
 ```rust
 pub struct CommandSpec {
     // ...existing fields...
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<ConfirmationPresentation>,
+}
+
+pub struct OperationSpec {
+    // ...existing fields...
+    #[serde(
+        default,
+        skip_serializing_if = "operation_presentation_is_absent"
+    )]
+    pub presentation: Option<OperationPresentation>,
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Eq,
+    Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationPresentation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,6 +232,10 @@ impl ConfirmationPredicate {
     ) -> Self;
 }
 ```
+
+`CommandSpec` is the authoring model; `OperationSpec::from_command_spec` derives the catalog projection. It writes `presentation: None` when both command declarations are absent and otherwise writes one `OperationPresentation` containing only the present members. `OperationSpec` retains `Serialize` and `JsonSchema` and uses custom deserialization through a private wire helper. Catalog deserialization accepts a missing or explicit `null` `presentation`; an object whose known `invocationMessage` and `confirmation` members are both missing or `null` normalizes to the same absence. Additive unknown members normalize out under the corpus policy, so an object containing only unknown members also becomes absent. The private `operation_presentation_is_absent` serialization predicate treats both `None` and a manually constructed known-empty `Some` as absent. Canonical catalog JSON therefore omits the wrapper in every empty form and never writes a null member inside a present wrapper.
+
+The normalized `OperationPresentation` object is the host-neutral serialized evaluator consumed by later surface compilers. It carries the validated declaration rather than rendered copy, and there is no second serialized evaluator type or authoring path. Its exact present shape is `{"presentation":{"invocationMessage":"<message>","confirmation":{...}}}`, with either inner member omitted when absent.
 
 `Plain` supports string and boolean arguments. Booleans use `true` or `false`. Strings use the RFC's fixed presentation-string encoder without surrounding quotes. `JsonString` accepts only strings and retains the encoder's surrounding quotes, producing a valid JSON string literal so user instructions cannot visually escape their segment. `TrimmedJsonString` first removes the fixed set corresponding to ECMAScript's [White Space](https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html#sec-white-space) and [Line Terminator](https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html#sec-line-terminators) tables from both ends: U+0009, U+000B, U+000C, U+0020, U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000, and U+FEFF as whitespace, plus U+000A, U+000D, U+2028, and U+2029 as line terminators. The enumerated version-1 table is authoritative: no future Unicode category change or platform `trim` helper may add another scalar under the same contract. In particular, U+0085 is not trimmed; it remains in the value and the encoder renders it as `\u0085`. Rust and generated TypeScript use this same fixed trimming and escaping table rather than delegating to locale, a host renderer, or a drifting platform JSON helper.
 
@@ -384,7 +409,7 @@ Cancellation or denial discards the prepared copy and never dispatches. The init
 
 ### Projection
 
-- **Operation catalog.** Invocation message, confirmation cases, predicates, segments, renderings, and bounds project under `presentation` and participate in the catalog hash.
+- **Operation catalog.** `OperationSpec.presentation` contains the normalized `OperationPresentation` host-neutral evaluator. Invocation message, confirmation cases, predicates, segments, renderings, and the version-1 bounds it obeys participate in the catalog hash. Missing, null, or known-empty presentation normalizes to an omitted wrapper; a present wrapper emits only its present camel-case members.
 - **Help.** Full help renders the declared invocation message and says that host confirmation may use declared copy, summarizing predicate conditions without fabricating argument values.
 - **Permission preview.** A `RequireConfirmation` decision always includes `PreparedConfirmation` in structured preview. The enclosing display hint projects its exact title and message, with deserialization rejecting disagreement. Allow and deny decisions include no confirmation presentation; the existing deny path returns no permission preview. Preview never invokes a confirmation bridge.
 - **Native surface.** Direct tools carry the command evaluator. Group tools dispatch presentation by selector. Surface snapshots include the evaluator needed by generated host adapters.
@@ -421,7 +446,8 @@ Cancellation or denial discards the prepared copy and never dispatches. The init
 
 Acceptance lives in `crates/mcp-twill/tests/presentation.rs` and the checked-in JSON vector set supplied by RFC 0015's evidence-only fixture bootstrap. That bootstrap provides provenance-checked observations without introducing a surface compiler or runtime API. The owner-local RFC 0018 landing completes the Rust renderer suite before RFC 0015's public implementation integrates it. RFC 0015 then validates member routing and surface defaults against the relevant titles in `surface-catalog.json`, while RFC 0019 owns generated TypeScript and contribution parity with `vscode-package.json`. The vectors are a reviewed extraction because VBL v0.4.9 exposes presentation as TypeScript control flow, not machine-readable data. Rust executes the complete portable vector set before either downstream compiler consumes it, and VBL's final TypeScript gate executes the same vectors before installed-host acceptance.
 
-- A declared invocation message projects through catalog, help, the host-neutral serialized evaluator, and the exact `presentationContract` fingerprint member; editing it changes catalog identity and the invocation fingerprint without changing authorization policy. RFCs 0015 and 0019 own native-snapshot and generated-host consumption respectively.
+- A declared invocation message projects through `OperationSpec.presentation`, help, the same host-neutral serialized evaluator, and the exact `presentationContract` fingerprint member; editing it changes catalog identity and the invocation fingerprint without changing authorization policy. RFCs 0015 and 0019 own native-snapshot and generated-host consumption respectively.
+- Catalog round trips prove missing, null, and objects with both known members missing or null normalize to an omitted `presentation`; canonical present wrappers emit only present camel-case members. Unknown declaration members normalize out, including an object containing only unknown members, and no second serialized evaluator appears.
 - Invocation-message fixtures leave existing MCP progress text/count, authored `ProgressPhaseSpec`, framework events, and task state byte-for-byte unchanged; the message appears only on the declared presentation projections and identities.
 - Fingerprint vectors prove absent declarations omit `presentationContract`, explicit `None` normalizes to omission, declaration object keys are canonical, case order remains significant, and changing only declaration copy changes the fingerprint for bare, effect-lane, and native origins.
 - Declaration and prepared-value round trips prove the exact externally tagged camel-case predicate/segment/branch forms, camel-case struct fields, and lower-camel rendering strings. Additive unknown declaration fields normalize out of canonical emission; Rust-default variant names or snake-case prepared fields fail fixtures and generated TypeScript parity.
@@ -476,7 +502,7 @@ RFC 0003 supplies Twill's authorization and replay boundary. RFC 0017 supplies a
 
 ## Unresolved Questions
 
-No architectural questions remain for the initial presentation boundary. The declaration and builder names in this body are the current Stage-0 proposal; any review-driven rename must amend the managed RFC before Stage 1, and implementation may not introduce an alternate renderer or authoring path. Such a revision must retain public declarations and prepared copy, crate-private compilation policy, string/boolean interpolation, and one-argument disjoint predicates.
+No architectural questions remain for the initial presentation boundary. The declaration, catalog, prepared-value, and builder names in this body become the implementation contract at Stage 1; implementation may not introduce an alternate renderer or authoring path. Any later review-driven rename must return the RFC to design review and amend the managed body before implementation proceeds. Such a revision must retain public declarations and prepared copy, crate-private compilation policy, string/boolean interpolation, and one-argument disjoint predicates.
 
 ## Future Possibilities
 
