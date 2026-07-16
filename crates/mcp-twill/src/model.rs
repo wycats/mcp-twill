@@ -737,6 +737,10 @@ pub struct CommandSpec {
     pub summary: String,
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<crate::ConfirmationPresentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<crate::OutputContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdin: Option<crate::StdinContract>,
@@ -813,6 +817,8 @@ impl CommandSpec {
             path: path.into_iter().map(Into::into).collect(),
             summary: summary.into(),
             description: description.into(),
+            invocation_message: None,
+            confirmation: None,
             output: None,
             stdin: None,
             args: Vec::new(),

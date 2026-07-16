@@ -195,10 +195,19 @@ impl CliMcpServer {
         registry.validate_guidance()?;
         registry.validate_types()?;
         registry.validate_argument_schemas()?;
+        registry.validate_presentations()?;
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
         registry.validate_resources()?;
         registry.validate_results()?;
+        for lane in registry.lane_specs(&config.execution_tool_name) {
+            let display_title = format!("{} execution", lane.tool_name);
+            crate::SurfacePresentationDefaults::new(
+                format!("Running {display_title}"),
+                "Confirmation required",
+                format!("Run {display_title}?"),
+            )?;
+        }
         let identity = registry
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"));
@@ -475,9 +484,28 @@ impl CliMcpServer {
         }
 
         if matches!(mode, RunMode::Preview) {
-            let requires_confirmation = match authorizer.decide(&plan) {
-                PermissionDecision::Allow => false,
-                PermissionDecision::RequireConfirmation => true,
+            let prepared_confirmation = match authorizer.decide(&plan) {
+                PermissionDecision::Allow => {
+                    let _ = registry
+                        .prepare_effect_lane_presentation(
+                            &plan,
+                            &tool_name,
+                            crate::presentation::ConfirmationPresentationRequest::Omit,
+                        )
+                        .expect("effect-lane presentation defaults were validated");
+                    None
+                }
+                PermissionDecision::RequireConfirmation => Some(
+                    registry
+                        .prepare_effect_lane_presentation(
+                            &plan,
+                            &tool_name,
+                            crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault,
+                        )
+                        .expect("effect-lane presentation defaults were validated")
+                        .confirmation
+                        .expect("effect-default confirmation always prepares copy"),
+                ),
                 PermissionDecision::Deny { reason } => {
                     return RunOutcome::envelope(
                         ResponseEnvelope::framework_error(
@@ -495,10 +523,12 @@ impl CliMcpServer {
             if let Some(meta) = progress_meta {
                 Self::notify_progress(meta, &client, 4.0, 4.0, "Preview ready").await;
             }
-            return RunOutcome::envelope(
-                ResponseEnvelope::preview(plan, requires_confirmation),
-                Some(plan_for_event),
-            );
+            let envelope = if let Some(confirmation) = prepared_confirmation {
+                ResponseEnvelope::preview_with_confirmation(plan, confirmation)
+            } else {
+                ResponseEnvelope::preview(plan, false)
+            };
+            return RunOutcome::envelope(envelope, Some(plan_for_event));
         }
 
         if matches!(mode, RunMode::DryRun) {
@@ -533,6 +563,15 @@ impl CliMcpServer {
                         );
                     }
                 } else {
+                    let confirmation = registry
+                        .prepare_effect_lane_presentation(
+                            &plan,
+                            &tool_name,
+                            crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault,
+                        )
+                        .expect("effect-lane presentation defaults were validated")
+                        .confirmation
+                        .expect("effect-default confirmation always prepares copy");
                     let record =
                         issue_replay_record(config, replay, &plan, Utc::now().timestamp_millis())
                             .await;
@@ -541,7 +580,13 @@ impl CliMcpServer {
                             .await;
                     }
                     return RunOutcome::envelope(
-                        ResponseEnvelope::permission_required(plan, record, request, tool_name),
+                        ResponseEnvelope::permission_required_with_confirmation(
+                            plan,
+                            record,
+                            request,
+                            tool_name,
+                            confirmation,
+                        ),
                         Some(plan_for_event),
                     );
                 }

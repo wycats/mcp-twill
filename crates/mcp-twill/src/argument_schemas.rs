@@ -754,6 +754,86 @@ pub(crate) struct CompiledArgumentSchema {
     pub schema: Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PresentationDomain {
+    String,
+    Boolean,
+    StringOrBoolean,
+}
+
+pub(crate) fn presentation_domain(
+    compiled: Option<&CompiledArgumentSchema>,
+) -> Option<PresentationDomain> {
+    let compiled = compiled?;
+    let domains = presentation_primitive_domains(&compiled.schema, &compiled.schema)?;
+    match domains.as_slice() {
+        ["string"] => Some(PresentationDomain::String),
+        ["boolean"] => Some(PresentationDomain::Boolean),
+        ["boolean", "string"] => Some(PresentationDomain::StringOrBoolean),
+        _ => None,
+    }
+}
+
+pub(crate) fn presentation_singleton_value(
+    compiled: Option<&CompiledArgumentSchema>,
+) -> Option<Value> {
+    let compiled = compiled?;
+    let mut values = finite_schema_values(&compiled.schema, &compiled.schema)?
+        .into_iter()
+        .filter(|value| validate_value(compiled, value).is_ok())
+        .collect::<Vec<_>>();
+    values.dedup_by(|left, right| schema_values_equal(left, right));
+    (values.len() == 1).then(|| values.remove(0))
+}
+
+fn presentation_primitive_domains<'a>(schema: &'a Value, root: &'a Value) -> Option<Vec<&'a str>> {
+    let object = schema.as_object()?;
+    let mut domains = if let Some(constant) = object.get("const") {
+        vec![presentation_literal_kind(constant)]
+    } else if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        values.iter().map(presentation_literal_kind).collect()
+    } else if let Some(kind) = object.get("type") {
+        match kind {
+            Value::String(kind) => vec![kind.as_str()],
+            Value::Array(kinds) => kinds
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?,
+            _ => return None,
+        }
+    } else if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
+        let mut domains = Vec::new();
+        for branch in branches {
+            domains.extend(presentation_primitive_domains(branch, root)?);
+        }
+        domains
+    } else if object.get("$ref").is_some() {
+        let reference = object.get("$ref").and_then(Value::as_str)?;
+        presentation_primitive_domains(resolve_ref(root, reference)?, root)?
+    } else {
+        return None;
+    };
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        let referenced = presentation_primitive_domains(resolve_ref(root, reference)?, root)?;
+        domains.retain(|domain| referenced.contains(domain));
+    }
+    domains.sort_unstable();
+    domains.dedup();
+    Some(domains)
+}
+
+fn presentation_literal_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if JsonInteger::number_is_integer(number) => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SchemaFailure {
     pub path: String,

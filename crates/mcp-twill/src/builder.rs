@@ -12,9 +12,9 @@ use serde_json::Value;
 use crate::{
     Alternative, ApplicationResultContract, ApplicationResultDialect, ArgSpec, ArgType,
     ArgumentSchemaDecl, CapabilityDecl, CommandContext, CommandExample, CommandGuidance,
-    CommandHandler, CommandOutput, CommandRegistry, CommandSpec, DynamicApplicationDialect,
-    Fallback, FrameworkError, OutputContract, PermissionSpec, ProgressPhaseSpec, ResourceDecl,
-    Result, StdinContract, TypeDecl, WorkspaceDecl,
+    CommandHandler, CommandOutput, CommandRegistry, CommandSpec, ConfirmationPresentation,
+    DynamicApplicationDialect, Fallback, FrameworkError, OutputContract, PermissionSpec,
+    ProgressPhaseSpec, ResourceDecl, Result, StdinContract, TypeDecl, WorkspaceDecl,
     resource::{ReadResource, ResolveResource, Resource, ResourceDialect},
 };
 
@@ -301,6 +301,7 @@ impl ServerBuilder {
         }
         registry.validate_types()?;
         registry.validate_argument_schemas()?;
+        registry.validate_presentations()?;
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
         registry.validate_examples()?;
@@ -412,6 +413,8 @@ pub struct CommandBuilder {
     path: Vec<String>,
     summary: Option<String>,
     description: Option<String>,
+    invocation_message: Option<String>,
+    confirmation: Option<ConfirmationPresentation>,
     args: Vec<ArgSpec>,
     permissions: Vec<PermissionSpec>,
     examples: Vec<CommandExample>,
@@ -442,6 +445,8 @@ impl CommandBuilder {
             path,
             summary: None,
             description: None,
+            invocation_message: None,
+            confirmation: None,
             args: Vec::new(),
             permissions: Vec::new(),
             examples: Vec::new(),
@@ -474,6 +479,30 @@ impl CommandBuilder {
 
     pub fn description(&mut self, description: impl Into<String>) -> &mut Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn invocation_message(&mut self, message: impl Into<String>) -> &mut Self {
+        if self.invocation_message.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "command `{}` assigns `invocation_message` more than once",
+                self.path.join(" ")
+            )));
+            return self;
+        }
+        self.invocation_message = Some(message.into());
+        self
+    }
+
+    pub fn confirmation(&mut self, presentation: ConfirmationPresentation) -> &mut Self {
+        if self.confirmation.is_some() {
+            self.errors.push(FrameworkError::Build(format!(
+                "command `{}` assigns `confirmation` more than once",
+                self.path.join(" ")
+            )));
+            return self;
+        }
+        self.confirmation = Some(presentation);
         self
     }
 
@@ -885,6 +914,8 @@ impl CommandBuilder {
         }
 
         let mut spec = CommandSpec::new(self.path, summary, description);
+        spec.invocation_message = self.invocation_message;
+        spec.confirmation = self.confirmation;
         let mut output = self.output.unwrap_or_default();
         match &handler {
             BuiltHandler::Legacy { .. }

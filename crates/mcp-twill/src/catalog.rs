@@ -216,7 +216,7 @@ pub enum TaskSupportSpec {
     Required,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationSpec {
     pub id: String,
@@ -224,6 +224,11 @@ pub struct OperationSpec {
     pub summary: String,
     pub description: String,
     pub effect: EffectSpec,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::presentation::operation_presentation_is_absent"
+    )]
+    pub presentation: Option<crate::OperationPresentation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<ArgSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,6 +293,102 @@ pub struct OperationSpec {
     pub stability: Stability,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OperationSpecWire {
+    id: String,
+    path: Vec<String>,
+    summary: String,
+    description: String,
+    effect: EffectSpec,
+    #[serde(default)]
+    presentation: Option<crate::OperationPresentation>,
+    #[serde(default)]
+    args: Vec<ArgSpec>,
+    #[serde(default)]
+    stdin: Option<StdinContract>,
+    output: OutputContract,
+    #[serde(default)]
+    permissions: Vec<PermissionSpec>,
+    #[serde(default)]
+    workspaces: Vec<String>,
+    #[serde(default)]
+    optional_workspaces: Vec<String>,
+    #[serde(default)]
+    uses_conversation_identity: bool,
+    #[serde(default)]
+    requires: Vec<String>,
+    #[serde(default)]
+    provides: Vec<String>,
+    #[serde(default)]
+    use_when: Option<String>,
+    #[serde(default)]
+    alternatives: Vec<Alternative>,
+    #[serde(default)]
+    fallback: Option<Fallback>,
+    #[serde(default)]
+    requires_resources: Vec<String>,
+    #[serde(default)]
+    grants: Vec<String>,
+    #[serde(default)]
+    releases: Vec<String>,
+    #[serde(default)]
+    enumerates: Vec<String>,
+    #[serde(default)]
+    examples: Vec<CommandExample>,
+    #[serde(default)]
+    progress: Vec<ProgressPhaseSpec>,
+    #[serde(default)]
+    idempotent: bool,
+    task_support: TaskSupportSpec,
+    stability: Stability,
+}
+
+impl From<OperationSpecWire> for OperationSpec {
+    fn from(wire: OperationSpecWire) -> Self {
+        Self {
+            id: wire.id,
+            path: wire.path,
+            summary: wire.summary,
+            description: wire.description,
+            effect: wire.effect,
+            presentation: wire
+                .presentation
+                .filter(|presentation| !presentation.is_empty()),
+            args: wire.args,
+            stdin: wire.stdin,
+            output: wire.output,
+            permissions: wire.permissions,
+            workspaces: wire.workspaces,
+            optional_workspaces: wire.optional_workspaces,
+            uses_conversation_identity: wire.uses_conversation_identity,
+            requires: wire.requires,
+            provides: wire.provides,
+            use_when: wire.use_when,
+            alternatives: wire.alternatives,
+            fallback: wire.fallback,
+            requires_resources: wire.requires_resources,
+            grants: wire.grants,
+            releases: wire.releases,
+            enumerates: wire.enumerates,
+            examples: wire.examples,
+            progress: wire.progress,
+            idempotent: wire.idempotent,
+            task_support: wire.task_support,
+            stability: wire.stability,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OperationSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        OperationSpecWire::deserialize(deserializer).map(Into::into)
+    }
+}
+
 impl OperationSpec {
     pub fn from_command_spec(spec: &CommandSpec) -> Self {
         Self {
@@ -296,6 +397,14 @@ impl OperationSpec {
             summary: spec.summary.clone(),
             description: spec.description.clone(),
             effect: EffectSpec::from_permissions(&spec.permissions),
+            presentation: if spec.invocation_message.is_none() && spec.confirmation.is_none() {
+                None
+            } else {
+                Some(crate::OperationPresentation {
+                    invocation_message: spec.invocation_message.clone(),
+                    confirmation: spec.confirmation.clone(),
+                })
+            },
             args: spec.args.clone(),
             stdin: spec.stdin.clone(),
             output: spec.output.clone().unwrap_or_default(),
