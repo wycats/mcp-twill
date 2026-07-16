@@ -99,7 +99,7 @@ Help may show that a command has custom confirmation presentation and summarize 
 
 ### Model
 
-The command model gains optional presentation declarations:
+The command model gains optional presentation declarations. The excerpts below show only the additive fields and omit the existing derives, fields, and implementations on `CommandSpec` and `OperationSpec`:
 
 ```rust
 pub struct CommandSpec {
