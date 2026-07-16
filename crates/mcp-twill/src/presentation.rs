@@ -906,6 +906,28 @@ mod tests {
                 .to_string()
                 .contains("tautological")
         );
+
+        let mut null_only =
+            CommandSpec::new(["null-only"], "Null only", "Required null-only argument").with_arg(
+                ArgSpec::inline_schema(
+                    "value",
+                    json!({ "oneOf": [{ "type": "null" }] }),
+                    "Null-only value",
+                ),
+            );
+        null_only.confirmation = Some(
+            ConfirmationPresentation::new(ConfirmationMessage::new("Default?").text("Default."))
+                .case(
+                    ConfirmationPredicate::argument_equals("value", Value::Null),
+                    ConfirmationMessage::new("Null?").text("Null."),
+                ),
+        );
+        assert!(
+            validate_command_presentation(&null_only, &BTreeMap::new())
+                .unwrap_err()
+                .to_string()
+                .contains("tautological")
+        );
     }
 
     #[test]
@@ -963,6 +985,28 @@ mod tests {
                 .to_string()
                 .contains("incompatible")
         );
+    }
+
+    #[test]
+    fn sibling_one_of_can_narrow_a_nullable_rendering_domain() {
+        let mut spec = CommandSpec::new(["narrowed"], "Narrowed", "Narrowed value").with_arg(
+            ArgSpec::inline_schema(
+                "value",
+                json!({
+                    "type": ["string", "null"],
+                    "oneOf": [{ "const": "ok" }]
+                }),
+                "Narrowed string",
+            ),
+        );
+        spec.confirmation = Some(ConfirmationPresentation::new(
+            ConfirmationMessage::new("Confirm?").argument(
+                "value",
+                ArgumentRendering::JsonString,
+                "(missing)",
+            ),
+        ));
+        validate_command_presentation(&spec, &BTreeMap::new()).unwrap();
     }
 
     #[test]

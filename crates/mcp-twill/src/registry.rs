@@ -618,12 +618,7 @@ impl CommandRegistry {
                 plan.command_path.join(" ")
             ))
         })?;
-        let display_title = format!("{tool_name} execution");
-        let defaults = crate::SurfacePresentationDefaults::new(
-            format!("Running {display_title}"),
-            "Confirmation required",
-            format!("Run {display_title}?"),
-        )?;
+        let defaults = effect_lane_presentation_defaults(tool_name)?;
         let arguments = plan
             .bound_args
             .iter()
@@ -653,6 +648,45 @@ impl CommandRegistry {
                 "effect-lane presentation did not prepare confirmation".to_string(),
             )
         })
+    }
+
+    pub(crate) fn bind_effect_lane_presentation_fingerprint(
+        &self,
+        plan: &mut InvocationPlan,
+        tool_name: &str,
+    ) -> Result<()> {
+        let command = self.commands.get(&plan.command_path).ok_or_else(|| {
+            FrameworkError::Build(format!(
+                "planned command `{}` is missing from the registry",
+                plan.command_path.join(" ")
+            ))
+        })?;
+        if command.spec.invocation_message.is_some() && command.spec.confirmation.is_some() {
+            return Ok(());
+        }
+        let defaults = effect_lane_presentation_defaults(tool_name)?;
+        let mut fallback = serde_json::Map::new();
+        if command.spec.invocation_message.is_none() {
+            fallback.insert(
+                "invocationMessage".to_string(),
+                Value::String(defaults.invocation_message().to_string()),
+            );
+        }
+        if command.spec.confirmation.is_none() {
+            fallback.insert(
+                "confirmationTitle".to_string(),
+                Value::String(defaults.confirmation_title().to_string()),
+            );
+            fallback.insert(
+                "confirmationMessage".to_string(),
+                Value::String(defaults.confirmation_message().to_string()),
+            );
+        }
+        plan.invocation_fingerprint = stable_hash_value(&json!({
+            "invocationFingerprint": &plan.invocation_fingerprint,
+            "surfacePresentationDefaults": fallback,
+        }));
+        Ok(())
     }
 
     pub fn operation_specs(&self) -> Vec<OperationSpec> {
@@ -3472,6 +3506,17 @@ impl CommandRegistry {
         }
         lines.join("\n")
     }
+}
+
+fn effect_lane_presentation_defaults(
+    tool_name: &str,
+) -> Result<crate::SurfacePresentationDefaults> {
+    let display_title = format!("{tool_name} execution");
+    crate::SurfacePresentationDefaults::new(
+        format!("Running {display_title}"),
+        "Confirmation required",
+        format!("Run {display_title}?"),
+    )
 }
 
 fn validate_guidance_text(text: &str, subject: &str) -> Result<()> {

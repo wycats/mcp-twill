@@ -436,7 +436,7 @@ impl CliMcpServer {
         if let Some(meta) = progress_meta {
             Self::notify_progress(meta, &client, 1.0, 4.0, "Parsing command template").await;
         }
-        let plan = match registry.build_plan_with_workspaces_and_context(
+        let mut plan = match registry.build_plan_with_workspaces_and_context(
             &request,
             &resolved,
             &invocation_context,
@@ -449,12 +449,12 @@ impl CliMcpServer {
                 );
             }
         };
-        let plan_for_event = PlanFacts::from(&plan);
 
         if let Some(meta) = progress_meta {
             Self::notify_progress(meta, &client, 2.0, 4.0, "Invocation plan ready").await;
         }
         let Some(lane) = registry.tool_lane(&config.execution_tool_name, &tool_name) else {
+            let plan_for_event = PlanFacts::from(&plan);
             return RunOutcome::envelope(
                 ResponseEnvelope::framework_error(
                     FrameworkError::UnknownCommand {
@@ -470,6 +470,7 @@ impl CliMcpServer {
 
         if plan.lane != lane {
             let required_tool = registry.required_tool_name(&config.execution_tool_name, plan.lane);
+            let plan_for_event = PlanFacts::from(&plan);
             return RunOutcome::envelope(
                 ResponseEnvelope::framework_error(
                     FrameworkError::WrongEffectLane {
@@ -482,6 +483,17 @@ impl CliMcpServer {
                 Some(plan_for_event),
             );
         }
+
+        if let Err(error) =
+            registry.bind_effect_lane_presentation_fingerprint(&mut plan, &tool_name)
+        {
+            let plan_for_event = PlanFacts::from(&plan);
+            return RunOutcome::envelope(
+                ResponseEnvelope::framework_error(error, Some(request), Some(plan)),
+                Some(plan_for_event),
+            );
+        }
+        let plan_for_event = PlanFacts::from(&plan);
 
         if matches!(mode, RunMode::Preview) {
             let prepared_confirmation = match authorizer.decide(&plan) {
@@ -1532,6 +1544,45 @@ mod tests {
         );
         let success = CallToolResult::structured(json!({ "status": "ok" }));
         assert_eq!(task_completion_message(&success), "Run command completed");
+    }
+
+    #[test]
+    fn generic_confirmation_copy_binds_the_active_surface_fingerprint() {
+        let registry = CommandRegistry::new("presentation", "Presentation test").register(
+            crate::CommandSpec::new(["run"], "Run", "Run command"),
+            |_context| async { Ok(crate::CommandOutput::structured(json!({}))) },
+        );
+        let request = RunRequest {
+            command: "run".to_string(),
+            args: BTreeMap::new(),
+            stdin: None,
+            output: None,
+            mode: RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        };
+        let bare = registry.build_plan(&request).unwrap();
+        let mut repo = bare.clone();
+        registry
+            .bind_effect_lane_presentation_fingerprint(&mut repo, "repo-write")
+            .unwrap();
+        let mut workspace = bare.clone();
+        registry
+            .bind_effect_lane_presentation_fingerprint(&mut workspace, "workspace-write")
+            .unwrap();
+
+        assert_ne!(bare.invocation_fingerprint, repo.invocation_fingerprint);
+        assert_ne!(
+            repo.invocation_fingerprint,
+            workspace.invocation_fingerprint
+        );
+        assert_eq!(
+            registry
+                .prepare_effect_lane_confirmation(&repo, "repo-write")
+                .unwrap()
+                .message,
+            "Run repo-write execution?"
+        );
     }
 
     #[test]

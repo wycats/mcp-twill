@@ -788,34 +788,40 @@ pub(crate) fn presentation_singleton_value(
 
 fn presentation_primitive_domains<'a>(schema: &'a Value, root: &'a Value) -> Option<Vec<&'a str>> {
     let object = schema.as_object()?;
-    let mut domains = if let Some(constant) = object.get("const") {
-        vec![presentation_literal_kind(constant)]
-    } else if let Some(values) = object.get("enum").and_then(Value::as_array) {
-        values.iter().map(presentation_literal_kind).collect()
-    } else if let Some(kind) = object.get("type") {
-        match kind {
+    let mut constraints = Vec::new();
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        constraints.push(presentation_primitive_domains(
+            resolve_ref(root, reference)?,
+            root,
+        )?);
+    }
+    if let Some(constant) = object.get("const") {
+        constraints.push(vec![presentation_literal_kind(constant)]);
+    }
+    if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        constraints.push(values.iter().map(presentation_literal_kind).collect());
+    }
+    if let Some(kind) = object.get("type") {
+        constraints.push(match kind {
             Value::String(kind) => vec![kind.as_str()],
             Value::Array(kinds) => kinds
                 .iter()
                 .map(Value::as_str)
                 .collect::<Option<Vec<_>>>()?,
             _ => return None,
-        }
-    } else if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
+        });
+    }
+    if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
         let mut domains = Vec::new();
         for branch in branches {
             domains.extend(presentation_primitive_domains(branch, root)?);
         }
-        domains
-    } else if object.get("$ref").is_some() {
-        let reference = object.get("$ref").and_then(Value::as_str)?;
-        presentation_primitive_domains(resolve_ref(root, reference)?, root)?
-    } else {
-        return None;
-    };
-    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-        let referenced = presentation_primitive_domains(resolve_ref(root, reference)?, root)?;
-        domains.retain(|domain| referenced.contains(domain));
+        constraints.push(domains);
+    }
+    let mut constraints = constraints.into_iter();
+    let mut domains = constraints.next()?;
+    for constraint in constraints {
+        domains.retain(|domain| constraint.contains(domain));
     }
     domains.sort_unstable();
     domains.dedup();
@@ -1808,6 +1814,13 @@ fn finite_schema_values(schema: &Value, root: &Value) -> Option<Vec<Value>> {
     let object = schema.as_object()?;
     if let Some(values) = finite_values(object) {
         return Some(values);
+    }
+    if object.get("type").is_some_and(|kind| match kind {
+        Value::String(kind) => kind == "null",
+        Value::Array(kinds) => kinds.len() == 1 && kinds.first().is_some_and(|kind| kind == "null"),
+        _ => false,
+    }) {
+        return Some(vec![Value::Null]);
     }
     if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
         return finite_schema_values(resolve_ref(root, reference)?, root);
