@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Write as _};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -639,31 +639,35 @@ fn render_argument(value: Option<&Value>, rendering: ArgumentRendering, fallback
 }
 
 fn encode_presentation_string(value: &str, quoted: bool) -> String {
-    let chunks = value.chars().map(escaped_scalar).collect::<Vec<_>>();
-    let full_width = chunks
-        .iter()
-        .map(|chunk| chunk.chars().count())
-        .sum::<usize>()
-        + usize::from(quoted) * 2;
+    let fixed_width = usize::from(quoted) * 2;
+    let fits = value
+        .chars()
+        .try_fold(fixed_width, |width, scalar| {
+            let width = width + escaped_scalar_width(scalar);
+            (width <= INTERPOLATION_LIMIT).then_some(width)
+        })
+        .is_some();
     let mut output = String::new();
     if quoted {
         output.push('"');
     }
-    if full_width <= INTERPOLATION_LIMIT {
-        for chunk in chunks {
-            output.push_str(&chunk);
-        }
+    let limit = if fits {
+        INTERPOLATION_LIMIT - fixed_width
+    } else if quoted {
+        253
     } else {
-        let limit = if quoted { 253 } else { 255 };
-        let mut width = 0usize;
-        for chunk in chunks {
-            let chunk_width = chunk.chars().count();
-            if width + chunk_width > limit {
-                break;
-            }
-            output.push_str(&chunk);
-            width += chunk_width;
+        255
+    };
+    let mut width = 0usize;
+    for scalar in value.chars() {
+        let scalar_width = escaped_scalar_width(scalar);
+        if width + scalar_width > limit {
+            break;
         }
+        push_escaped_scalar(&mut output, scalar);
+        width += scalar_width;
+    }
+    if !fits {
         output.push('…');
     }
     if quoted {
@@ -672,19 +676,28 @@ fn encode_presentation_string(value: &str, quoted: bool) -> String {
     output
 }
 
-fn escaped_scalar(scalar: char) -> String {
+fn escaped_scalar_width(scalar: char) -> usize {
     match scalar {
-        '"' => "\\\"".to_string(),
-        '\\' => "\\\\".to_string(),
-        '\u{0008}' => "\\b".to_string(),
-        '\u{000C}' => "\\f".to_string(),
-        '\n' => "\\n".to_string(),
-        '\r' => "\\r".to_string(),
-        '\t' => "\\t".to_string(),
+        '"' | '\\' | '\u{0008}' | '\u{000C}' | '\n' | '\r' | '\t' => 2,
+        scalar if presentation_scalar_uses_escape(scalar) => 6,
+        _ => 1,
+    }
+}
+
+fn push_escaped_scalar(output: &mut String, scalar: char) {
+    match scalar {
+        '"' => output.push_str("\\\""),
+        '\\' => output.push_str("\\\\"),
+        '\u{0008}' => output.push_str("\\b"),
+        '\u{000C}' => output.push_str("\\f"),
+        '\n' => output.push_str("\\n"),
+        '\r' => output.push_str("\\r"),
+        '\t' => output.push_str("\\t"),
         scalar if presentation_scalar_uses_escape(scalar) => {
-            format!("\\u{:04X}", scalar as u32)
+            write!(output, "\\u{:04X}", scalar as u32)
+                .expect("writing presentation escape to String cannot fail");
         }
-        scalar => scalar.to_string(),
+        scalar => output.push(scalar),
     }
 }
 
@@ -762,6 +775,10 @@ mod tests {
         assert_eq!(
             encode_presentation_string(&"x".repeat(255), true),
             format!("\"{}…\"", "x".repeat(253))
+        );
+        assert_eq!(
+            encode_presentation_string(&"x".repeat(1_000_000), false),
+            format!("{}…", "x".repeat(255))
         );
     }
 
@@ -922,6 +939,30 @@ mod tests {
                     .contains("incompatible")
             );
         }
+    }
+
+    #[test]
+    fn nullable_primitive_domains_are_rejected_for_interpolation() {
+        let mut spec = CommandSpec::new(["nullable"], "Nullable", "Nullable value").with_arg(
+            ArgSpec::inline_schema(
+                "value",
+                json!({ "type": ["string", "null"] }),
+                "Nullable string",
+            ),
+        );
+        spec.confirmation = Some(ConfirmationPresentation::new(
+            ConfirmationMessage::new("Confirm?").argument(
+                "value",
+                ArgumentRendering::JsonString,
+                "(missing)",
+            ),
+        ));
+        assert!(
+            validate_command_presentation(&spec, &BTreeMap::new())
+                .unwrap_err()
+                .to_string()
+                .contains("incompatible")
+        );
     }
 
     #[test]

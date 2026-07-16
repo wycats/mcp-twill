@@ -240,10 +240,7 @@ impl TryFrom<PermissionPreviewWire> for PermissionPreview {
     fn try_from(wire: PermissionPreviewWire) -> Result<Self, Self::Error> {
         if let Some(confirmation) = &wire.confirmation {
             if !wire.requires_confirmation {
-                return Err(
-                    "permission preview confirmation requires requiresConfirmation=true"
-                        .to_string(),
-                );
+                return Err("permission preview confirmation requiresConfirmation=true".to_string());
             }
             if confirmation.operation_id != wire.operation_id {
                 return Err(
