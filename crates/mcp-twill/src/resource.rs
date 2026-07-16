@@ -467,6 +467,10 @@ pub trait ResourceDialect<M>: Send + Sync + 'static {
     fn resource_uses() -> Vec<ResourceUse>;
     fn granted() -> Vec<&'static str>;
     fn enumerated() -> Vec<&'static str>;
+    #[doc(hidden)]
+    fn accepts_arguments() -> bool {
+        false
+    }
     fn into_command_handler(self) -> Arc<dyn CommandHandler>;
 }
 
@@ -492,6 +496,10 @@ where
 
     fn enumerated() -> Vec<&'static str> {
         O::enumerated()
+    }
+
+    fn accepts_arguments() -> bool {
+        false
     }
 
     fn into_command_handler(self) -> Arc<dyn CommandHandler> {
@@ -537,6 +545,10 @@ where
         O::enumerated()
     }
 
+    fn accepts_arguments() -> bool {
+        true
+    }
+
     fn into_command_handler(self) -> Arc<dyn CommandHandler> {
         Arc::new(DialectHandler::<WithResourcesAndArgs<P, A, O>, F> {
             handler: self,
@@ -580,6 +592,10 @@ where
         O::enumerated()
     }
 
+    fn accepts_arguments() -> bool {
+        false
+    }
+
     fn into_command_handler(self) -> Arc<dyn CommandHandler> {
         Arc::new(DialectHandler::<ContextOnly<O>, F> {
             handler: self,
@@ -618,6 +634,10 @@ where
 
     fn enumerated() -> Vec<&'static str> {
         O::enumerated()
+    }
+
+    fn accepts_arguments() -> bool {
+        true
     }
 
     fn into_command_handler(self) -> Arc<dyn CommandHandler> {

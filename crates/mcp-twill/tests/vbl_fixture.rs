@@ -117,6 +117,15 @@ fn authored_guidance_accounts_for_every_released_operation() {
 }
 
 #[test]
+fn adopted_argument_schema_graph_compiles_against_the_released_baseline() {
+    let registry = vbl::argument_schema_registry(&baseline_observation());
+    registry
+        .validate_argument_schemas()
+        .expect("all released VBL argument schemas compile through the Twill authority");
+    assert_eq!(registry.catalog().operations.len(), 63);
+}
+
+#[test]
 fn authored_preamble_preserves_the_released_instruction_contract() {
     let catalog = surface_observation();
     assert!(

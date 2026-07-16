@@ -11,16 +11,17 @@ use serde_json::Value;
 
 use crate::{
     Alternative, ApplicationResultContract, ApplicationResultDialect, ArgSpec, ArgType,
-    CapabilityDecl, CommandContext, CommandExample, CommandGuidance, CommandHandler, CommandOutput,
-    CommandRegistry, CommandSpec, DynamicApplicationDialect, Fallback, FrameworkError,
-    OutputContract, PermissionSpec, ProgressPhaseSpec, ResourceDecl, Result, StdinContract,
-    TypeDecl, WorkspaceDecl,
+    ArgumentSchemaDecl, CapabilityDecl, CommandContext, CommandExample, CommandGuidance,
+    CommandHandler, CommandOutput, CommandRegistry, CommandSpec, DynamicApplicationDialect,
+    Fallback, FrameworkError, OutputContract, PermissionSpec, ProgressPhaseSpec, ResourceDecl,
+    Result, StdinContract, TypeDecl, WorkspaceDecl,
     resource::{ReadResource, ResolveResource, Resource, ResourceDialect},
 };
 
 pub mod arg {
     use super::ArgBuilder;
-    use crate::ArgType;
+    use crate::{ArgType, ArgumentSchemaUse};
+    use serde_json::{Value, json};
 
     pub fn string(name: impl Into<String>) -> ArgBuilder {
         ArgBuilder::new(name, ArgType::String)
@@ -38,8 +39,38 @@ pub mod arg {
         ArgBuilder::new(name, ArgType::Number)
     }
 
+    pub fn integer(name: impl Into<String>) -> ArgBuilder {
+        ArgBuilder::new(name, ArgType::Integer)
+    }
+
     pub fn json(name: impl Into<String>) -> ArgBuilder {
         ArgBuilder::new(name, ArgType::Json)
+    }
+
+    pub fn enumerated(
+        name: impl Into<String>,
+        values: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> ArgBuilder {
+        let mut builder = ArgBuilder::new(name, ArgType::String);
+        builder.spec.schema = Some(ArgumentSchemaUse::inline(json!({
+            "type": "string",
+            "enum": values
+                .into_iter()
+                .map(|value| Value::String(value.as_ref().to_string()))
+                .collect::<Vec<_>>(),
+        })));
+        builder.generated_schema = true;
+        builder
+    }
+
+    pub fn named_schema(name: impl Into<String>, schema: impl Into<String>) -> ArgBuilder {
+        let mut builder = ArgBuilder::new(name, ArgType::Json);
+        builder.spec.schema = Some(ArgumentSchemaUse::named(schema));
+        builder
+    }
+
+    pub fn inline_schema(name: impl Into<String>, schema: impl Into<Value>) -> ArgBuilder {
+        ArgBuilder::new(name, ArgType::Json).with_inline_schema(schema)
     }
 
     /// An argument whose values match a declared named type (see
@@ -68,6 +99,7 @@ pub struct ServerBuilder {
     workspaces: Vec<WorkspaceDecl>,
     capabilities: Vec<CapabilityDecl>,
     types: Vec<TypeDecl>,
+    argument_schemas: Vec<ArgumentSchemaDecl>,
     resources: Vec<ResourceDecl>,
     resource_bindings: Vec<Box<dyn FnOnce(CommandRegistry) -> CommandRegistry>>,
     guidance: Vec<CommandGuidance>,
@@ -82,7 +114,11 @@ struct BuiltCommand {
 }
 
 enum BuiltHandler {
-    Legacy(SharedCommandHandler),
+    Legacy {
+        handler: SharedCommandHandler,
+        typed_arguments: bool,
+    },
+    Constrained(crate::ConstrainedHandlerRegistration),
     Result(crate::results::ResultHandlerRegistration),
     Dynamic(crate::results::DynamicHandlerRegistration),
 }
@@ -96,6 +132,7 @@ impl ServerBuilder {
             workspaces: Vec::new(),
             capabilities: Vec::new(),
             types: Vec::new(),
+            argument_schemas: Vec::new(),
             resources: Vec::new(),
             resource_bindings: Vec::new(),
             guidance: Vec::new(),
@@ -134,6 +171,11 @@ impl ServerBuilder {
 
     pub fn declare_type(&mut self, decl: TypeDecl) -> &mut Self {
         self.types.push(decl);
+        self
+    }
+
+    pub fn argument_schema(&mut self, decl: ArgumentSchemaDecl) -> &mut Self {
+        self.argument_schemas.push(decl);
         self
     }
 
@@ -224,6 +266,9 @@ impl ServerBuilder {
         for decl in self.types.drain(..) {
             registry = registry.declare_type(decl);
         }
+        for decl in self.argument_schemas.drain(..) {
+            registry = registry.declare_argument_schema(decl);
+        }
         for decl in &self.resources {
             registry = registry.declare_resource(decl.clone());
         }
@@ -235,7 +280,17 @@ impl ServerBuilder {
         }
         for command in self.commands {
             registry = match command.handler {
-                BuiltHandler::Legacy(handler) => registry.register(command.spec, handler),
+                BuiltHandler::Legacy {
+                    handler,
+                    typed_arguments,
+                } => registry.register_legacy_registration(
+                    command.spec,
+                    handler.inner,
+                    typed_arguments,
+                ),
+                BuiltHandler::Constrained(handler) => {
+                    registry.register_constrained_registration(command.spec, handler)
+                }
                 BuiltHandler::Result(handler) => {
                     registry.register_result_registration(command.spec, handler)
                 }
@@ -245,6 +300,7 @@ impl ServerBuilder {
             };
         }
         registry.validate_types()?;
+        registry.validate_argument_schemas()?;
         registry.validate_workspaces()?;
         registry.validate_capabilities()?;
         registry.validate_examples()?;
@@ -282,7 +338,7 @@ impl ServerBuilder {
             .collect::<BTreeMap<_, _>>();
         for command in &mut self.commands {
             let spec = &mut command.spec;
-            let inject_carriers = matches!(&command.handler, BuiltHandler::Legacy(_));
+            let inject_carriers = matches!(&command.handler, BuiltHandler::Legacy { .. });
             let mut injected = BTreeSet::new();
             let resolved = spec
                 .requires_resources
@@ -324,6 +380,8 @@ impl ServerBuilder {
                     ),
                     workspace: None,
                     repeated: false,
+                    schema: decl.reference_schema.clone(),
+                    requires_arguments: Vec::new(),
                 });
             }
             let covered_requires = spec
@@ -672,9 +730,24 @@ impl CommandBuilder {
             .extend(H::granted().into_iter().map(ToOwned::to_owned));
         self.enumerates
             .extend(H::enumerated().into_iter().map(ToOwned::to_owned));
-        self.install_handler(BuiltHandler::Legacy(SharedCommandHandler::from_arc(
-            handler.into_command_handler(),
-        )));
+        self.install_handler(BuiltHandler::Legacy {
+            handler: SharedCommandHandler::from_arc(handler.into_command_handler()),
+            typed_arguments: H::accepts_arguments(),
+        });
+        self
+    }
+
+    pub fn handle_constrained<M, H>(&mut self, handler: H) -> &mut Self
+    where
+        H: crate::ConstrainedCommandDialect<M>,
+    {
+        let registration = handler.into_constrained_registration();
+        self.apply_result_resource_edges(
+            &registration.resource_uses,
+            &registration.granted,
+            &registration.enumerated,
+        );
+        self.install_handler(BuiltHandler::Constrained(registration));
         self
     }
 
@@ -741,12 +814,13 @@ impl CommandBuilder {
         H: Fn(CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<CommandOutput>> + Send,
     {
-        self.install_handler(BuiltHandler::Legacy(SharedCommandHandler::new(
-            TypedHandler::<A, H> {
+        self.install_handler(BuiltHandler::Legacy {
+            handler: SharedCommandHandler::new(TypedHandler::<A, H> {
                 handler,
                 _marker: PhantomData,
-            },
-        )));
+            }),
+            typed_arguments: true,
+        });
         self
     }
 
@@ -813,7 +887,11 @@ impl CommandBuilder {
         let mut spec = CommandSpec::new(self.path, summary, description);
         let mut output = self.output.unwrap_or_default();
         match &handler {
-            BuiltHandler::Legacy(_) | BuiltHandler::Result(_) if self.result_contract.is_some() => {
+            BuiltHandler::Legacy { .. }
+            | BuiltHandler::Constrained(_)
+            | BuiltHandler::Result(_)
+                if self.result_contract.is_some() =>
+            {
                 return Err(FrameworkError::Build(format!(
                     "command `{command_name}` pairs an explicit application result contract with a handler that cannot use it"
                 )));
@@ -895,6 +973,7 @@ fn required_text(value: Option<String>, field: &str, command: &str) -> Result<St
 
 pub struct ArgBuilder {
     spec: ArgSpec,
+    generated_schema: bool,
 }
 
 impl ArgBuilder {
@@ -907,7 +986,10 @@ impl ArgBuilder {
                 summary: String::new(),
                 workspace: None,
                 repeated: false,
+                schema: None,
+                requires_arguments: Vec::new(),
             },
+            generated_schema: false,
         }
     }
 
@@ -918,6 +1000,15 @@ impl ArgBuilder {
 
     pub fn summary(mut self, summary: impl Into<String>) -> Self {
         self.spec.summary = summary.into();
+        if self.generated_schema
+            && let Some(crate::ArgumentSchemaUse::Inline { schema }) = &mut self.spec.schema
+            && let Some(object) = schema.as_object_mut()
+        {
+            object.insert(
+                "description".to_string(),
+                serde_json::json!(self.spec.summary),
+            );
+        }
         self
     }
 
@@ -928,6 +1019,23 @@ impl ArgBuilder {
 
     pub fn repeated(mut self) -> Self {
         self.spec.repeated = true;
+        self
+    }
+
+    pub fn with_named_schema(mut self, name: impl Into<String>) -> Self {
+        self.spec.schema = Some(crate::ArgumentSchemaUse::named(name));
+        self.generated_schema = false;
+        self
+    }
+
+    pub fn with_inline_schema(mut self, schema: impl Into<Value>) -> Self {
+        self.spec.schema = Some(crate::ArgumentSchemaUse::inline(schema));
+        self.generated_schema = false;
+        self
+    }
+
+    pub fn requires_argument(mut self, name: impl Into<String>) -> Self {
+        self.spec.requires_arguments.push(name.into());
         self
     }
 

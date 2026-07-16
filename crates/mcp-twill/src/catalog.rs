@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Alternative, ArgSpec, CapabilityDecl, CommandExample, CommandSpec, Fallback, PermissionEffect,
-    PermissionSpec, TypeDecl, WorkspaceDecl,
+    Alternative, ArgSpec, ArgumentSchemaDecl, CapabilityDecl, CommandExample, CommandSpec,
+    Fallback, PermissionEffect, PermissionSpec, TypeDecl, WorkspaceDecl,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -376,6 +376,8 @@ pub struct CommandCatalog {
     pub guidance: Vec<CommandGuidance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<TypeDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argument_schemas: Vec<ArgumentSchemaDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<CapabilityDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

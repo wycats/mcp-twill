@@ -31,6 +31,10 @@ pub struct FrameworkEvent {
     pub result_contract_boundary: Option<crate::ResultContractBoundary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_contract_reason: Option<crate::ResultContractReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_contract_argument: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_contract_reason: Option<crate::ArgumentContractReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<EffectSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -52,11 +56,30 @@ impl FrameworkEvent {
                 })
                 .flatten()
         });
+        let argument_contract = envelope.error.as_ref().and_then(|error| {
+            (error.code == crate::ErrorCode::ArgumentContractViolation)
+                .then(|| {
+                    let operation = error.details.get("operation")?.as_str()?.to_owned();
+                    let argument = error
+                        .details
+                        .get("argument")
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned);
+                    let reason =
+                        serde_json::from_value(error.details.get("reason")?.clone()).ok()?;
+                    Some((operation, argument, reason))
+                })
+                .flatten()
+        });
         Self {
             id: new_event_id(),
             timestamp_unix_ms: Utc::now().timestamp_millis(),
             runtime: None,
-            operation_id: plan.map(|plan| plan.operation_id.clone()),
+            operation_id: plan.map(|plan| plan.operation_id.clone()).or_else(|| {
+                argument_contract
+                    .as_ref()
+                    .map(|(operation, _, _)| operation.clone())
+            }),
             command: envelope
                 .command
                 .clone()
@@ -75,6 +98,10 @@ impl FrameworkEvent {
             }),
             result_contract_boundary: result_contract.map(|(boundary, _)| boundary),
             result_contract_reason: result_contract.map(|(_, reason)| reason),
+            argument_contract_argument: argument_contract
+                .as_ref()
+                .and_then(|(_, argument, _)| argument.clone()),
+            argument_contract_reason: argument_contract.map(|(_, _, reason)| reason),
             effects: plan
                 .map(|plan| vec![plan.effect.clone()])
                 .unwrap_or_default(),
@@ -95,6 +122,8 @@ impl FrameworkEvent {
             application_error_code: None,
             result_contract_boundary: None,
             result_contract_reason: None,
+            argument_contract_argument: None,
+            argument_contract_reason: None,
             effects: Vec::new(),
             diagnostics: vec![Diagnostic {
                 code: crate::ErrorCode::InvalidArgumentType,

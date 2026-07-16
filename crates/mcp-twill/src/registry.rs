@@ -42,6 +42,13 @@ where
     }
 }
 
+#[async_trait]
+impl CommandHandler for Arc<dyn CommandHandler> {
+    async fn call(&self, context: CommandContext) -> Result<CommandOutput> {
+        self.as_ref().call(context).await
+    }
+}
+
 #[derive(Clone)]
 pub struct CommandRegistry {
     server_name: String,
@@ -51,6 +58,8 @@ pub struct CommandRegistry {
     workspaces: BTreeMap<String, WorkspaceDecl>,
     types: BTreeMap<String, crate::TypeDecl>,
     duplicate_types: Vec<String>,
+    argument_schemas: BTreeMap<String, crate::ArgumentSchemaDecl>,
+    duplicate_argument_schemas: Vec<String>,
     capabilities: BTreeMap<String, crate::CapabilityDecl>,
     duplicate_capabilities: Vec<String>,
     resources: BTreeMap<String, crate::ResourceDecl>,
@@ -71,7 +80,16 @@ struct RegisteredCommand {
     spec: CommandSpec,
     handler: Arc<dyn crate::results::ErasedCommandHandler>,
     result_kind: ResultHandlerKind,
+    argument_kind: ArgumentHandlerKind,
     result_resource_uses: Vec<crate::resource::ResourceUse>,
+}
+
+#[derive(Clone)]
+enum ArgumentHandlerKind {
+    Dynamic,
+    LegacyTyped,
+    Constrained(Value),
+    ResultAware(Option<Value>),
 }
 
 #[derive(Clone)]
@@ -94,6 +112,8 @@ impl CommandRegistry {
             workspaces: BTreeMap::new(),
             types: BTreeMap::new(),
             duplicate_types: Vec::new(),
+            argument_schemas: BTreeMap::new(),
+            duplicate_argument_schemas: Vec::new(),
             capabilities: BTreeMap::new(),
             duplicate_capabilities: Vec::new(),
             resources: BTreeMap::new(),
@@ -134,6 +154,18 @@ impl CommandRegistry {
         }
         self.types.insert(decl.name.clone(), decl);
         self
+    }
+
+    pub fn declare_argument_schema(mut self, decl: crate::ArgumentSchemaDecl) -> Self {
+        if self.argument_schemas.contains_key(&decl.name) {
+            self.duplicate_argument_schemas.push(decl.name.clone());
+        }
+        self.argument_schemas.insert(decl.name.clone(), decl);
+        self
+    }
+
+    pub fn argument_schemas(&self) -> impl Iterator<Item = &crate::ArgumentSchemaDecl> {
+        self.argument_schemas.values()
     }
 
     pub fn declare_capability(mut self, decl: crate::CapabilityDecl) -> Self {
@@ -260,21 +292,63 @@ impl CommandRegistry {
         &self.guidance
     }
 
-    pub fn register<H>(mut self, mut spec: CommandSpec, handler: H) -> Self
+    pub fn register<H>(self, spec: CommandSpec, handler: H) -> Self
     where
         H: CommandHandler,
     {
-        spec.workspaces.sort();
-        spec.workspaces.dedup();
-        spec.optional_workspaces.sort();
-        spec.optional_workspaces.dedup();
+        self.register_legacy_registration(spec, Arc::new(handler), false)
+    }
+
+    pub(crate) fn register_legacy_registration(
+        mut self,
+        mut spec: CommandSpec,
+        handler: Arc<dyn CommandHandler>,
+        typed_arguments: bool,
+    ) -> Self {
+        normalize_command_spec(&mut spec);
         self.commands.insert(
             spec.path.clone(),
             RegisteredCommand {
                 spec,
                 handler: Arc::new(crate::results::LegacyHandlerAdapter(handler)),
                 result_kind: ResultHandlerKind::Legacy,
+                argument_kind: if typed_arguments {
+                    ArgumentHandlerKind::LegacyTyped
+                } else {
+                    ArgumentHandlerKind::Dynamic
+                },
                 result_resource_uses: Vec::new(),
+            },
+        );
+        self.refresh_typed_result_contracts();
+        self
+    }
+
+    pub(crate) fn register_constrained_registration(
+        mut self,
+        mut spec: CommandSpec,
+        registration: crate::ConstrainedHandlerRegistration,
+    ) -> Self {
+        project_result_resources(
+            &mut spec,
+            &registration.resource_uses,
+            &registration.granted,
+            &registration.enumerated,
+        );
+        if let Err(error) =
+            inject_result_resource_carriers(&mut spec, &registration.resource_uses, &self.resources)
+        {
+            self.registration_errors.push(error);
+        }
+        normalize_command_spec(&mut spec);
+        self.commands.insert(
+            spec.path.clone(),
+            RegisteredCommand {
+                spec,
+                handler: Arc::new(crate::results::LegacyHandlerAdapter(registration.handler)),
+                result_kind: ResultHandlerKind::Legacy,
+                argument_kind: ArgumentHandlerKind::Constrained(registration.argument_schema),
+                result_resource_uses: registration.resource_uses,
             },
         );
         self.refresh_typed_result_contracts();
@@ -319,6 +393,7 @@ impl CommandRegistry {
                     pending: registration.pending,
                     explicit_application,
                 },
+                argument_kind: ArgumentHandlerKind::ResultAware(registration.argument_schema),
                 result_resource_uses: registration.resource_uses,
             },
         );
@@ -365,6 +440,7 @@ impl CommandRegistry {
                 spec,
                 handler: registration.handler,
                 result_kind: ResultHandlerKind::Dynamic,
+                argument_kind: ArgumentHandlerKind::Dynamic,
                 result_resource_uses: registration.resource_uses,
             },
         );
@@ -534,7 +610,11 @@ impl CommandRegistry {
         let mut operations = self
             .commands
             .values()
-            .map(|command| OperationSpec::from_command_spec(&command.spec))
+            .map(|command| {
+                let mut operation = OperationSpec::from_command_spec(&command.spec);
+                canonicalize_catalog_argument_schemas(&mut operation.args);
+                operation
+            })
             .collect::<Vec<_>>();
         operations.sort_by(|left, right| left.path.cmp(&right.path));
         operations
@@ -561,6 +641,7 @@ impl CommandRegistry {
             operations,
             workspaces: self.workspaces.values().cloned().collect(),
             types: self.types.values().cloned().collect(),
+            argument_schemas: self.canonical_argument_schema_decls(),
             capabilities: self.capabilities.values().cloned().collect(),
             resources: self.resource_specs(),
             guidance: self.guidance.clone(),
@@ -611,7 +692,7 @@ impl CommandRegistry {
         // `CommandCatalog` served at cli://catalog (which skips empty fields
         // and embeds the identity itself). The hash is an opaque change
         // detector; clients cannot recompute it from the resource bytes.
-        let catalog_value = json!({
+        let mut catalog_value = json!({
             "server": self.server_spec(),
             "namespaces": group_namespaces(operations),
             "operations": operations,
@@ -621,6 +702,27 @@ impl CommandRegistry {
             "resources": self.resource_specs(),
             "guidance": self.guidance,
         });
+        let argument_schemas = self.canonical_argument_schema_decls();
+        if !argument_schemas.is_empty() {
+            catalog_value
+                .as_object_mut()
+                .expect("catalog identity preimage is an object")
+                .insert(
+                    "argumentSchemas".to_string(),
+                    serde_json::to_value(argument_schemas).expect("serialize argument schemas"),
+                );
+        }
+        let resource_reference_schemas = self.canonical_resource_reference_schemas();
+        if !resource_reference_schemas.is_empty() {
+            catalog_value
+                .as_object_mut()
+                .expect("catalog identity preimage is an object")
+                .insert(
+                    "resourceReferenceSchemas".to_string(),
+                    serde_json::to_value(resource_reference_schemas)
+                        .expect("serialize resource reference schemas"),
+                );
+        }
         let run_schema = serde_json::to_value(schema_for!(RunRequest)).unwrap_or(Value::Null);
         let help_schema = serde_json::to_value(schema_for!(HelpRequest)).unwrap_or(Value::Null);
 
@@ -706,6 +808,192 @@ impl CommandRegistry {
             }
         }
         crate::types::validate_types(&self.types, &arg_references)
+    }
+
+    pub fn validate_argument_schemas(&self) -> Result<()> {
+        if let Some(name) = self.duplicate_argument_schemas.first() {
+            return Err(FrameworkError::Build(format!(
+                "argument schema `{name}` is declared more than once"
+            )));
+        }
+        for declaration in self.argument_schemas.values() {
+            if !valid_schema_name(&declaration.name) {
+                return Err(FrameworkError::Build(format!(
+                    "argument schema `{}` must use non-empty lower-kebab-case",
+                    declaration.name
+                )));
+            }
+            if declaration.summary.trim().is_empty() {
+                return Err(FrameworkError::Build(format!(
+                    "argument schema `{}` has an empty summary",
+                    declaration.name
+                )));
+            }
+            let mut schema = declaration.schema.clone();
+            crate::argument_schemas::canonicalize_schema(&mut schema)?;
+        }
+        let mut referenced = BTreeSet::new();
+        for resource in self.resources.values() {
+            let Some(schema) = &resource.reference_schema else {
+                continue;
+            };
+            if let crate::ArgumentSchemaUse::Named { name } = schema {
+                referenced.insert(name.clone());
+            }
+            let carrier = crate::ArgSpec {
+                name: resource.carrier_name(),
+                value_type: crate::ArgType::ResourceRef(resource.name.clone()),
+                required: true,
+                summary: format!(
+                    "The `{}` to operate on; accepts a bare id or its URI.",
+                    resource.name
+                ),
+                workspace: None,
+                repeated: false,
+                schema: Some(schema.clone()),
+                requires_arguments: Vec::new(),
+            };
+            let compiled =
+                crate::argument_schemas::compile_argument_schema(&carrier, &self.argument_schemas)?
+                    .expect("resource reference has a schema");
+            crate::argument_schemas::validate_resource_reference_domain(resource, &compiled)?;
+        }
+        for command in self.commands.values() {
+            let mut has_constraints = false;
+            let mut command_definitions = BTreeMap::<String, Value>::new();
+            let args = command
+                .spec
+                .args
+                .iter()
+                .map(|arg| (arg.name.as_str(), arg))
+                .collect::<BTreeMap<_, _>>();
+            for arg in &command.spec.args {
+                if let Some(crate::ArgumentSchemaUse::Named { name }) = &arg.schema {
+                    referenced.insert(name.clone());
+                }
+                let compiled =
+                    crate::argument_schemas::compile_argument_schema(arg, &self.argument_schemas)?;
+                has_constraints |= compiled.is_some() || !arg.requires_arguments.is_empty();
+                if let Some(definitions) = compiled
+                    .as_ref()
+                    .and_then(|compiled| compiled.schema.get("$defs"))
+                    .and_then(Value::as_object)
+                {
+                    for (name, schema) in definitions {
+                        if let Some(existing) = command_definitions.get(name)
+                            && existing != schema
+                        {
+                            return Err(FrameworkError::Build(format!(
+                                "command `{}` argument schemas define conflicting `$defs/{name}` schemas",
+                                command.spec.name()
+                            )));
+                        }
+                        command_definitions.insert(name.clone(), schema.clone());
+                    }
+                }
+                for target in &arg.requires_arguments {
+                    if target.is_empty() {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{}` argument `{}` declares an empty required argument",
+                            command.spec.name(),
+                            arg.name
+                        )));
+                    }
+                    if target == &arg.name {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{}` argument `{}` requires itself",
+                            command.spec.name(),
+                            arg.name
+                        )));
+                    }
+                    let Some(required) = args.get(target.as_str()) else {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{}` argument `{}` requires unknown argument `{target}`",
+                            command.spec.name(),
+                            arg.name
+                        )));
+                    };
+                    if arg.required || required.required {
+                        return Err(FrameworkError::Build(format!(
+                            "command `{}` presence edge `{}` -> `{target}` must connect two optional arguments",
+                            command.spec.name(),
+                            arg.name
+                        )));
+                    }
+                }
+            }
+            let operation_id = crate::OperationSpec::from_command_spec(&command.spec).id;
+            let excluded_properties = command
+                .spec
+                .args
+                .iter()
+                .filter_map(|arg| {
+                    matches!(arg.value_type, crate::ArgType::ResourceRef(_))
+                        .then_some(arg.name.clone())
+                })
+                .collect::<BTreeSet<_>>();
+            match &command.argument_kind {
+                ArgumentHandlerKind::LegacyTyped if has_constraints => {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{}` uses constrained arguments with a legacy typed handler; use `handle_constrained`",
+                        command.spec.name()
+                    )));
+                }
+                ArgumentHandlerKind::Constrained(derived) => {
+                    crate::argument_schemas::validate_derived_argument_schema(
+                        &operation_id,
+                        self.arg_schema(&command.spec),
+                        derived,
+                        &excluded_properties,
+                    )?;
+                }
+                ArgumentHandlerKind::ResultAware(Some(derived)) if has_constraints => {
+                    crate::argument_schemas::validate_derived_argument_schema(
+                        &operation_id,
+                        self.arg_schema(&command.spec),
+                        derived,
+                        &excluded_properties,
+                    )?;
+                }
+                ArgumentHandlerKind::Dynamic
+                | ArgumentHandlerKind::LegacyTyped
+                | ArgumentHandlerKind::ResultAware(_) => {}
+            }
+        }
+        if let Some(dead) = self
+            .argument_schemas
+            .keys()
+            .find(|name| !referenced.contains(*name))
+        {
+            return Err(FrameworkError::Build(format!(
+                "argument schema `{dead}` is never referenced"
+            )));
+        }
+        Ok(())
+    }
+
+    fn canonical_argument_schema_decls(&self) -> Vec<crate::ArgumentSchemaDecl> {
+        self.argument_schemas
+            .values()
+            .cloned()
+            .map(|mut declaration| {
+                let _ = crate::argument_schemas::canonicalize_schema(&mut declaration.schema);
+                declaration
+            })
+            .collect()
+    }
+
+    fn canonical_resource_reference_schemas(&self) -> BTreeMap<String, crate::ArgumentSchemaUse> {
+        self.resources
+            .values()
+            .filter_map(|resource| {
+                let mut schema_use = resource.reference_schema.clone()?;
+                if let crate::ArgumentSchemaUse::Inline { schema } = &mut schema_use {
+                    let _ = crate::argument_schemas::canonicalize_schema(schema);
+                }
+                Some((resource.name.clone(), schema_use))
+            })
+            .collect()
     }
 
     /// Validates command-declared workspace requirements: every required or
@@ -1259,6 +1547,36 @@ impl CommandRegistry {
         }
     }
 
+    fn normalize_dispatch_error(
+        &self,
+        registered: &RegisteredCommand,
+        error: FrameworkError,
+    ) -> FrameworkError {
+        let error = self.normalize_capability_denied(&registered.spec, error);
+        let FrameworkError::ArgumentContractViolation { reason, .. } = error else {
+            return error;
+        };
+        let checked_extractor = match &registered.argument_kind {
+            ArgumentHandlerKind::Constrained(_) => true,
+            ArgumentHandlerKind::ResultAware(Some(_)) => {
+                command_has_argument_constraints(&registered.spec)
+            }
+            _ => false,
+        };
+        if checked_extractor && reason == crate::ArgumentContractReason::TypedDeserializationFailed
+        {
+            FrameworkError::ArgumentContractViolation {
+                operation_id: registered.spec.path.join("."),
+                argument: None,
+                reason,
+            }
+        } else {
+            FrameworkError::Handler(
+                "handler returned invalid argument contract violation".to_string(),
+            )
+        }
+    }
+
     /// The model-facing JSON schema for one command's arguments. Named types
     /// are fully inlined at the property site as a property-level `oneOf`
     /// (array-wrapped when repeated); no `$ref` indirection and no top-level
@@ -1266,49 +1584,73 @@ impl CommandRegistry {
     pub fn arg_schema(&self, spec: &crate::CommandSpec) -> Value {
         let mut properties = serde_json::Map::new();
         let mut required = Vec::new();
+        let mut definitions = serde_json::Map::new();
         for arg in &spec.args {
-            let base = match &arg.value_type {
-                crate::ArgType::String | crate::ArgType::Path => json!({
-                    "type": "string",
-                    "description": arg.summary,
-                }),
-                crate::ArgType::Json => json!({
-                    "description": arg.summary,
-                }),
-                crate::ArgType::Bool => json!({
-                    "type": "boolean",
-                    "description": arg.summary,
-                }),
-                crate::ArgType::Number => json!({
-                    "type": "number",
-                    "description": arg.summary,
-                }),
-                crate::ArgType::Named(type_name) => {
-                    let mut schema = crate::types::inline_type_schema(type_name, &self.types);
-                    // The property site carries the command-specific summary
-                    // ("Element to click"), like every other argument; the
-                    // type's own description lives on its variants.
-                    if let Some(object) = schema.as_object_mut() {
-                        object.insert("description".into(), json!(arg.summary));
+            let compiled =
+                crate::argument_schemas::compile_argument_schema(arg, &self.argument_schemas)
+                    .ok()
+                    .flatten();
+            let has_compiled_schema = compiled.is_some();
+            let base = if let Some(compiled) = compiled {
+                let mut schema = compiled.schema;
+                if let Some(argument_definitions) = schema
+                    .as_object_mut()
+                    .and_then(|schema| schema.remove("$defs"))
+                    .and_then(|definitions| definitions.as_object().cloned())
+                {
+                    for (name, schema) in argument_definitions {
+                        definitions.entry(name).or_insert(schema);
                     }
-                    schema
                 }
-                crate::ArgType::ResourceRef(resource) => {
-                    let template = self
-                        .resources
-                        .get(resource)
-                        .map(|decl| decl.uri.as_str())
-                        .unwrap_or_default();
-                    json!({
+                schema
+            } else {
+                match &arg.value_type {
+                    crate::ArgType::String | crate::ArgType::Path => json!({
                         "type": "string",
-                        "description": format!(
-                            "{} Accepts a bare id or the full URI ({template}).",
-                            arg.summary
-                        ),
-                    })
+                        "description": arg.summary,
+                    }),
+                    crate::ArgType::Json => json!({
+                        "description": arg.summary,
+                    }),
+                    crate::ArgType::Bool => json!({
+                        "type": "boolean",
+                        "description": arg.summary,
+                    }),
+                    crate::ArgType::Number => json!({
+                        "type": "number",
+                        "description": arg.summary,
+                    }),
+                    crate::ArgType::Integer => json!({
+                        "type": "integer",
+                        "description": arg.summary,
+                    }),
+                    crate::ArgType::Named(type_name) => {
+                        let mut schema = crate::types::inline_type_schema(type_name, &self.types);
+                        // The property site carries the command-specific summary
+                        // ("Element to click"), like every other argument; the
+                        // type's own description lives on its variants.
+                        if let Some(object) = schema.as_object_mut() {
+                            object.insert("description".into(), json!(arg.summary));
+                        }
+                        schema
+                    }
+                    crate::ArgType::ResourceRef(resource) => {
+                        let template = self
+                            .resources
+                            .get(resource)
+                            .map(|decl| decl.uri.as_str())
+                            .unwrap_or_default();
+                        json!({
+                            "type": "string",
+                            "description": format!(
+                                "{} Accepts a bare id or the full URI ({template}).",
+                                arg.summary
+                            ),
+                        })
+                    }
                 }
             };
-            let schema = if arg.repeated {
+            let schema = if arg.repeated && !has_compiled_schema {
                 json!({
                     "type": "array",
                     "description": arg.summary,
@@ -1322,12 +1664,42 @@ impl CommandRegistry {
                 required.push(Value::String(arg.name.clone()));
             }
         }
-        json!({
+        let mut schema = json!({
             "type": "object",
             "properties": properties,
             "required": required,
             "additionalProperties": false,
-        })
+        });
+        let dependencies = spec
+            .args
+            .iter()
+            .filter(|arg| !arg.requires_arguments.is_empty())
+            .map(|arg| {
+                (
+                    arg.name.clone(),
+                    Value::Array(
+                        arg.requires_arguments
+                            .iter()
+                            .cloned()
+                            .map(Value::String)
+                            .collect(),
+                    ),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        if !dependencies.is_empty() {
+            schema
+                .as_object_mut()
+                .expect("command schema is an object")
+                .insert("dependentRequired".to_string(), Value::Object(dependencies));
+        }
+        if !definitions.is_empty() {
+            schema
+                .as_object_mut()
+                .expect("command schema is an object")
+                .insert("$defs".to_string(), Value::Object(definitions));
+        }
+        schema
     }
 
     pub fn validate_effects(&self) -> Result<()> {
@@ -1754,6 +2126,64 @@ impl CommandRegistry {
             }
         }
 
+        for spec in &registered.spec.args {
+            if spec.required && !request.args.contains_key(&spec.name) {
+                return Err(FrameworkError::MissingArgument(spec.name.clone()));
+            }
+        }
+
+        // Every supplied property schema and applicable presence edge enters
+        // one deterministic mismatch election before specialized semantic
+        // authorities (paths, named values, and resources) run.
+        let mut schema_matches = BTreeMap::new();
+        let mut schema_failures = Vec::new();
+        for spec in &registered.spec.args {
+            let Some(value) = request.args.get(&spec.name) else {
+                continue;
+            };
+            if let Some(compiled) =
+                crate::argument_schemas::compile_argument_schema(spec, &self.argument_schemas)?
+            {
+                match crate::argument_schemas::validate_value(&compiled, value) {
+                    Ok(schema_match) => {
+                        schema_matches.insert(spec.name.clone(), schema_match);
+                    }
+                    Err(failure) => schema_failures.push((spec.name.clone(), failure)),
+                }
+            }
+            for target in &spec.requires_arguments {
+                if !request.args.contains_key(target) {
+                    schema_failures.push((
+                        spec.name.clone(),
+                        crate::argument_schemas::SchemaFailure {
+                            path: String::new(),
+                            pointer: String::new(),
+                            keyword: crate::ArgumentSchemaKeyword::DependentRequired,
+                            expected: target.clone(),
+                            branches: Vec::new(),
+                        },
+                    ));
+                }
+            }
+        }
+        schema_failures.sort_by(|(left_argument, left), (right_argument, right)| {
+            crate::argument_schemas::compare_argument_failures(
+                left_argument,
+                left,
+                right_argument,
+                right,
+            )
+        });
+        if let Some((argument, failure)) = schema_failures.into_iter().next() {
+            return Err(FrameworkError::ArgumentSchemaMismatch {
+                argument,
+                path: failure.path,
+                keyword: failure.keyword,
+                expected: failure.expected,
+                branches: failure.branches,
+            });
+        }
+
         let mut bound_args = BTreeMap::new();
         let mut used_workspaces: BTreeSet<String> = BTreeSet::new();
         for spec in &registered.spec.args {
@@ -1763,7 +2193,9 @@ impl CommandRegistry {
                 }
                 continue;
             };
-            value_matches_type(&spec.name, value, &spec.value_type)?;
+            if !schema_matches.contains_key(&spec.name) {
+                value_matches_type(&spec.name, value, &spec.value_type)?;
+            }
             if let Some(workspace_name) = &spec.workspace {
                 if !self.workspaces.contains_key(workspace_name) {
                     return Err(FrameworkError::WorkspaceMismatch {
@@ -1879,6 +2311,7 @@ impl CommandRegistry {
                     value: value.clone(),
                     workspace: spec.workspace.clone(),
                     variants,
+                    schema_match: schema_matches.remove(&spec.name).unwrap_or_default(),
                 },
             );
         }
@@ -1977,6 +2410,40 @@ impl CommandRegistry {
                 .insert(
                     "conversationIdentity".to_string(),
                     identity_digest.map_or(Value::Null, Value::String),
+                );
+        }
+        let mut argument_schemas = BTreeMap::new();
+        for arg in &registered.spec.args {
+            if let Some(compiled) =
+                crate::argument_schemas::compile_argument_schema(arg, &self.argument_schemas)?
+            {
+                argument_schemas.insert(arg.name.clone(), compiled.schema);
+            }
+        }
+        if !argument_schemas.is_empty() {
+            fingerprint_input
+                .as_object_mut()
+                .expect("fingerprint input is an object")
+                .insert(
+                    "argumentSchemas".to_string(),
+                    serde_json::to_value(argument_schemas).expect("argument schemas serialize"),
+                );
+        }
+        let argument_requirements = registered
+            .spec
+            .args
+            .iter()
+            .filter(|arg| !arg.requires_arguments.is_empty())
+            .map(|arg| (arg.name.clone(), arg.requires_arguments.clone()))
+            .collect::<BTreeMap<_, _>>();
+        if !argument_requirements.is_empty() {
+            fingerprint_input
+                .as_object_mut()
+                .expect("fingerprint input is an object")
+                .insert(
+                    "argumentRequirements".to_string(),
+                    serde_json::to_value(argument_requirements)
+                        .expect("argument requirements serialize"),
                 );
         }
         let invocation_fingerprint = stable_hash_value(&fingerprint_input);
@@ -2089,6 +2556,7 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
     ) -> Result<CommandExecutionOutcome> {
+        self.validate_argument_schemas()?;
         self.validate_results()?;
         let plan = self.build_plan_prepared(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
@@ -2127,16 +2595,20 @@ impl CommandRegistry {
         } else {
             crate::InvocationContext::default()
         };
+        let mut command_context = CommandContext::with_invocation_context(
+            plan.clone(),
+            request.stdin,
+            resources,
+            handler_context,
+        );
+        if command_has_argument_constraints(&registered.spec) {
+            command_context = command_context.with_checked_argument_contract();
+        }
         let outcome = registered
             .handler
-            .call(CommandContext::with_invocation_context(
-                plan.clone(),
-                request.stdin,
-                resources,
-                handler_context,
-            ))
+            .call(command_context)
             .await
-            .map_err(|error| self.normalize_capability_denied(&registered.spec, error))?;
+            .map_err(|error| self.normalize_dispatch_error(registered, error))?;
         match outcome {
             crate::results::HandlerOutcome::Success(output) => {
                 let output = self.mint_output_references(&registered.spec, output)?;
@@ -2433,6 +2905,19 @@ impl CommandRegistry {
                         backticked_list(&spec.released_by)
                     ));
                 }
+            }
+        }
+
+        if !self.argument_schemas.is_empty() {
+            lines.push(String::new());
+            lines.push("Argument schemas:".to_string());
+            for declaration in self.canonical_argument_schema_decls() {
+                lines.push(format!(
+                    "- `{}`: {} — `{}`",
+                    declaration.name,
+                    declaration.summary,
+                    serde_json::to_string(&declaration.schema).unwrap_or_else(|_| "{}".to_string())
+                ));
             }
         }
 
@@ -2757,16 +3242,71 @@ impl CommandRegistry {
                 other => format!("{other:?}"),
             };
             lines.push(format!(
-                "- `$args.{}`: {}, {}, {}{}",
-                arg.name, value_type, required, arg.summary, workspace
+                "- `$args.{}`: {}, {}, {}{}{}",
+                arg.name,
+                value_type,
+                required,
+                arg.summary,
+                workspace,
+                self.argument_constraint_text(arg)
             ));
+            for target in &arg.requires_arguments {
+                lines.push(format!("  - when supplied, also requires `$args.{target}`"));
+            }
         }
         let type_lines = self.referenced_types_text(spec);
         if !type_lines.is_empty() {
             lines.push(String::new());
             lines.extend(type_lines);
         }
+        let mut named_schemas = spec
+            .args
+            .iter()
+            .filter_map(|arg| match &arg.schema {
+                Some(crate::ArgumentSchemaUse::Named { name }) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        named_schemas.sort();
+        named_schemas.dedup();
+        if !named_schemas.is_empty() {
+            lines.push(String::new());
+            for name in named_schemas {
+                if let Some(declaration) = self.argument_schemas.get(name) {
+                    let mut schema = declaration.schema.clone();
+                    let _ = crate::argument_schemas::canonicalize_schema(&mut schema);
+                    lines.push(format!(
+                        "Schema `{}`: {}\n  `{}`",
+                        declaration.name,
+                        declaration.summary,
+                        serde_json::to_string(&schema).unwrap_or_else(|_| "{}".to_string())
+                    ));
+                }
+            }
+        }
         lines.join("\n")
+    }
+
+    fn argument_constraint_text(&self, arg: &crate::ArgSpec) -> String {
+        match &arg.schema {
+            Some(crate::ArgumentSchemaUse::Named { name }) => {
+                format!("; schema `{name}`")
+            }
+            Some(crate::ArgumentSchemaUse::Inline { .. }) => {
+                let Some(schema) =
+                    crate::argument_schemas::compile_argument_schema(arg, &self.argument_schemas)
+                        .ok()
+                        .flatten()
+                else {
+                    return String::new();
+                };
+                format!(
+                    "; schema `{}`",
+                    serde_json::to_string(&schema.schema).unwrap_or_else(|_| "{}".to_string())
+                )
+            }
+            None => String::new(),
+        }
     }
 
     /// Renders each type referenced by this command's arguments exactly
@@ -2879,6 +3419,39 @@ fn normalize_command_spec(spec: &mut CommandSpec) {
     spec.workspaces.dedup();
     spec.optional_workspaces.sort();
     spec.optional_workspaces.dedup();
+    for arg in &mut spec.args {
+        arg.requires_arguments.sort();
+        arg.requires_arguments.dedup();
+    }
+}
+
+pub(crate) fn canonicalize_catalog_argument_schemas(args: &mut [crate::ArgSpec]) {
+    for arg in args {
+        if let Some(crate::ArgumentSchemaUse::Inline { schema }) = &mut arg.schema {
+            // Catalog arguments retain the authorship distinction and the
+            // separate `repeated` bit, so canonicalize the declared base
+            // document rather than replacing it with the compiled/wrapped
+            // effective property schema.
+            let _ = crate::argument_schemas::canonicalize_schema(schema);
+        }
+    }
+}
+
+fn valid_schema_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn command_has_argument_constraints(spec: &CommandSpec) -> bool {
+    spec.args.iter().any(|arg| {
+        arg.schema.is_some()
+            || matches!(arg.value_type, crate::ArgType::Integer)
+            || !arg.requires_arguments.is_empty()
+    })
 }
 
 fn project_result_resources(
@@ -2978,6 +3551,8 @@ fn inject_result_resource_carrier(
         ),
         workspace: None,
         repeated: false,
+        schema: decl.reference_schema.clone(),
+        requires_arguments: Vec::new(),
     });
     Ok(())
 }
