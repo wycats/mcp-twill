@@ -549,7 +549,6 @@ fn argument_accepts_value(
         (ArgType::String | ArgType::Path, Value::String(_))
             | (ArgType::Bool, Value::Bool(_))
             | (ArgType::Json, _)
-            | (ArgType::Named(_), Value::Object(_))
     )
 }
 
@@ -905,6 +904,7 @@ mod tests {
                 schema: None,
                 requires_arguments: Vec::new(),
             },
+            ArgSpec::named("value", "private-record", "Named record"),
             ArgSpec::string("value", "Repeated values").repeated(),
         ] {
             let mut spec = CommandSpec::new(["private"], "Private", "Private value").with_arg(arg);
