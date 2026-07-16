@@ -479,111 +479,108 @@ fn derived_schema_drift(operation_id: &str) -> FrameworkError {
 }
 
 fn strip_annotations(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            object.remove("title");
-            object.remove("description");
-            for nested in object.values_mut() {
-                strip_annotations(nested);
-            }
-        }
-        Value::Array(values) => {
-            for nested in values {
-                strip_annotations(nested);
-            }
-        }
-        _ => {}
-    }
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    object.remove("title");
+    object.remove("description");
+    for_each_child_schema_mut(object, strip_annotations);
 }
 
 fn normalize_comparison_sets(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
-                required.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
-            }
-            if object
-                .get("required")
-                .and_then(Value::as_array)
-                .is_some_and(Vec::is_empty)
-            {
-                object.remove("required");
-            }
-            if let Some(kinds) = object.get_mut("type").and_then(Value::as_array_mut)
-                && kinds.len() == 2
-                && kinds.iter().any(|kind| kind == "null")
-            {
-                kinds.sort_by_key(|kind| kind == "null");
-            }
-            for nested in object.values_mut() {
-                normalize_comparison_sets(nested);
-            }
-        }
-        Value::Array(values) => {
-            for nested in values {
-                normalize_comparison_sets(nested);
-            }
-        }
-        _ => {}
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+        required.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
     }
+    if object
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        object.remove("required");
+    }
+    if let Some(kinds) = object.get_mut("type").and_then(Value::as_array_mut)
+        && kinds.len() == 2
+        && kinds.iter().any(|kind| kind == "null")
+    {
+        kinds.sort_by_key(|kind| kind == "null");
+    }
+    for_each_child_schema_mut(object, normalize_comparison_sets);
 }
 
 fn normalize_implied_const_types(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            // Schemars emits the primitive `type` alongside a `const`, while
-            // the accepted guide writes the same singleton domain using only
-            // `const`. The type assertion is wholly implied by that literal,
-            // so remove it only from typed-schema comparison; canonical
-            // authored projection retains every declared byte.
-            if object.contains_key("const") {
-                object.remove("type");
-            }
-            for nested in object.values_mut() {
-                normalize_implied_const_types(nested);
-            }
-        }
-        Value::Array(values) => {
-            for nested in values {
-                normalize_implied_const_types(nested);
-            }
-        }
-        _ => {}
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    // Schemars emits the primitive `type` alongside a `const`, while the
+    // accepted guide writes the same singleton domain using only `const`.
+    // The type assertion is wholly implied by that literal, so remove it only
+    // from typed-schema comparison; canonical authored projection retains
+    // every declared byte.
+    if object.contains_key("const") {
+        object.remove("type");
     }
+    for_each_child_schema_mut(object, normalize_implied_const_types);
 }
 
 fn normalize_derived_nullable(value: &mut Value, root: &Value) {
-    match value {
-        Value::Object(object) => {
-            if let Some(branches) = object.remove("anyOf") {
-                let branches = branches.as_array().cloned().unwrap_or_default();
-                let null_index = branches.iter().position(is_null_schema);
-                if branches.len() == 2
-                    && let Some(null_index) = null_index
-                {
-                    let other = branches[1 - null_index].clone();
-                    if schema_rejects_null(&other, root) {
-                        object.insert(
-                            "oneOf".to_string(),
-                            Value::Array(vec![other, serde_json::json!({ "type": "null" })]),
-                        );
-                    } else {
-                        object.insert("anyOf".to_string(), Value::Array(branches));
-                    }
-                } else {
-                    object.insert("anyOf".to_string(), Value::Array(branches));
-                }
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(branches) = object.remove("anyOf") {
+        let branches = branches.as_array().cloned().unwrap_or_default();
+        let null_index = branches.iter().position(is_null_schema);
+        if branches.len() == 2
+            && let Some(null_index) = null_index
+        {
+            let other = branches[1 - null_index].clone();
+            if schema_rejects_null(&other, root) {
+                object.insert(
+                    "oneOf".to_string(),
+                    Value::Array(vec![other, serde_json::json!({ "type": "null" })]),
+                );
+            } else {
+                object.insert("anyOf".to_string(), Value::Array(branches));
             }
-            for nested in object.values_mut() {
-                normalize_derived_nullable(nested, root);
+        } else {
+            object.insert("anyOf".to_string(), Value::Array(branches));
+        }
+    }
+    for_each_child_schema_mut(object, |nested| {
+        normalize_derived_nullable(nested, root);
+    });
+}
+
+fn for_each_child_schema_mut(
+    object: &mut serde_json::Map<String, Value>,
+    mut visit: impl FnMut(&mut Value),
+) {
+    if let Some(items) = object.get_mut("items") {
+        visit(items);
+    }
+    if let Some(additional) = object.get_mut("additionalProperties")
+        && additional.is_object()
+    {
+        visit(additional);
+    }
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        for property in properties.values_mut() {
+            visit(property);
+        }
+    }
+    for keyword in ["oneOf", "anyOf"] {
+        if let Some(branches) = object.get_mut(keyword).and_then(Value::as_array_mut) {
+            for branch in branches {
+                visit(branch);
             }
         }
-        Value::Array(values) => {
-            for nested in values {
-                normalize_derived_nullable(nested, root);
-            }
+    }
+    if let Some(definitions) = object.get_mut("$defs").and_then(Value::as_object_mut) {
+        for definition in definitions.values_mut() {
+            visit(definition);
         }
-        _ => {}
     }
 }
 
@@ -1074,25 +1071,16 @@ fn validate_schema_type(value: &Value) -> crate::Result<()> {
 }
 
 fn canonicalize_nullable_types(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            if let Some(Value::Array(kinds)) = object.get_mut("type")
-                && kinds.len() == 2
-                && kinds.iter().any(|kind| kind == "null")
-            {
-                kinds.sort_by_key(|kind| kind == "null");
-            }
-            for nested in object.values_mut() {
-                canonicalize_nullable_types(nested);
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                canonicalize_nullable_types(value);
-            }
-        }
-        _ => {}
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(Value::Array(kinds)) = object.get_mut("type")
+        && kinds.len() == 2
+        && kinds.iter().any(|kind| kind == "null")
+    {
+        kinds.sort_by_key(|kind| kind == "null");
     }
+    for_each_child_schema_mut(object, canonicalize_nullable_types);
 }
 
 fn validate_schema_literal(value: &Value) -> crate::Result<()> {
@@ -1233,21 +1221,8 @@ fn visit_schema_refs(
         visit_schema_refs(target, definitions, reachable, visiting)?;
         visiting.remove(name);
     }
-    for (key, value) in object {
-        if matches!(key.as_str(), "$ref" | "$defs") {
-            continue;
-        }
-        match value {
-            Value::Object(_) => visit_schema_refs(value, definitions, reachable, visiting)?,
-            Value::Array(values) => {
-                for value in values {
-                    if value.is_object() {
-                        visit_schema_refs(value, definitions, reachable, visiting)?;
-                    }
-                }
-            }
-            _ => {}
-        }
+    for nested in child_schemas(object) {
+        visit_schema_refs(nested, definitions, reachable, visiting)?;
     }
     Ok(())
 }
@@ -1413,6 +1388,15 @@ fn validate_static_domain(schema: &Value, root: &Value) -> crate::Result<()> {
             )));
         }
         validate_static_domain(target, root)?;
+    }
+    if let Some(values) = finite_schema_values(schema, root)
+        && values
+            .iter()
+            .all(|value| evaluate_node(value, schema, root, "", "", "@static").is_err())
+    {
+        return Err(build_error(
+            "argument schema finite domain is statically empty",
+        ));
     }
     Ok(())
 }

@@ -422,6 +422,12 @@ struct DriftedArgs {
     query: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DescriptionDriftedArgs {
+    description: bool,
+}
+
 #[test]
 fn constrained_handler_rejects_derived_schema_drift() {
     let error = CommandRegistry::build("schema-test", "Argument schema test server", |server| {
@@ -465,6 +471,30 @@ fn constrained_handler_rejects_derived_schema_drift() {
     assert!(
         matches!(legacy, FrameworkError::Build(message) if message.contains("handle_constrained"))
     );
+
+    let description_property =
+        CommandRegistry::build("schema-test", "Argument schema test server", |server| {
+            server.command("value describe", |command| {
+                command
+                    .summary("Describe")
+                    .description("Describe a value")
+                    .arg(arg::string("description").summary("Description"))
+                    .handle_constrained(|_context, args: DescriptionDriftedArgs| async move {
+                        Ok(CommandOutput::structured(json!({
+                            "description": args.description
+                        })))
+                    });
+            });
+        })
+        .err()
+        .expect("an argument named like an annotation must still be compared");
+    assert!(matches!(
+        description_property,
+        FrameworkError::ArgumentContractViolation {
+            reason: ArgumentContractReason::DerivedSchemaDrift,
+            ..
+        }
+    ));
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -869,6 +899,14 @@ fn unsupported_ambiguous_empty_and_malformed_schemas_fail_registration() {
             }),
         ),
         (
+            "reference sibling primitive type contradiction",
+            json!({
+                "$ref": "#/$defs/text",
+                "type": "integer",
+                "$defs": { "text": { "type": "string" } }
+            }),
+        ),
+        (
             "reference sibling string contradiction",
             json!({
                 "$ref": "#/$defs/text",
@@ -993,6 +1031,38 @@ fn unsupported_ambiguous_empty_and_malformed_schemas_fail_registration() {
         (
             "finite enum arrays excluded by minItems",
             json!({ "type": "array", "enum": [[], [1]], "minItems": 2 }),
+        ),
+        (
+            "finite const array excluded by item schema",
+            json!({ "type": "array", "const": [1], "items": { "type": "string" } }),
+        ),
+        (
+            "finite const object excluded by required property",
+            json!({
+                "type": "object",
+                "const": {},
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+        ),
+        (
+            "finite enum objects excluded by property schema",
+            json!({
+                "type": "object",
+                "enum": [{ "name": 1 }, { "name": false }],
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+        ),
+        (
+            "finite oneOf domain excluded by parent assertion",
+            json!({
+                "type": "string",
+                "minLength": 2,
+                "oneOf": [{ "const": "a" }, { "const": "b" }]
+            }),
         ),
     ];
     for (name, schema) in cases {
@@ -1300,6 +1370,46 @@ fn finite_values_imply_coarse_types_and_exact_size_limits_canonicalize() {
     assert_eq!(
         array_registry.arg_schema(array_spec)["properties"]["value"]["minItems"],
         1
+    );
+}
+
+#[test]
+fn schema_canonicalization_never_rewrites_literal_objects() {
+    let literal = json!({
+        "$ref": "caller-owned-reference",
+        "description": "caller-owned-description",
+        "required": ["z", "a"],
+        "title": "caller-owned-title",
+        "type": ["null", "string"]
+    });
+    let registry = registry_with_schema(json!({ "const": literal.clone() }));
+    registry.validate_argument_schemas().unwrap();
+    let spec = registry.command_specs().next().unwrap();
+    assert_eq!(
+        registry.arg_schema(spec)["properties"]["value"]["const"],
+        literal
+    );
+    registry
+        .build_plan(&request(
+            "value take --value $args.value",
+            json!({ "value": literal }),
+        ))
+        .unwrap();
+    assert!(
+        registry
+            .build_plan(&request(
+                "value take --value $args.value",
+                json!({
+                    "value": {
+                        "$ref": "caller-owned-reference",
+                        "description": "caller-owned-description",
+                        "required": ["a", "z"],
+                        "title": "caller-owned-title",
+                        "type": ["null", "string"]
+                    }
+                }),
+            ))
+            .is_err()
     );
 }
 
@@ -2517,6 +2627,15 @@ async fn legacy_count_result(
     }))
 }
 
+async fn low_level_drift_result(
+    _context: mcp_twill::CommandContext,
+    args: DriftedArgs,
+) -> ApplicationResult<SearchResult> {
+    Ok(ApplicationSuccess::value(SearchResult {
+        query: args.query.to_string(),
+    }))
+}
+
 async fn spoofed_contract_result(
     _context: mcp_twill::CommandContext,
     _args: SearchArgs,
@@ -2563,6 +2682,31 @@ async fn unconstrained_result_handlers_keep_legacy_typed_extraction() {
         response.output.and_then(|output| output.structured),
         Some(json!({ "query": "2" }))
     );
+}
+
+#[tokio::test]
+async fn low_level_result_dispatch_validates_argument_schema_agreement() {
+    let registry = CommandRegistry::new("schema-test", "schema test").register_result(
+        CommandSpec::new(["search", "low-level"], "Search", "Search").with_arg(
+            ArgSpec::string("query", "Search query")
+                .with_inline_schema(json!({ "type": "string", "minLength": 1 })),
+        ),
+        low_level_drift_result,
+    );
+
+    assert!(matches!(
+        registry
+            .run(request(
+                "search low-level --query $args.query",
+                json!({ "query": "twill" }),
+            ))
+            .await
+            .unwrap_err(),
+        FrameworkError::ArgumentContractViolation {
+            reason: ArgumentContractReason::DerivedSchemaDrift,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
