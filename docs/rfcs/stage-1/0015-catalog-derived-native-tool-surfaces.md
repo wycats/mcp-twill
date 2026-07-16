@@ -2,7 +2,7 @@
 
 # RFC 0015: Catalog-Derived Native Tool Surfaces
 
-- Status: Draft
+- Status: Accepted
 - Area: MCP tool projection, native tools, grouped tools, schemas, annotations, dispatch
 - Target milestone: v0.4
 - Depends on: RFC 0001 (authoritative command catalog), RFC 0003 (confirmation and replay), RFC 0005 (effect-lane tool surface), RFC 0008 (named argument types and unions), RFC 0009 (effective request metadata), RFC 0010 (declared preconditions), RFC 0011 (guidance decomposition), RFC 0012 (first-class resources), RFC 0013 (conversation identity), RFC 0014 (application result contracts), RFC 0017 (schema-constrained arguments), RFC 0018 (invocation and confirmation presentation)
