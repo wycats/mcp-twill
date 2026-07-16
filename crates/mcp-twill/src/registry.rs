@@ -637,6 +637,24 @@ impl CommandRegistry {
         ))
     }
 
+    pub(crate) fn prepare_effect_lane_confirmation(
+        &self,
+        plan: &InvocationPlan,
+        tool_name: &str,
+    ) -> Result<crate::PreparedConfirmation> {
+        self.prepare_effect_lane_presentation(
+            plan,
+            tool_name,
+            crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault,
+        )?
+        .confirmation
+        .ok_or_else(|| {
+            FrameworkError::Build(
+                "effect-lane presentation did not prepare confirmation".to_string(),
+            )
+        })
+    }
+
     pub fn operation_specs(&self) -> Vec<OperationSpec> {
         let mut operations = self
             .commands

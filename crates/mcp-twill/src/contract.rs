@@ -757,6 +757,19 @@ fn check_confirmation_projection_with_help(
                 "Run contract command?",
             )
             .expect("contract presentation defaults are valid");
+            let omitted = command.prepare_unvalidated_presentation(
+                &defaults,
+                &operation_id,
+                &std::collections::BTreeMap::new(),
+                crate::presentation::ConfirmationPresentationRequest::Omit,
+            );
+            if omitted.confirmation.is_some() {
+                violations.push(violation(
+                    Some(&operation_id),
+                    "presentation",
+                    "pure evaluator prepares confirmation when omission is requested",
+                ));
+            }
             let prepared = command.prepare_unvalidated_presentation(
                 &defaults,
                 &operation_id,

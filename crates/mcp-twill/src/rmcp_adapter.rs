@@ -485,27 +485,21 @@ impl CliMcpServer {
 
         if matches!(mode, RunMode::Preview) {
             let prepared_confirmation = match authorizer.decide(&plan) {
-                PermissionDecision::Allow => {
-                    let _ = registry
-                        .prepare_effect_lane_presentation(
-                            &plan,
-                            &tool_name,
-                            crate::presentation::ConfirmationPresentationRequest::Omit,
-                        )
-                        .expect("effect-lane presentation defaults were validated");
-                    None
+                PermissionDecision::Allow => None,
+                PermissionDecision::RequireConfirmation => {
+                    let confirmation = match registry
+                        .prepare_effect_lane_confirmation(&plan, &tool_name)
+                    {
+                        Ok(confirmation) => confirmation,
+                        Err(error) => {
+                            return RunOutcome::envelope(
+                                ResponseEnvelope::framework_error(error, Some(request), Some(plan)),
+                                Some(plan_for_event),
+                            );
+                        }
+                    };
+                    Some(confirmation)
                 }
-                PermissionDecision::RequireConfirmation => Some(
-                    registry
-                        .prepare_effect_lane_presentation(
-                            &plan,
-                            &tool_name,
-                            crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault,
-                        )
-                        .expect("effect-lane presentation defaults were validated")
-                        .confirmation
-                        .expect("effect-default confirmation always prepares copy"),
-                ),
                 PermissionDecision::Deny { reason } => {
                     return RunOutcome::envelope(
                         ResponseEnvelope::framework_error(
@@ -563,15 +557,17 @@ impl CliMcpServer {
                         );
                     }
                 } else {
-                    let confirmation = registry
-                        .prepare_effect_lane_presentation(
-                            &plan,
-                            &tool_name,
-                            crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault,
-                        )
-                        .expect("effect-lane presentation defaults were validated")
-                        .confirmation
-                        .expect("effect-default confirmation always prepares copy");
+                    let confirmation = match registry
+                        .prepare_effect_lane_confirmation(&plan, &tool_name)
+                    {
+                        Ok(confirmation) => confirmation,
+                        Err(error) => {
+                            return RunOutcome::envelope(
+                                ResponseEnvelope::framework_error(error, Some(request), Some(plan)),
+                                Some(plan_for_event),
+                            );
+                        }
+                    };
                     let record =
                         issue_replay_record(config, replay, &plan, Utc::now().timestamp_millis())
                             .await;
@@ -1536,5 +1532,30 @@ mod tests {
         );
         let success = CallToolResult::structured(json!({ "status": "ok" }));
         assert_eq!(task_completion_message(&success), "Run command completed");
+    }
+
+    #[test]
+    fn effect_lane_presentation_failure_stays_in_the_framework_error_channel() {
+        let registry = CommandRegistry::new("presentation", "Presentation test").register(
+            crate::CommandSpec::new(["run"], "Run", "Run command"),
+            |_context| async { Ok(crate::CommandOutput::structured(json!({}))) },
+        );
+        let request = RunRequest {
+            command: "run".to_string(),
+            args: BTreeMap::new(),
+            stdin: None,
+            output: None,
+            mode: RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        };
+        let mut plan = registry.build_plan(&request).unwrap();
+        plan.command_path = vec!["missing".to_string()];
+        let error = registry
+            .prepare_effect_lane_confirmation(&plan, "repo")
+            .unwrap_err();
+        let envelope = ResponseEnvelope::framework_error(error, Some(request), Some(plan));
+        assert_eq!(envelope.status, crate::ResponseStatus::Failed);
+        assert_eq!(envelope.error.unwrap().code, crate::ErrorCode::BuildFailed);
     }
 }

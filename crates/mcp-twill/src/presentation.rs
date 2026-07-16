@@ -984,7 +984,17 @@ mod tests {
             "Run Console?",
         )
         .unwrap();
-        let spec = CommandSpec::new(["console"], "Console", "Console diagnostics");
+        let mut spec = CommandSpec::new(["console"], "Console", "Console diagnostics");
+        spec.confirmation = Some(ConfirmationPresentation::new(
+            ConfirmationMessage::new("Run console?").text("Run console."),
+        ));
+        let omitted = spec.prepare_unvalidated_presentation(
+            &defaults,
+            "console",
+            &BTreeMap::new(),
+            ConfirmationPresentationRequest::Omit,
+        );
+        assert!(omitted.confirmation.is_none());
         let declared_only = spec.prepare_unvalidated_presentation(
             &defaults,
             "console",
@@ -992,8 +1002,12 @@ mod tests {
             ConfirmationPresentationRequest::DeclaredOnly,
         );
         assert_eq!(declared_only.invocation_message, "Running Console");
-        assert!(declared_only.confirmation.is_none());
+        assert_eq!(
+            declared_only.confirmation.unwrap().branch,
+            ConfirmationBranch::Default
+        );
 
+        spec.confirmation = None;
         let effect_default = spec.prepare_unvalidated_presentation(
             &defaults,
             "console",
