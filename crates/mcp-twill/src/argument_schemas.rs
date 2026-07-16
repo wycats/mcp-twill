@@ -448,6 +448,7 @@ pub(crate) fn validate_derived_argument_schema(
             });
         }
     }
+    prune_unreachable_definitions(&mut authored);
     if let Some(root) = derived.as_object_mut() {
         root.remove("$schema");
     }
@@ -795,7 +796,7 @@ pub(crate) fn canonicalize_schema(schema: &mut Value) -> crate::Result<()> {
         ));
     }
     canonicalize_nullable_types(schema);
-    validate_schema_node(schema, true)?;
+    validate_schema_node(schema, schema, true)?;
     // Every numeric token in the supported schema document is public
     // canonical data, not only values nested under `const` or `enum`.
     // Keep bounds, divisors, and size assertions inside the same exact
@@ -808,7 +809,7 @@ pub(crate) fn canonicalize_schema(schema: &mut Value) -> crate::Result<()> {
     Ok(())
 }
 
-fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
+fn validate_schema_node(schema: &Value, root_schema: &Value, root: bool) -> crate::Result<()> {
     let object = schema.as_object().ok_or_else(|| {
         build_error("argument schemas must use object schemas; boolean schemas are unsupported")
     })?;
@@ -926,12 +927,14 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
         }
     }
     for keyword in ["minLength", "minItems"] {
-        if let Some(value) = object.get(keyword)
-            && value.as_u64().is_none()
-        {
-            return Err(build_error(format!(
-                "argument schema `{keyword}` must be a non-negative integer"
-            )));
+        if let Some(value) = object.get(keyword) {
+            let valid = integer_as_i128(value)
+                .is_some_and(|value| value >= 0 && value <= i128::from(u64::MAX));
+            if !valid {
+                return Err(build_error(format!(
+                    "argument schema `{keyword}` must be a non-negative integer"
+                )));
+            }
         }
     }
     if object.contains_key("minLength")
@@ -967,7 +970,7 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
         ));
     }
     if let Some(items) = object.get("items") {
-        validate_schema_node(items, false)?;
+        validate_schema_node(items, root_schema, false)?;
     }
     if let Some(properties) = object.get("properties") {
         for nested in properties
@@ -975,7 +978,7 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
             .ok_or_else(|| build_error("argument schema `properties` must be an object"))?
             .values()
         {
-            validate_schema_node(nested, false)?;
+            validate_schema_node(nested, root_schema, false)?;
         }
     }
     if let Some(required) = object.get("required") {
@@ -997,7 +1000,7 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
     if let Some(additional) = object.get("additionalProperties")
         && !additional.is_boolean()
     {
-        validate_schema_node(additional, false)?;
+        validate_schema_node(additional, root_schema, false)?;
     }
     if object
         .get("type")
@@ -1016,11 +1019,11 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
             return Err(build_error("argument schema `oneOf` cannot be empty"));
         }
         for branch in branches {
-            validate_schema_node(branch, false)?;
+            validate_schema_node(branch, root_schema, false)?;
         }
         for left in 0..branches.len() {
             for right in left + 1..branches.len() {
-                if !schemas_provably_disjoint(&branches[left], &branches[right]) {
+                if !schemas_provably_disjoint(&branches[left], &branches[right], root_schema) {
                     return Err(build_error(format!(
                         "argument schema `oneOf` branches {left} and {right} are not provably disjoint"
                     )));
@@ -1034,7 +1037,7 @@ fn validate_schema_node(schema: &Value, root: bool) -> crate::Result<()> {
             .ok_or_else(|| build_error("argument schema `$defs` must be an object"))?
             .values()
         {
-            validate_schema_node(nested, false)?;
+            validate_schema_node(nested, root_schema, false)?;
         }
     }
     Ok(())
@@ -1181,6 +1184,30 @@ fn validate_local_definitions(schema: &Value) -> crate::Result<()> {
     Ok(())
 }
 
+fn prune_unreachable_definitions(schema: &mut Value) {
+    let definitions = schema
+        .get("$defs")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if definitions.is_empty() {
+        return;
+    }
+    let mut reachable = BTreeSet::new();
+    visit_schema_refs(schema, &definitions, &mut reachable, &mut BTreeSet::new())
+        .expect("canonical schema references remain valid after removing properties");
+    let Some(root) = schema.as_object_mut() else {
+        return;
+    };
+    let Some(definitions) = root.get_mut("$defs").and_then(Value::as_object_mut) else {
+        return;
+    };
+    definitions.retain(|name, _| reachable.contains(name));
+    if definitions.is_empty() {
+        root.remove("$defs");
+    }
+}
+
 fn visit_schema_refs(
     schema: &Value,
     definitions: &serde_json::Map<String, Value>,
@@ -1262,6 +1289,21 @@ fn validate_static_domain(schema: &Value, root: &Value) -> crate::Result<()> {
             }
         }
     }
+    if object
+        .keys()
+        .any(|key| matches!(key.as_str(), "minimum" | "maximum" | "multipleOf"))
+        && let Some(values) = finite_values(object)
+        && values
+            .iter()
+            .all(|value| !finite_value_satisfies_numeric_assertions(value, object))
+    {
+        let message = if object.contains_key("const") {
+            "argument schema `const` contradicts its numeric assertions"
+        } else {
+            "argument schema `enum` has no value satisfying its numeric assertions"
+        };
+        return Err(build_error(message));
+    }
     if let (Some(constant), Some(values)) = (
         object.get("const"),
         object.get("enum").and_then(Value::as_array),
@@ -1289,6 +1331,25 @@ fn validate_static_domain(schema: &Value, root: &Value) -> crate::Result<()> {
         {
             return Err(build_error(
                 "argument schema `enum` has no value satisfying `minLength`",
+            ));
+        }
+    }
+    if let Some(minimum) = object.get("minItems").and_then(Value::as_u64) {
+        if let Some(constant) = object.get("const").and_then(Value::as_array)
+            && constant.len() < minimum as usize
+        {
+            return Err(build_error(
+                "argument schema `const` contradicts its `minItems`",
+            ));
+        }
+        if let Some(values) = object.get("enum").and_then(Value::as_array)
+            && values
+                .iter()
+                .filter_map(Value::as_array)
+                .all(|value| value.len() < minimum as usize)
+        {
+            return Err(build_error(
+                "argument schema `enum` has no value satisfying `minItems`",
             ));
         }
     }
@@ -1458,16 +1519,22 @@ fn schema_implies_type(schema: &Value, root: &Value, expected: &str) -> bool {
     let Some(object) = schema.as_object() else {
         return false;
     };
-    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-        return resolve_ref(root, reference)
-            .is_some_and(|target| schema_implies_type(target, root, expected));
-    }
     if let Some(kind) = object.get("type") {
         return (type_contains(kind, expected)
             || (expected == "number" && type_contains(kind, "integer")))
             && (!type_contains(kind, "null") || expected == "null");
     }
-    object
+    let expected_type = Value::String(expected.to_string());
+    if let Some(constant) = object.get("const") {
+        return matches_type(constant, &expected_type);
+    }
+    if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        return !values.is_empty()
+            && values
+                .iter()
+                .all(|value| matches_type(value, &expected_type));
+    }
+    if object
         .get("oneOf")
         .and_then(Value::as_array)
         .is_some_and(|branches| {
@@ -1476,12 +1543,36 @@ fn schema_implies_type(schema: &Value, root: &Value, expected: &str) -> bool {
                     .iter()
                     .all(|branch| schema_implies_type(branch, root, expected))
         })
+    {
+        return true;
+    }
+    object
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| resolve_ref(root, reference))
+        .is_some_and(|target| schema_implies_type(target, root, expected))
 }
 
-fn schemas_provably_disjoint(left: &Value, right: &Value) -> bool {
+fn schemas_provably_disjoint(left: &Value, right: &Value, root: &Value) -> bool {
     let (Some(left), Some(right)) = (left.as_object(), right.as_object()) else {
         return false;
     };
+    if let Some(target) = left
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| resolve_ref(root, reference))
+        && schemas_provably_disjoint(target, &Value::Object(right.clone()), root)
+    {
+        return true;
+    }
+    if let Some(target) = right
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| resolve_ref(root, reference))
+        && schemas_provably_disjoint(&Value::Object(left.clone()), target, root)
+    {
+        return true;
+    }
     if let (Some(left_type), Some(right_type)) = (left.get("type"), right.get("type")) {
         let left_types = primitive_types(left_type);
         let right_types = primitive_types(right_type);
@@ -1532,12 +1623,12 @@ fn schemas_provably_disjoint(left: &Value, right: &Value) -> bool {
         left_properties
             .get(name)
             .zip(right_properties.get(name))
-            .is_some_and(|(left, right)| schemas_provably_disjoint(left, right))
+            .is_some_and(|(left, right)| schemas_provably_disjoint(left, right, root))
     })
 }
 
 fn schema_intersection_is_empty(left: &Value, right: &Value, root: &Value) -> bool {
-    if schemas_provably_disjoint(left, right) {
+    if schemas_provably_disjoint(left, right, root) {
         return true;
     }
     if let Some(values) = finite_schema_values(left, root)
@@ -1975,6 +2066,36 @@ fn finite_values(object: &serde_json::Map<String, Value>) -> Option<Vec<Value>> 
         return Some(vec![value.clone()]);
     }
     object.get("enum").and_then(Value::as_array).cloned()
+}
+
+fn finite_value_satisfies_numeric_assertions(
+    value: &Value,
+    schema: &serde_json::Map<String, Value>,
+) -> bool {
+    let Some(number) = value.as_number() else {
+        return false;
+    };
+    if schema
+        .get("type")
+        .is_some_and(|kind| !matches_type(value, kind))
+    {
+        return false;
+    }
+    if schema.get("minimum").is_some_and(|minimum| {
+        compare_numbers(number, minimum.as_number().expect("validated minimum"))
+            == std::cmp::Ordering::Less
+    }) {
+        return false;
+    }
+    if schema.get("maximum").is_some_and(|maximum| {
+        compare_numbers(number, maximum.as_number().expect("validated maximum"))
+            == std::cmp::Ordering::Greater
+    }) {
+        return false;
+    }
+    !schema.get("multipleOf").is_some_and(|divisor| {
+        !number_is_multiple(number, divisor.as_number().expect("validated divisor"))
+    })
 }
 
 fn schema_values_equal(left: &Value, right: &Value) -> bool {

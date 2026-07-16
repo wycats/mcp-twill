@@ -720,6 +720,11 @@ fn typed_failure<E: ApplicationError, S>(
                 "result-aware handler returned legacy capability denial".to_string(),
             ))
         }
+        CommandFailure::Framework(FrameworkError::ArgumentContractViolation { .. }) => {
+            Err(FrameworkError::Handler(
+                "handler returned invalid argument contract violation".to_string(),
+            ))
+        }
         CommandFailure::Framework(error) => Err(error),
         CommandFailure::Application(error) => {
             Ok(HandlerOutcome::ApplicationError(RawApplicationError {

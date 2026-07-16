@@ -974,6 +974,26 @@ fn unsupported_ambiguous_empty_and_malformed_schemas_fail_registration() {
                 ]
             }),
         ),
+        (
+            "finite const excluded by minimum",
+            json!({ "type": "integer", "const": 1, "minimum": 2 }),
+        ),
+        (
+            "finite enum excluded by multipleOf",
+            json!({ "type": "integer", "enum": [1, 3], "multipleOf": 2 }),
+        ),
+        (
+            "finite enum split across type and minimum exclusions",
+            json!({ "type": "integer", "enum": [1, 2.5], "minimum": 2 }),
+        ),
+        (
+            "finite const array excluded by minItems",
+            json!({ "type": "array", "const": [], "minItems": 1 }),
+        ),
+        (
+            "finite enum arrays excluded by minItems",
+            json!({ "type": "array", "enum": [[], [1]], "minItems": 2 }),
+        ),
     ];
     for (name, schema) in cases {
         assert!(
@@ -1228,6 +1248,59 @@ fn local_reference_chains_preserve_coarse_types_and_apply_siblings() {
         }
     }));
     assert!(contradictory.validate_argument_schemas().is_err());
+
+    let referenced_union = registry_with_schema(json!({
+        "oneOf": [
+            { "$ref": "#/$defs/text" },
+            { "$ref": "#/$defs/count" }
+        ],
+        "$defs": {
+            "text": { "type": "string" },
+            "count": { "type": "integer" }
+        }
+    }));
+    referenced_union.validate_argument_schemas().unwrap();
+    for value in [json!("text"), json!(1)] {
+        referenced_union
+            .build_plan(&request(
+                "value take --value $args.value",
+                json!({ "value": value }),
+            ))
+            .unwrap();
+    }
+}
+
+#[test]
+fn finite_values_imply_coarse_types_and_exact_size_limits_canonicalize() {
+    for schema in [
+        json!({ "const": "owned" }),
+        json!({ "enum": ["owned", "global_readonly"] }),
+    ] {
+        let registry = CommandRegistry::new("schema-test", "schema test").register(
+            CommandSpec::new(["scope", "set"], "Set", "Set scope")
+                .with_arg(ArgSpec::string("scope", "Scope").with_inline_schema(schema)),
+            |_context| async { Ok(CommandOutput::structured(json!({}))) },
+        );
+        registry.validate_argument_schemas().unwrap();
+    }
+
+    let string_schema = serde_json::from_str(r#"{"type":"string","minLength":1.0}"#).unwrap();
+    let string_registry = registry_with_schema(string_schema);
+    string_registry.validate_argument_schemas().unwrap();
+    let string_spec = string_registry.command_specs().next().unwrap();
+    assert_eq!(
+        string_registry.arg_schema(string_spec)["properties"]["value"]["minLength"],
+        1
+    );
+
+    let array_schema = serde_json::from_str(r#"{"type":"array","minItems":1e0}"#).unwrap();
+    let array_registry = registry_with_schema(array_schema);
+    array_registry.validate_argument_schemas().unwrap();
+    let array_spec = array_registry.command_specs().next().unwrap();
+    assert_eq!(
+        array_registry.arg_schema(array_spec)["properties"]["value"]["minItems"],
+        1
+    );
 }
 
 #[test]
@@ -2444,6 +2517,18 @@ async fn legacy_count_result(
     }))
 }
 
+async fn spoofed_contract_result(
+    _context: mcp_twill::CommandContext,
+    _args: SearchArgs,
+) -> ApplicationResult<SearchResult> {
+    Err(FrameworkError::ArgumentContractViolation {
+        operation_id: "spoofed.operation".to_string(),
+        argument: Some("spoofed-secret".to_string()),
+        reason: ArgumentContractReason::TypedDeserializationFailed,
+    }
+    .into())
+}
+
 #[tokio::test]
 async fn unconstrained_result_handlers_keep_legacy_typed_extraction() {
     let registry = CommandRegistry::build("schema-test", "schema test", |server| {
@@ -2487,6 +2572,12 @@ async fn result_aware_resource_handlers_reuse_checked_constrained_extraction() {
             ResourceDecl::new("search-index", "Search index")
                 .uri("search://index/{id}")
                 .carrier("search_index_id")
+                .reference_schema(json!({
+                    "$ref": "#/$defs/reference",
+                    "$defs": {
+                        "reference": { "type": "string", "minLength": 1 }
+                    }
+                }))
                 .expiry("Valid for the server process lifetime"),
         );
         server.resolver::<SearchIndex>(SearchIndexResolver);
@@ -2686,6 +2777,31 @@ async fn handlers_cannot_fabricate_argument_contract_failures() {
         constrained
             .run(request(
                 "search spoof --query $args.query",
+                json!({ "query": "safe" }),
+            ))
+            .await
+            .unwrap_err(),
+        FrameworkError::Handler("handler returned invalid argument contract violation".to_string())
+    );
+
+    let result_aware = CommandRegistry::build("schema-test", "schema test", |server| {
+        server.command("search result-spoof", |command| {
+            command
+                .summary("Search")
+                .description("Search")
+                .arg(
+                    arg::string("query")
+                        .with_inline_schema(json!({ "type": "string", "minLength": 1 }))
+                        .summary("Search query"),
+                )
+                .handle_result(spoofed_contract_result);
+        });
+    })
+    .unwrap();
+    assert_eq!(
+        result_aware
+            .run(request(
+                "search result-spoof --query $args.query",
                 json!({ "query": "safe" }),
             ))
             .await
