@@ -2678,6 +2678,16 @@ impl CommandRegistry {
             });
         }
 
+        self.dispatch_prepared_plan_with_context(request, plan, context)
+            .await
+    }
+
+    pub(crate) async fn dispatch_prepared_plan_with_context(
+        &self,
+        request: RunRequest,
+        plan: InvocationPlan,
+        context: &crate::InvocationContext,
+    ) -> Result<CommandExecutionOutcome> {
         if matches!(request.effective_mode(), crate::RunMode::DryRun) {
             return Ok(CommandExecutionOutcome::Success(RunResponse {
                 plan,

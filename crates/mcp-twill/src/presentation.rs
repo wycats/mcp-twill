@@ -1035,6 +1035,34 @@ mod tests {
     }
 
     #[test]
+    fn ref_siblings_narrow_singletons_before_tautology_checks() {
+        let mut spec = CommandSpec::new(["singleton"], "Singleton", "Singleton value").with_arg(
+            ArgSpec::inline_schema(
+                "value",
+                json!({
+                    "$defs": { "text": { "type": "string" } },
+                    "$ref": "#/$defs/text",
+                    "oneOf": [{ "const": "ok" }]
+                }),
+                "Singleton string",
+            ),
+        );
+        spec.confirmation = Some(
+            ConfirmationPresentation::new(ConfirmationMessage::new("Default?").text("Default."))
+                .case(
+                    ConfirmationPredicate::argument_equals("value", "ok"),
+                    ConfirmationMessage::new("Okay?").text("Okay."),
+                ),
+        );
+        assert!(
+            validate_command_presentation(&spec, &BTreeMap::new())
+                .unwrap_err()
+                .to_string()
+                .contains("tautological")
+        );
+    }
+
+    #[test]
     fn case_selection_is_order_independent_for_disjoint_cases() {
         let first =
             ConfirmationPresentation::new(ConfirmationMessage::new("Default?").text("Default."))

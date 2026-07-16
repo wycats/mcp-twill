@@ -1822,8 +1822,10 @@ fn finite_schema_values(schema: &Value, root: &Value) -> Option<Vec<Value>> {
     }) {
         return Some(vec![Value::Null]);
     }
-    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-        return finite_schema_values(resolve_ref(root, reference)?, root);
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+        && let Some(values) = finite_schema_values(resolve_ref(root, reference)?, root)
+    {
+        return Some(values);
     }
     let branches = object.get("oneOf")?.as_array()?;
     let mut values = Vec::new();

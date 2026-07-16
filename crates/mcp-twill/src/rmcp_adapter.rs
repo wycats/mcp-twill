@@ -618,14 +618,7 @@ impl CliMcpServer {
             Self::notify_progress(meta, &client, 3.0, 4.0, "Dispatching command handler").await;
         }
         let result = registry
-            .run_in_lane_with_workspaces_and_context(
-                request.clone(),
-                tool_name,
-                lane,
-                &config.execution_tool_name,
-                &resolved,
-                &invocation_context,
-            )
+            .dispatch_prepared_plan_with_context(request.clone(), plan.clone(), &invocation_context)
             .await;
         match result {
             Ok(crate::CommandExecutionOutcome::Success(response)) => {
@@ -1546,11 +1539,15 @@ mod tests {
         assert_eq!(task_completion_message(&success), "Run command completed");
     }
 
-    #[test]
-    fn generic_confirmation_copy_binds_the_active_surface_fingerprint() {
+    #[tokio::test]
+    async fn generic_confirmation_copy_binds_the_dispatched_surface_fingerprint() {
         let registry = CommandRegistry::new("presentation", "Presentation test").register(
             crate::CommandSpec::new(["run"], "Run", "Run command"),
-            |_context| async { Ok(crate::CommandOutput::structured(json!({}))) },
+            |context: crate::CommandContext| async move {
+                Ok(crate::CommandOutput::structured(json!({
+                    "fingerprint": context.plan.invocation_fingerprint,
+                })))
+            },
         );
         let request = RunRequest {
             command: "run".to_string(),
@@ -1582,6 +1579,25 @@ mod tests {
                 .unwrap()
                 .message,
             "Run repo-write execution?"
+        );
+        let outcome = registry
+            .dispatch_prepared_plan_with_context(
+                request,
+                repo.clone(),
+                &crate::InvocationContext::default(),
+            )
+            .await
+            .unwrap();
+        let crate::CommandExecutionOutcome::Success(response) = outcome else {
+            panic!("expected successful prepared dispatch");
+        };
+        assert_eq!(
+            response.plan.invocation_fingerprint,
+            repo.invocation_fingerprint
+        );
+        assert_eq!(
+            response.output.unwrap().structured.unwrap()["fingerprint"],
+            repo.invocation_fingerprint
         );
     }
 
