@@ -957,7 +957,7 @@ VBL's hybrid catalog is direct evidence for the grouping and schema-dialect rule
 
 ## Unresolved Questions
 
-The surface/plan ownership model is decision-complete: one compiled surface per adapter, one shared invocation plan with explicit origin, public protocol-bound native surface identity, an adapter-owned in-flight confirmation bridge, and RFC 0020-owned protocol-versioned task delivery. The Rust names and serialized spellings in this body are the current Stage-0 proposal; any review-driven change must amend the managed RFC and its canonical vectors before Stage 1, and implementation may not select an alternate spelling. A revision may not describe `TaskSupportSpec` as one generic delivery state machine, omit the compiled protocol/delivery identity, or move runtime task records into this RFC's catalog or snapshot.
+The surface/plan ownership model is decision-complete: one compiled surface per adapter, one shared invocation plan with explicit origin, public protocol-bound native surface identity, an adapter-owned in-flight confirmation bridge, and RFC 0020-owned protocol-versioned task delivery. The Rust names and serialized spellings in this body become the implementation contract at Stage 1; implementation may not select an alternate spelling. Any later review-driven change must return the RFC to design review and amend the managed body and its canonical vectors before implementation proceeds. A revision may not describe `TaskSupportSpec` as one generic delivery state machine, omit the compiled protocol/delivery identity, or move runtime task records into this RFC's catalog or snapshot.
 
 ## Future Possibilities
 
