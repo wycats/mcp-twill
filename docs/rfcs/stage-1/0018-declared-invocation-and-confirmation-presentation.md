@@ -2,7 +2,7 @@
 
 # RFC 0018: Declared Invocation And Confirmation Presentation
 
-- Status: Draft
+- Status: Accepted
 - Area: invocation presentation, confirmation, catalog projection, host integration, generated adapters
 - Target milestone: v0.4
 - Depends on: RFC 0001 (authoritative command catalog), RFC 0003 (confirmation and replay), RFC 0017 (authoritative argument schemas)
