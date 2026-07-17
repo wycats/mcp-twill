@@ -297,18 +297,21 @@ pub enum PlanResourceBindingSource {
     Absent,
 }
 
+#[serde(rename_all = "camelCase")]
 pub struct InvocationPlan {
     // ...existing fields...
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_binding_facts: Vec<PlanResourceBindingFact>,
 }
 
+#[serde(rename_all = "camelCase")]
 pub struct PermissionPreview {
     // ...existing fields...
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_binding_facts: Vec<PlanResourceBindingFact>,
 }
 
+#[serde(rename_all = "camelCase")]
 pub struct FrameworkEvent {
     // ...existing fields...
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -555,12 +558,14 @@ RFC 0020 deferred execution moves the private prepared carrier, including its pl
 Optional extraction composes the existing resource extractor with `Option`:
 
 ```rust
+#[serde(rename_all = "camelCase")]
 pub struct CommandSpec {
     // ...existing fields...
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub optional_resources: Vec<String>,
 }
 
+#[serde(rename_all = "camelCase")]
 pub struct OperationSpec {
     // ...existing fields...
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
