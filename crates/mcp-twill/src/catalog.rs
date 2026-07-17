@@ -296,6 +296,7 @@ pub struct OperationSpec {
     /// The command declared its handler deduplicates re-issued invocations.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent: bool,
+    #[serde(default, skip_serializing_if = "TaskSupportSpec::is_optional")]
     pub task_support: TaskSupportSpec,
     pub stability: Stability,
 }
@@ -347,6 +348,7 @@ struct OperationSpecWire {
     progress: Vec<ProgressPhaseSpec>,
     #[serde(default)]
     idempotent: bool,
+    #[serde(default)]
     task_support: TaskSupportSpec,
     stability: Stability,
 }

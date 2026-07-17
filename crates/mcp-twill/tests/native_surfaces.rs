@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use mcp_twill::{
     ApplicationOutput, ApplicationOutputResult, ApplicationResult, ApplicationResultContract,
     ApplicationSuccess, ArgSpec, CliMcpServer, CliMcpServerConfig, CommandContext, CommandOutput,
@@ -20,11 +21,13 @@ use mcp_twill::{
 };
 use rmcp::{
     ClientHandler, ServiceExt,
+    handler::client::progress::ProgressDispatcher,
     model::{
-        CallToolRequestParams, CancelTaskParams, ClientRequest, GetPromptRequestParams,
-        GetTaskInfoParams, GetTaskResultParams, Meta, ReadResourceRequestParams, Request,
-        ResourceContents,
+        CallToolRequestParams, CancelTaskParams, ClientInfo, ClientRequest, GetPromptRequestParams,
+        GetTaskInfoParams, GetTaskResultParams, Meta, ProgressNotificationParam, ProtocolVersion,
+        ReadResourceRequestParams, Request, ResourceContents,
     },
+    service::PeerRequestOptions,
 };
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -293,6 +296,19 @@ fn declaration_and_snapshot_use_the_accepted_wire_contract() -> anyhow::Result<(
     assert_eq!(snapshot.canonical_json(), snapshot.canonical_json());
     assert_eq!(snapshot.operations().len(), 2);
     assert_eq!(snapshot.operations()[1].call().tool(), "items");
+    let items = snapshot
+        .tools()
+        .iter()
+        .find(|tool| tool.name == "items")
+        .expect("compiled items tool");
+    assert_eq!(items.title.as_deref(), Some("Items"));
+    assert_eq!(
+        items
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.title.as_deref()),
+        Some("Items")
+    );
     assert_eq!(
         snapshot.operations()[1].call().arguments(),
         Some(&BTreeMap::from([("operation".to_string(), json!("get"),)]))
@@ -1133,18 +1149,73 @@ async fn protocol_observations_reject_before_native_tool_routing() -> anyhow::Re
         server.serve(server_transport).await?.waiting().await?;
         anyhow::Ok(())
     });
-    let client = TestClient.serve(client_transport).await?;
+    let client = LegacyProtocolClient.serve(client_transport).await?;
     let mut request = CallToolRequestParams::new("not-a-tool");
     request.meta = Some(Meta(serde_json::from_value(json!({
-        "io.modelcontextprotocol/protocolVersion": "2026-06-30"
+        "io.modelcontextprotocol/protocolVersion": "2025-11-25"
     }))?));
     let error = client.call_tool(request).await.unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("does not match compiled surface")
+            .contains("Conflicting MCP protocol version")
     );
     assert!(!error.to_string().contains("Unknown tool"));
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_calls_preserve_progress_through_confirmation_and_dispatch() -> anyhow::Result<()> {
+    let registry = item_registry(TaskSupportSpec::Optional);
+    let surface = grouped_surface(&registry, NativeConfirmationRoute::Bridge)?;
+    let server = CliMcpServer::builder(registry)
+        .surface(surface)
+        .authorizer(Arc::new(AlwaysConfirm))
+        .native_confirmation_bridge(Arc::new(CountingBridge {
+            calls: Arc::new(AtomicUsize::new(0)),
+            decision: NativeConfirmationDecision::Allow,
+        }))
+        .build()?;
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client_handler = ProgressClient::new();
+    let dispatcher = client_handler.progress.clone();
+    let client = client_handler.serve(client_transport).await?;
+    let params = CallToolRequestParams::new("items").with_arguments(serde_json::from_value(
+        json!({ "operation": "get", "id": "42" }),
+    )?);
+    let handle = client
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(Request::new(params)),
+            PeerRequestOptions::no_options(),
+        )
+        .await?;
+    let mut progress = dispatcher.subscribe(handle.progress_token.clone()).await;
+    let result = handle.await_response().await?;
+    let mut seen = Vec::new();
+    while let Ok(Some(notification)) =
+        tokio::time::timeout(std::time::Duration::from_millis(100), progress.next()).await
+    {
+        seen.push(notification.message.unwrap_or_default());
+        if seen.len() >= 5 {
+            break;
+        }
+    }
+    assert_eq!(serde_json::to_value(result)?["isError"], false);
+    for expected in [
+        "Planning native invocation",
+        "Invocation plan ready",
+        "Confirmation required",
+        "Dispatching command handler",
+        "Command complete",
+    ] {
+        assert!(seen.iter().any(|message| message == expected), "{seen:?}");
+    }
     client.cancel().await?;
     server_handle.await??;
     Ok(())
@@ -1309,6 +1380,37 @@ async fn effect_lanes_enforce_forbidden_and_required_task_delivery() -> anyhow::
 struct TestClient;
 
 impl ClientHandler for TestClient {}
+
+#[derive(Clone, Copy)]
+struct LegacyProtocolClient;
+
+impl ClientHandler for LegacyProtocolClient {
+    fn get_info(&self) -> ClientInfo {
+        ClientInfo::default().with_protocol_version(ProtocolVersion::V_2025_06_18)
+    }
+}
+
+struct ProgressClient {
+    progress: ProgressDispatcher,
+}
+
+impl ProgressClient {
+    fn new() -> Self {
+        Self {
+            progress: ProgressDispatcher::new(),
+        }
+    }
+}
+
+impl ClientHandler for ProgressClient {
+    async fn on_progress(
+        &self,
+        params: ProgressNotificationParam,
+        _context: rmcp::service::NotificationContext<rmcp::RoleClient>,
+    ) {
+        self.progress.handle_notification(params).await;
+    }
+}
 
 async fn call_native_tool(
     server: CliMcpServer,
@@ -1579,6 +1681,17 @@ fn task_support_builder_and_low_level_paths_are_equivalent() -> anyhow::Result<(
         serde_json::to_value(optional.command_specs().next().unwrap())?.get("taskSupport"),
         None
     );
+    let optional_operation = optional.operation_specs().pop().unwrap();
+    let optional_wire = serde_json::to_value(&optional_operation)?;
+    assert_eq!(optional_wire.get("taskSupport"), None);
+    assert_eq!(
+        serde_json::from_value::<mcp_twill::OperationSpec>(optional_wire)?.task_support,
+        TaskSupportSpec::Optional
+    );
+    assert_eq!(
+        serde_json::to_value(required.operation_specs().pop().unwrap())?["taskSupport"],
+        "required"
+    );
     assert_ne!(optional.catalog_identity(), required.catalog_identity());
     Ok(())
 }
@@ -1637,6 +1750,11 @@ fn vbl_v049_compiles_the_63_operation_27_tool_mapping() -> anyhow::Result<()> {
         assert_eq!(
             compiled["annotations"], released["annotations"],
             "annotation drift for {}",
+            compiled["name"]
+        );
+        assert_eq!(
+            compiled["title"], released["title"],
+            "title drift for {}",
             compiled["name"]
         );
     }

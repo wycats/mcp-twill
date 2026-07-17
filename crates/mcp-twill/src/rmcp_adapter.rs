@@ -141,6 +141,56 @@ fn progress_meta<'a>(request: Option<&'a Meta>, context: &'a Meta) -> Option<&'a
         .or_else(|| context.get_progress_token().map(|_| context))
 }
 
+fn validate_protocol_observations<'a>(
+    compiled: &str,
+    request: Option<&'a Value>,
+    transport: Option<&'a Value>,
+    negotiated: Option<&'a str>,
+) -> std::result::Result<(), rmcp::ErrorData> {
+    let request = request
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "MCP protocol version observation must be a string",
+                    None,
+                )
+            })
+        })
+        .transpose()?;
+    let transport = transport
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "MCP protocol version observation must be a string",
+                    None,
+                )
+            })
+        })
+        .transpose()?;
+
+    let mut observed = None;
+    for candidate in [request, transport, negotiated].into_iter().flatten() {
+        if observed.is_some_and(|observed| observed != candidate) {
+            return Err(rmcp::ErrorData::invalid_params(
+                "Conflicting MCP protocol version observations",
+                None,
+            ));
+        }
+        observed = Some(candidate);
+    }
+
+    let observed = observed.unwrap_or(compiled);
+    if observed != compiled {
+        return Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "MCP protocol version `{observed}` does not match compiled surface `{compiled}`"
+            ),
+            None,
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct CliMcpServer {
     registry: Arc<CommandRegistry>,
@@ -283,35 +333,11 @@ impl CliMcpServer {
         const KEY: &str = "io.modelcontextprotocol/protocolVersion";
         let request = request_meta.and_then(|meta| meta.0.get(KEY));
         let transport = context.meta.0.get(KEY);
-        let observed = match (request, transport) {
-            (Some(left), Some(right)) if left != right => {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "Conflicting MCP protocol version observations",
-                    None,
-                ));
-            }
-            (Some(value), _) | (_, Some(value)) => value.as_str().ok_or_else(|| {
-                rmcp::ErrorData::invalid_params(
-                    "MCP protocol version observation must be a string",
-                    None,
-                )
-            })?,
-            (None, None) => context
-                .peer
-                .peer_info()
-                .map(|info| info.protocol_version.as_str())
-                .unwrap_or(self.protocol_version()),
-        };
-        if observed != self.protocol_version() {
-            return Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "MCP protocol version `{observed}` does not match compiled surface `{}`",
-                    self.protocol_version()
-                ),
-                None,
-            ));
-        }
-        Ok(())
+        let negotiated = context
+            .peer
+            .peer_info()
+            .map(|info| info.protocol_version.as_str());
+        validate_protocol_observations(self.protocol_version(), request, transport, negotiated)
     }
 
     fn ensure_tasks_supported(&self) -> std::result::Result<(), rmcp::ErrorData> {
@@ -638,6 +664,7 @@ impl CliMcpServer {
                 );
             }
         };
+        let progress_meta = progress_meta(request_meta.as_ref(), &context_meta);
         let effective_meta = effective_application_meta(request_meta.as_ref(), &context_meta);
         let invocation_context = match invocation_context_from_meta(
             &effective_meta,
@@ -654,6 +681,9 @@ impl CliMcpServer {
             Err(error) => return native_framework_outcome(error, None),
         };
         let resolved = Self::resolve_workspaces_for_call(&self.registry, codex, &client).await;
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 1.0, 5.0, "Planning native invocation").await;
+        }
         let (operation_id, selected_arguments) = match surface.resolve_call(&tool_name, arguments) {
             Ok(call) => call,
             Err(error) => return native_framework_outcome(error, None),
@@ -677,6 +707,9 @@ impl CliMcpServer {
                 return native_framework_outcome(error, None);
             }
         };
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 2.0, 5.0, "Invocation plan ready").await;
+        }
         let plan_for_event = PlanFacts::from(&plan);
 
         if let Err(error) = self.registry.check_plan_policy(&plan) {
@@ -734,6 +767,9 @@ impl CliMcpServer {
                     .native_confirmation_bridge
                     .as_ref()
                     .expect("bridge route was validated at server construction");
+                if let Some(meta) = progress_meta {
+                    Self::notify_progress(meta, &client, 3.0, 5.0, "Confirmation required").await;
+                }
                 match bridge.confirm(bridge_request).await {
                     Ok(NativeConfirmationDecision::Allow) => {}
                     Ok(NativeConfirmationDecision::Deny) => {
@@ -765,7 +801,10 @@ impl CliMcpServer {
             }
         }
 
-        match self
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 4.0, 5.0, "Dispatching command handler").await;
+        }
+        let outcome = match self
             .registry
             .dispatch_operation_plan(selected_arguments, plan.clone(), &invocation_context)
             .await
@@ -777,7 +816,11 @@ impl CliMcpServer {
                 native_application_error_outcome(surface, plan, error, plan_for_event)
             }
             Err(error) => native_framework_outcome(error, Some((plan, plan_for_event))),
+        };
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 5.0, 5.0, "Command complete").await;
         }
+        outcome
     }
 
     /// Grants and listings become `resource_link` content parts, but only
@@ -2253,6 +2296,34 @@ mod tests {
             Some(&request_with_token)
         );
         assert_eq!(progress_meta(None, &Meta::default()), None);
+    }
+
+    #[test]
+    fn protocol_observations_include_the_negotiated_peer_version() {
+        let compiled = "2025-11-25";
+        let matching = json!(compiled);
+        let mismatched = json!("2026-06-30");
+        assert!(
+            validate_protocol_observations(
+                compiled,
+                Some(&matching),
+                Some(&matching),
+                Some(compiled),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_protocol_observations(compiled, Some(&mismatched), None, None)
+                .unwrap_err()
+                .message
+                .contains("does not match compiled surface")
+        );
+        assert!(
+            validate_protocol_observations(compiled, Some(&matching), None, Some("2025-06-18"),)
+                .unwrap_err()
+                .message
+                .contains("Conflicting MCP protocol version")
+        );
     }
 
     #[test]

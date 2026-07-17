@@ -914,6 +914,7 @@ fn compile_native_surface(
                 let input = schema_object(registry.arg_schema(command), "direct input schema")?;
                 let output = schema_object(output_schema.clone(), "direct output schema")?;
                 let tool = Tool::new(name.clone(), final_description, input)
+                    .with_title(display_title.clone())
                     .with_raw_output_schema(Arc::new(output))
                     .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden))
                     .annotate(annotations_for_operations(
@@ -1026,6 +1027,7 @@ fn compile_native_surface(
                 let defaults = presentation_defaults(&display_title)?;
                 tools.push(
                     Tool::new(name.clone(), final_description, input)
+                        .with_title(display_title.clone())
                         .with_raw_output_schema(Arc::new(output))
                         .with_execution(
                             ToolExecution::new().with_task_support(TaskSupport::Forbidden),
