@@ -8,8 +8,8 @@ use std::{
 
 use async_trait::async_trait;
 use mcp_twill::{
-    ApplicationResultContract, ApplicationSuccess, ArgSpec, CliMcpServer, CommandContext,
-    CommandRegistry, CommandSpec, DynamicCommandFailure, FrameworkHelpProjection,
+    ApplicationResultContract, ApplicationSuccess, ArgSpec, CliMcpServer, CliMcpServerConfig,
+    CommandContext, CommandRegistry, CommandSpec, DynamicCommandFailure, FrameworkHelpProjection,
     InvocationContext, InvocationOrigin, McpProtocolTarget, NativeApplicationErrorDialect,
     NativeConfirmationBridge, NativeConfirmationBridgeError, NativeConfirmationDecision,
     NativeConfirmationRequest, NativeConfirmationRoute, NativeExposurePolicy, NativeToolSurface,
@@ -19,7 +19,8 @@ use mcp_twill::{
 use rmcp::{
     ClientHandler, ServiceExt,
     model::{
-        CallToolRequestParams, GetPromptRequestParams, Meta, ReadResourceRequestParams,
+        CallToolRequestParams, CancelTaskParams, ClientRequest, GetPromptRequestParams,
+        GetTaskInfoParams, GetTaskResultParams, Meta, ReadResourceRequestParams, Request,
         ResourceContents,
     },
 };
@@ -733,6 +734,47 @@ async fn protocol_observations_reject_before_native_tool_routing() -> anyhow::Re
     Ok(())
 }
 
+#[tokio::test]
+async fn native_surfaces_fail_closed_for_every_task_request() -> anyhow::Result<()> {
+    let registry = item_registry(TaskSupportSpec::Optional);
+    let surface = grouped_surface(&registry, NativeConfirmationRoute::Unavailable)?;
+    let server = CliMcpServer::with_surface(registry, surface)?;
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient.serve(client_transport).await?;
+
+    let requests = [
+        ClientRequest::ListTasksRequest(Default::default()),
+        ClientRequest::GetTaskInfoRequest(Request::new(GetTaskInfoParams {
+            meta: None,
+            task_id: "private-task".to_string(),
+        })),
+        ClientRequest::GetTaskResultRequest(Request::new(GetTaskResultParams {
+            meta: None,
+            task_id: "private-task".to_string(),
+        })),
+        ClientRequest::CancelTaskRequest(Request::new(CancelTaskParams {
+            meta: None,
+            task_id: "private-task".to_string(),
+        })),
+    ];
+    for request in requests {
+        let error = client.send_request(request).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Task requests are unavailable on native tool surfaces")
+        );
+    }
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct TestClient;
 
@@ -937,11 +979,15 @@ fn mixed_task_support_fails_group_and_effect_lane_compilation() -> anyhow::Resul
         .build(&mixed, McpProtocolTarget::V2025_11_25)
         .unwrap_err();
     assert!(error.to_string().contains("mixed task support"));
-    let effect_error = match CliMcpServer::new(mixed) {
+    let effect_error = match CliMcpServer::with_config(
+        mixed,
+        CliMcpServerConfig::default().with_execution_tool_name("repo"),
+    ) {
         Ok(_) => anyhow::bail!("expected effect-lane task-support mismatch"),
         Err(error) => error,
     };
     assert!(effect_error.to_string().contains("mixed task support"));
+    assert!(effect_error.to_string().contains("effect lane `repo`"));
     Ok(())
 }
 

@@ -886,7 +886,11 @@ impl CommandRegistry {
             .collect()
     }
 
-    pub(crate) fn lane_task_support(&self, lane: EffectLane) -> Result<crate::TaskSupportSpec> {
+    pub(crate) fn lane_task_support(
+        &self,
+        lane: EffectLane,
+        primary_tool_name: &str,
+    ) -> Result<crate::TaskSupportSpec> {
         let mut support = None;
         for operation in self
             .operation_specs()
@@ -897,7 +901,7 @@ impl CommandRegistry {
                 Some(existing) if existing != &operation.task_support => {
                     return Err(FrameworkError::Build(format!(
                         "effect lane `{}` contains mixed task support",
-                        lane.tool_name("run")
+                        lane.tool_name(primary_tool_name)
                     )));
                 }
                 Some(_) => {}

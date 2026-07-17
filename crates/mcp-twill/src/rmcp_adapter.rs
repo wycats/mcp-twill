@@ -314,6 +314,17 @@ impl CliMcpServer {
         Ok(())
     }
 
+    fn ensure_tasks_supported(&self) -> std::result::Result<(), rmcp::ErrorData> {
+        if matches!(self.surface, McpToolSurface::EffectLanes(_)) {
+            Ok(())
+        } else {
+            Err(rmcp::ErrorData::invalid_params(
+                "Task requests are unavailable on native tool surfaces",
+                None,
+            ))
+        }
+    }
+
     pub fn builder(registry: CommandRegistry) -> CliMcpServerBuilder {
         CliMcpServerBuilder::new(registry)
     }
@@ -1132,7 +1143,7 @@ fn effect_lane_tools(
 ) -> crate::Result<Vec<Tool>> {
     let mut tools = vec![effect_lane_help_tool()];
     for lane in registry.lane_specs(&config.execution_tool_name) {
-        let support = registry.lane_task_support(lane.lane)?;
+        let support = registry.lane_task_support(lane.lane, &config.execution_tool_name)?;
         tools.push(
             Tool::new(
                 lane.tool_name.clone(),
@@ -1600,6 +1611,7 @@ impl ServerHandler for CliMcpServer {
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CreateTaskResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let tool_name = request.name.to_string();
         if self
             .registry
@@ -1672,6 +1684,7 @@ impl ServerHandler for CliMcpServer {
             request.as_ref().and_then(|request| request.meta.as_ref()),
             &context,
         )?;
+        self.ensure_tasks_supported()?;
         let tasks = self.tasks.lock().await;
         Ok(ListTasksResult::new(
             tasks.values().map(|record| record.task.clone()).collect(),
@@ -1684,6 +1697,7 @@ impl ServerHandler for CliMcpServer {
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetTaskResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let tasks = self.tasks.lock().await;
         let record = tasks.get(&request.task_id).ok_or_else(|| {
             rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
@@ -1700,6 +1714,7 @@ impl ServerHandler for CliMcpServer {
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetTaskPayloadResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let tasks = self.tasks.lock().await;
         let record = tasks.get(&request.task_id).ok_or_else(|| {
             rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
@@ -1719,6 +1734,7 @@ impl ServerHandler for CliMcpServer {
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CancelTaskResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let mut tasks = self.tasks.lock().await;
         let record = tasks.get_mut(&request.task_id).ok_or_else(|| {
             rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
