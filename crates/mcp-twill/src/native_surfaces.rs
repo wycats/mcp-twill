@@ -1575,6 +1575,26 @@ fn remove_matching_selector(
     selector: &str,
     selector_value: &str,
 ) -> Result<()> {
+    remove_matching_selector_with_ancestor(
+        group,
+        operation_id,
+        shape,
+        root,
+        selector,
+        selector_value,
+        false,
+    )
+}
+
+fn remove_matching_selector_with_ancestor(
+    group: &str,
+    operation_id: &str,
+    shape: &mut Value,
+    root: &Value,
+    selector: &str,
+    selector_value: &str,
+    selector_controlled_by_ancestor: bool,
+) -> Result<()> {
     let object = shape
         .as_object_mut()
         .ok_or_else(|| build_error("grouped success branch must be an object"))?;
@@ -1593,7 +1613,9 @@ fn remove_matching_selector(
                 "native group `{group}` selector `{selector}` conflicts with operation `{operation_id}` output"
             )));
         }
-    } else if object.get("additionalProperties") != Some(&Value::Bool(false)) {
+    } else if object.get("additionalProperties") != Some(&Value::Bool(false))
+        && !selector_controlled_by_ancestor
+    {
         return Err(build_error(format!(
             "native group `{group}` operation `{operation_id}` must exclude undeclared selector `{selector}` from its output"
         )));
@@ -1689,6 +1711,26 @@ fn inject_member_union_selector(
     selector: &str,
     selector_value: &str,
 ) -> Result<()> {
+    inject_member_union_selector_with_ancestor(
+        group,
+        operation_id,
+        schema,
+        root,
+        selector,
+        selector_value,
+        false,
+    )
+}
+
+fn inject_member_union_selector_with_ancestor(
+    group: &str,
+    operation_id: &str,
+    schema: &mut Value,
+    root: &Value,
+    selector: &str,
+    selector_value: &str,
+    selector_controlled_by_ancestor: bool,
+) -> Result<()> {
     let object = schema
         .as_object_mut()
         .ok_or_else(|| build_error("grouped success union branch must be an object"))?;
@@ -1703,15 +1745,25 @@ fn inject_member_union_selector(
             }
         }
         *schema = resolved;
-        return inject_member_union_selector(
+        return inject_member_union_selector_with_ancestor(
             group,
             operation_id,
             schema,
             root,
             selector,
             selector_value,
+            selector_controlled_by_ancestor,
         );
     }
+    let selector_controlled_here = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|properties| properties.contains_key(selector))
+        || object
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|required| required.iter().any(|name| name == selector))
+        || object.get("additionalProperties") == Some(&Value::Bool(false));
     if let Some(branches) = object.get_mut("oneOf").and_then(Value::as_array_mut) {
         if branches.is_empty() {
             return Err(build_error(format!(
@@ -1719,19 +1771,82 @@ fn inject_member_union_selector(
             )));
         }
         for branch in branches {
-            inject_member_union_selector(
+            inject_member_union_selector_with_ancestor(
                 group,
                 operation_id,
                 branch,
                 root,
                 selector,
                 selector_value,
+                selector_controlled_by_ancestor || selector_controlled_here,
             )?;
         }
+        reconcile_union_outer_selector(
+            group,
+            operation_id,
+            schema,
+            root,
+            selector,
+            selector_value,
+        )?;
         return Ok(());
     }
-    remove_matching_selector(group, operation_id, schema, root, selector, selector_value)?;
+    remove_matching_selector_with_ancestor(
+        group,
+        operation_id,
+        schema,
+        root,
+        selector,
+        selector_value,
+        selector_controlled_by_ancestor,
+    )?;
     insert_selector(schema, selector, &[selector_value.to_string()])
+}
+
+fn reconcile_union_outer_selector(
+    group: &str,
+    operation_id: &str,
+    schema: &mut Value,
+    root: &Value,
+    selector: &str,
+    selector_value: &str,
+) -> Result<()> {
+    let object = schema
+        .as_object_mut()
+        .ok_or_else(|| build_error("grouped success union root must be an object"))?;
+    let has_selector_property = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|properties| properties.contains_key(selector));
+    let requires_selector = object
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| required.iter().any(|name| name == selector));
+    let closes_properties = object.get("additionalProperties") == Some(&Value::Bool(false));
+
+    if has_selector_property {
+        let existing = object
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get(selector))
+            .expect("selector property was observed");
+        if !requires_selector || !schema_proves_string_singleton(existing, root, selector_value)? {
+            return Err(build_error(format!(
+                "native group `{group}` selector `{selector}` conflicts with operation `{operation_id}` output"
+            )));
+        }
+    }
+
+    if has_selector_property || requires_selector || closes_properties {
+        if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.remove(selector);
+        }
+        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|name| name != selector);
+        }
+        insert_selector(schema, selector, &[selector_value.to_string()])?;
+    }
+    Ok(())
 }
 
 fn resolve_group_output_schema(schema: &Value, root: &Value) -> Result<Value> {
@@ -1875,6 +1990,7 @@ fn validate_steering_closure(
             .requires_resources
             .iter()
             .chain(&operation.grants)
+            .chain(&operation.enumerates)
             .chain(&operation.releases)
         {
             for command in registry

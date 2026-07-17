@@ -179,7 +179,9 @@ fn validate_protocol_observations<'a>(
         observed = Some(candidate);
     }
 
-    let observed = observed.unwrap_or(compiled);
+    let observed = observed.ok_or_else(|| {
+        rmcp::ErrorData::invalid_params("Missing MCP protocol version observation", None)
+    })?;
     if observed != compiled {
         return Err(rmcp::ErrorData::invalid_params(
             format!(
@@ -2323,6 +2325,12 @@ mod tests {
                 .unwrap_err()
                 .message
                 .contains("Conflicting MCP protocol version")
+        );
+        assert!(
+            validate_protocol_observations(compiled, None, None, None)
+                .unwrap_err()
+                .message
+                .contains("Missing MCP protocol version observation")
         );
     }
 

@@ -12,7 +12,7 @@ use mcp_twill::{
     ApplicationOutput, ApplicationOutputResult, ApplicationResult, ApplicationResultContract,
     ApplicationSuccess, ArgSpec, CliMcpServer, CliMcpServerConfig, CommandContext, CommandOutput,
     CommandRegistry, CommandSpec, DynamicCommandFailure, FrameworkHelpProjection, Grant,
-    InvocationContext, InvocationOrigin, InvocationPlan, McpProtocolTarget,
+    InvocationContext, InvocationOrigin, InvocationPlan, Listing, McpProtocolTarget,
     NativeApplicationErrorDialect, NativeConfirmationBridge, NativeConfirmationBridgeError,
     NativeConfirmationDecision, NativeConfirmationRequest, NativeConfirmationRoute,
     NativeExposurePolicy, NativeToolSurface, OutputContract, PermissionAuthorizer,
@@ -161,6 +161,15 @@ async fn release_test_lease(
     Ok(ApplicationSuccess::value(TestLeaseResult {
         id: lease.id.clone(),
     }))
+}
+
+async fn list_test_leases(
+    _: CommandContext,
+) -> ApplicationOutputResult<mcp_twill::Listed<TestLease, ApplicationSuccess<TestLeaseResult>>> {
+    Ok(ApplicationSuccess::value(TestLeaseResult {
+        id: "lease-1".to_string(),
+    })
+    .listing(Listing::<TestLease>::new(["lease-1"])))
 }
 
 fn grouped_surface(
@@ -472,6 +481,49 @@ fn explicit_subsets_preserve_granted_resource_lifecycle_edges() -> anyhow::Resul
 }
 
 #[test]
+fn explicit_subsets_preserve_enumerated_resource_lifecycle_edges() -> anyhow::Result<()> {
+    let registry = CommandRegistry::build("leases", "Lease lifecycle", |server| {
+        server.resource(
+            ResourceDecl::new("test-lease", "A test lease")
+                .uri("test://lease/{id}")
+                .expiry("Test leases expire"),
+        );
+        server.resolver::<TestLease>(TestLeaseResolver);
+        server.command("lease start", |command| {
+            command
+                .summary("Start lease")
+                .description("Grant a lease")
+                .handle_result(grant_test_lease);
+        });
+        server.command("lease list", |command| {
+            command
+                .summary("List leases")
+                .description("Enumerate leases")
+                .handle_result(list_test_leases);
+        });
+        server.command("lease end", |command| {
+            command
+                .summary("End lease")
+                .description("Release a lease")
+                .handle_result(release_test_lease);
+        });
+    })?;
+    let error = NativeToolSurface::builder("lease-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("list_leases", "lease.list")
+        .exposure(NativeExposurePolicy::explicit_subset([
+            "lease.start",
+            "lease.end",
+        ]))
+        .build(&registry, McpProtocolTarget::V2025_11_25)
+        .unwrap_err();
+    assert!(error.to_string().contains("lease.end"));
+    assert!(error.to_string().contains("reachable from `lease.list`"));
+    Ok(())
+}
+
+#[test]
 fn declarations_validate_names_coverage_and_required_slots() -> anyhow::Result<()> {
     let registry = item_registry(TaskSupportSpec::Optional);
     for name in [
@@ -604,6 +656,62 @@ fn output_roots_and_group_selector_collisions_fail_closed() -> anyhow::Result<()
         .as_ref()
         .expect("group output");
     assert_eq!(output["oneOf"][0]["oneOf"].as_array().unwrap().len(), 2);
+
+    let constrained_union = shape_registry(&[
+        (
+            "states",
+            json!({
+                "type": "object",
+                "properties": { "state": { "type": "string" } },
+                "required": ["state"],
+                "additionalProperties": false,
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": { "state": { "const": "ready", "type": "string" } },
+                        "required": ["state"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": { "state": { "const": "closed", "type": "string" } },
+                        "required": ["state"]
+                    }
+                ]
+            }),
+        ),
+        (
+            "plain",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+    ]);
+    let surface = NativeToolSurface::builder("constrained-union")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .group("states", |group| {
+            group
+                .selector("operation")
+                .member("states", "shape.states")
+                .member("plain", "shape.plain");
+        })
+        .build(&constrained_union, McpProtocolTarget::V2025_11_25)?;
+    let member_union = &surface.snapshot().tools()[0]
+        .output_schema
+        .as_ref()
+        .unwrap()["oneOf"][0];
+    assert_eq!(
+        member_union["properties"]["operation"],
+        json!({ "type": "string", "const": "states" })
+    );
+    assert!(
+        member_union["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("operation"))
+    );
+    assert_eq!(
+        member_union["oneOf"][0]["properties"]["operation"],
+        json!({ "type": "string", "const": "states" })
+    );
 
     let conflicting = shape_registry(&[
         (
