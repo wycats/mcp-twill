@@ -1291,11 +1291,7 @@ fn native_framework_outcome(
         .map(|(plan, facts)| (Some(plan), Some(facts)))
         .unwrap_or((None, None));
     let envelope = ResponseEnvelope::framework_error(error, None, plan);
-    let value = envelope
-        .error
-        .as_ref()
-        .and_then(|error| serde_json::to_value(error).ok())
-        .unwrap_or_else(|| json!({ "code": "handler_failed", "message": "framework failure" }));
+    let value = native_framework_error_value(envelope.error.as_ref());
     NativeRunOutcome {
         result: native_result(value, true, Vec::new()),
         envelope,
@@ -1309,11 +1305,7 @@ fn native_framework_outcome_for_operation(
 ) -> NativeRunOutcome {
     let envelope =
         ResponseEnvelope::framework_error_for_operation(error, &operation.id, &operation.path);
-    let value = envelope
-        .error
-        .as_ref()
-        .and_then(|error| serde_json::to_value(error).ok())
-        .unwrap_or_else(|| json!({ "code": "handler_failed", "message": "framework failure" }));
+    let value = native_framework_error_value(envelope.error.as_ref());
     NativeRunOutcome {
         result: native_result(value, true, Vec::new()),
         envelope,
@@ -1323,6 +1315,35 @@ fn native_framework_outcome_for_operation(
             effect: operation.effect.clone(),
         }),
     }
+}
+
+fn native_framework_error_value(error: Option<&crate::ErrorBody>) -> Value {
+    let Some(error) = error else {
+        return json!({ "code": "handler_failed", "message": "framework failure" });
+    };
+    let mut error = error.clone();
+    let recovery_field = match &error.code {
+        crate::ErrorCode::CapabilityMissing => {
+            error.message = "Required capability proof is missing".to_string();
+            Some("providers")
+        }
+        crate::ErrorCode::CapabilityDenied => {
+            error.message = "Capability proof was denied".to_string();
+            Some("providers")
+        }
+        crate::ErrorCode::ResourceRefused => {
+            error.message = "Resource reference was refused".to_string();
+            Some("recover")
+        }
+        _ => None,
+    };
+    if let Some(details) = error.details.as_object_mut()
+        && let Some(field) = recovery_field
+    {
+        details.remove(field);
+    }
+    serde_json::to_value(error)
+        .unwrap_or_else(|_| json!({ "code": "handler_failed", "message": "framework failure" }))
 }
 
 fn native_success_outcome(
@@ -2332,6 +2353,43 @@ mod tests {
                 .message
                 .contains("Missing MCP protocol version observation")
         );
+    }
+
+    #[test]
+    fn native_framework_errors_suppress_effect_lane_recovery_names() {
+        let capability = crate::ErrorBody {
+            code: crate::ErrorCode::CapabilityMissing,
+            message: "missing capability".to_string(),
+            details: json!({
+                "capability": "validated-build",
+                "carrier": "validation_token",
+                "providers": ["build validate"]
+            }),
+        };
+        let resource = crate::ErrorBody {
+            code: crate::ErrorCode::ResourceRefused,
+            message: "missing resource".to_string(),
+            details: json!({
+                "resource": "tab",
+                "recover": {
+                    "enumerate": ["tabs list"],
+                    "establish": ["tabs new"]
+                }
+            }),
+        };
+
+        let capability = native_framework_error_value(Some(&capability));
+        assert_eq!(
+            capability["message"],
+            "Required capability proof is missing"
+        );
+        assert_eq!(capability["details"]["providers"], Value::Null);
+        assert!(!capability.to_string().contains("build validate"));
+        let resource = native_framework_error_value(Some(&resource));
+        assert_eq!(resource["message"], "Resource reference was refused");
+        assert_eq!(resource["details"]["recover"], Value::Null);
+        assert!(!resource.to_string().contains("tabs list"));
+        assert!(!resource.to_string().contains("tabs new"));
     }
 
     #[test]

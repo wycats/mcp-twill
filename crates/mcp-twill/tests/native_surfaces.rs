@@ -10,14 +10,15 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use mcp_twill::{
     ApplicationOutput, ApplicationOutputResult, ApplicationResult, ApplicationResultContract,
-    ApplicationSuccess, ArgSpec, CliMcpServer, CliMcpServerConfig, CommandContext, CommandOutput,
-    CommandRegistry, CommandSpec, DynamicCommandFailure, FrameworkHelpProjection, Grant,
-    InvocationContext, InvocationOrigin, InvocationPlan, Listing, McpProtocolTarget,
-    NativeApplicationErrorDialect, NativeConfirmationBridge, NativeConfirmationBridgeError,
-    NativeConfirmationDecision, NativeConfirmationRequest, NativeConfirmationRoute,
-    NativeExposurePolicy, NativeToolSurface, OutputContract, PermissionAuthorizer,
-    PermissionDecision, PermissionEffect, PermissionSpec, Release, ResolveResource, Resource,
-    ResourceDecl, ResourceRefusal, RunMode, RunRequest, ServingSurfaceIdentity, TaskSupportSpec,
+    ApplicationSuccess, ArgSpec, CapabilityDecl, CliMcpServer, CliMcpServerConfig, CommandContext,
+    CommandExample, CommandOutput, CommandRegistry, CommandSpec, DynamicCommandFailure,
+    FrameworkHelpProjection, Grant, InvocationContext, InvocationOrigin, InvocationPlan, Listing,
+    McpProtocolTarget, NativeApplicationErrorDialect, NativeConfirmationBridge,
+    NativeConfirmationBridgeError, NativeConfirmationDecision, NativeConfirmationRequest,
+    NativeConfirmationRoute, NativeExposurePolicy, NativeToolSurface, OutputContract,
+    PermissionAuthorizer, PermissionDecision, PermissionEffect, PermissionSpec, Release,
+    ResolveResource, Resource, ResourceDecl, ResourceRefusal, RunMode, RunRequest,
+    ServingSurfaceIdentity, TaskSupportSpec,
 };
 use rmcp::{
     ClientHandler, ServiceExt,
@@ -254,6 +255,62 @@ fn application_error_registry() -> CommandRegistry {
                 )
             },
         )
+}
+
+fn native_capability_registry() -> CommandRegistry {
+    let provider = CommandSpec::new(
+        ["build", "validate"],
+        "Validate build",
+        "Validate the current build",
+    )
+    .provides("validated-build")
+    .with_output(OutputContract {
+        application: Some(object_contract(
+            json!({ "receipt": { "type": "string" } }),
+            &["receipt"],
+        )),
+        ..OutputContract::default()
+    });
+    let mut example = CommandExample::new(
+        "deploy publish --validation-token $args.validation_token",
+        "Publish a validated build",
+    );
+    example
+        .args
+        .insert("validation_token".to_string(), json!("receipt-1"));
+    let consumer = CommandSpec::new(
+        ["deploy", "publish"],
+        "Publish build",
+        "Publish a validated build",
+    )
+    .with_arg(ArgSpec::string(
+        "validation_token",
+        "Opaque validation receipt",
+    ))
+    .with_example(example)
+    .requires("validated-build")
+    .with_output(OutputContract {
+        application: Some(object_contract(
+            json!({ "published": { "type": "boolean" } }),
+            &["published"],
+        )),
+        ..OutputContract::default()
+    });
+    CommandRegistry::new("capability-native", "Native capability errors")
+        .declare_capability(
+            CapabilityDecl::new("validated-build", "Proof of build validation")
+                .carried_by("validation_token"),
+        )
+        .register_dynamic(provider, |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "receipt": "receipt-1"
+            })))
+        })
+        .register_dynamic(consumer, |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "published": true
+            })))
+        })
 }
 
 fn application_error_surface(
@@ -1244,6 +1301,30 @@ async fn native_results_preserve_large_schema_valid_payloads() -> anyhow::Result
     let structured = result.structured_content.expect("structured native result");
     assert_eq!(structured["payload"].as_str().unwrap().len(), 40 * 1024);
     assert!(structured.get("truncated").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_planning_errors_suppress_effect_lane_recovery_names() -> anyhow::Result<()> {
+    let registry = native_capability_registry();
+    let surface = NativeToolSurface::builder("capability-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("validate_build", "build.validate")
+        .direct("publish_build", "deploy.publish")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let result = call_native_tool(
+        CliMcpServer::with_surface(registry, surface)?,
+        "publish_build",
+        json!({}),
+    )
+    .await?;
+    assert_eq!(result.is_error, Some(true));
+    let text = &result.content[0].as_text().unwrap().text;
+    let error: Value = serde_json::from_str(text)?;
+    assert_eq!(error["code"], "capability_missing");
+    assert_eq!(error["details"]["providers"], Value::Null);
+    assert!(!text.contains("build validate"));
     Ok(())
 }
 
