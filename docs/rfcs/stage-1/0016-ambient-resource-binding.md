@@ -2,7 +2,7 @@
 
 # RFC 0016: Ambient Resource Binding
 
-- Status: Draft
+- Status: Accepted
 - Area: resources, ambient context, binding, planning, fingerprints, handler extraction
 - Target milestone: v0.4
 - Depends on: RFC 0009 (handler-visible workspace roots), RFC 0012 (first-class resources), RFC 0013 (conversation identity), RFC 0014 (application result contracts), RFC 0015 (native tool surfaces)

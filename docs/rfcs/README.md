@@ -53,7 +53,7 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 - [RFC 0013: Conversation Identity Request Context](stage-2/0013-conversation-identity-request-context.md)
 - [RFC 0014: Application Result Contracts](stage-1/0014-application-result-contracts.md)
 - [RFC 0015: Catalog-Derived Native Tool Surfaces](stage-1/0015-catalog-derived-native-tool-surfaces.md)
-- [RFC 0016: Ambient Resource Binding](stage-0/0016-ambient-resource-binding.md)
+- [RFC 0016: Ambient Resource Binding](stage-1/0016-ambient-resource-binding.md)
 - [RFC 0017: Schema-Constrained Arguments](stage-1/0017-schema-constrained-arguments.md)
 - [RFC 0018: Declared Invocation And Confirmation Presentation](stage-1/0018-declared-invocation-and-confirmation-presentation.md)
 - [RFC 0019: Catalog-Derived Host Adapters](stage-0/0019-catalog-derived-host-adapters.md)
