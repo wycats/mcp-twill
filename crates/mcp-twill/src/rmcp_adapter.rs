@@ -18,9 +18,10 @@ use rmcp::{
         CreateTaskResult, GetPromptRequestParams, GetPromptResult, GetTaskInfoParams,
         GetTaskPayloadResult, GetTaskResult, GetTaskResultParams, Implementation,
         ListPromptsResult, ListResourcesResult, ListTasksResult, ListToolsResult, Meta,
-        PaginatedRequestParams, ProgressNotificationParam, RawResource, ReadResourceRequestParams,
-        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, Task, TaskStatus,
-        TaskSupport, TasksCapability, Tool, ToolAnnotations, ToolExecution,
+        PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, RawResource,
+        ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
+        ServerInfo, Task, TaskStatus, TaskSupport, TasksCapability, Tool, ToolAnnotations,
+        ToolExecution,
     },
     service::RequestContext,
 };
@@ -31,9 +32,12 @@ use tokio::sync::Mutex;
 use crate::{
     ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, EventSink,
     FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InvocationContext, InvocationPlan,
-    NoopEventSink, PermissionAuthorizer, PermissionDecision, PlanFacts, ReplayRecord,
-    ResponseEnvelope, ResponseProfile, RunMode, RunRequest, RunResponse, RuntimeIdentity,
-    ToolLaneSpec,
+    McpToolSurface, NativeApplicationErrorBody, NativeApplicationErrorDialect,
+    NativeApplicationRecovery, NativeConfirmationBridge, NativeConfirmationDecision,
+    NativeConfirmationRequest, NativeConfirmationRoute, NativeToolSurface, NoopEventSink,
+    PermissionAuthorizer, PermissionDecision, PlanFacts, ReplayRecord, ResponseEnvelope,
+    ResponseProfile, RunMode, RunRequest, RunResponse, RuntimeIdentity, ServingSurfaceIdentity,
+    SurfacePresentationDefaults, TaskSupportSpec, ToolLaneSpec,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -137,16 +141,143 @@ fn progress_meta<'a>(request: Option<&'a Meta>, context: &'a Meta) -> Option<&'a
         .or_else(|| context.get_progress_token().map(|_| context))
 }
 
+fn validate_protocol_observations<'a>(
+    compiled: &str,
+    request: Option<&'a Value>,
+    transport: Option<&'a Value>,
+    negotiated: Option<&'a str>,
+) -> std::result::Result<(), rmcp::ErrorData> {
+    let request = request
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "MCP protocol version observation must be a string",
+                    None,
+                )
+            })
+        })
+        .transpose()?;
+    let transport = transport
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "MCP protocol version observation must be a string",
+                    None,
+                )
+            })
+        })
+        .transpose()?;
+
+    let mut observed = None;
+    for candidate in [request, transport, negotiated].into_iter().flatten() {
+        if observed.is_some_and(|observed| observed != candidate) {
+            return Err(rmcp::ErrorData::invalid_params(
+                "Conflicting MCP protocol version observations",
+                None,
+            ));
+        }
+        observed = Some(candidate);
+    }
+
+    let observed = observed.ok_or_else(|| {
+        rmcp::ErrorData::invalid_params("Missing MCP protocol version observation", None)
+    })?;
+    if observed != compiled {
+        return Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "MCP protocol version `{observed}` does not match compiled surface `{compiled}`"
+            ),
+            None,
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct CliMcpServer {
     registry: Arc<CommandRegistry>,
     config: CliMcpServerConfig,
+    surface: McpToolSurface,
+    native_confirmation_bridge: Option<Arc<dyn NativeConfirmationBridge>>,
     tasks: Arc<Mutex<BTreeMap<String, TaskRecord>>>,
     task_counter: Arc<AtomicU64>,
     replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
     authorizer: Arc<dyn PermissionAuthorizer>,
     events: Arc<dyn EventSink>,
     identity: Arc<RuntimeIdentity>,
+}
+
+pub struct CliMcpServerBuilder {
+    registry: CommandRegistry,
+    config: CliMcpServerConfig,
+    config_authored: bool,
+    surface: Option<McpToolSurface>,
+    authorizer: Option<Arc<dyn PermissionAuthorizer>>,
+    native_confirmation_bridge: Option<Arc<dyn NativeConfirmationBridge>>,
+    errors: Vec<FrameworkError>,
+}
+
+impl CliMcpServerBuilder {
+    fn new(registry: CommandRegistry) -> Self {
+        Self {
+            registry,
+            config: CliMcpServerConfig::default(),
+            config_authored: false,
+            surface: None,
+            authorizer: None,
+            native_confirmation_bridge: None,
+            errors: Vec::new(),
+        }
+    }
+
+    pub fn config(mut self, config: CliMcpServerConfig) -> Self {
+        if self.config_authored {
+            self.errors.push(FrameworkError::Build(
+                "MCP server assigns `config` more than once".to_string(),
+            ));
+        } else {
+            self.config_authored = true;
+            self.config = config;
+        }
+        self
+    }
+
+    pub fn surface(mut self, surface: impl Into<McpToolSurface>) -> Self {
+        if self.surface.is_some() {
+            self.errors.push(FrameworkError::Build(
+                "MCP server assigns `surface` more than once".to_string(),
+            ));
+        } else {
+            self.surface = Some(surface.into());
+        }
+        self
+    }
+
+    pub fn authorizer(mut self, authorizer: Arc<dyn PermissionAuthorizer>) -> Self {
+        if self.authorizer.is_some() {
+            self.errors.push(FrameworkError::Build(
+                "MCP server assigns `authorizer` more than once".to_string(),
+            ));
+        } else {
+            self.authorizer = Some(authorizer);
+        }
+        self
+    }
+
+    pub fn native_confirmation_bridge(mut self, bridge: Arc<dyn NativeConfirmationBridge>) -> Self {
+        if self.native_confirmation_bridge.is_some() {
+            self.errors.push(FrameworkError::Build(
+                "MCP server assigns `native_confirmation_bridge` more than once".to_string(),
+            ));
+        } else {
+            self.native_confirmation_bridge = Some(bridge);
+        }
+        self
+    }
+
+    pub fn build(self) -> crate::Result<CliMcpServer> {
+        CliMcpServer::finish(self)
+    }
 }
 
 #[derive(Clone)]
@@ -162,6 +293,12 @@ struct RunOutcome {
     envelope: ResponseEnvelope,
     plan: Option<PlanFacts>,
     rendered_output: bool,
+}
+
+struct NativeRunOutcome {
+    result: CallToolResult,
+    envelope: ResponseEnvelope,
+    plan: Option<PlanFacts>,
 }
 
 impl RunOutcome {
@@ -183,14 +320,78 @@ impl RunOutcome {
 }
 
 impl CliMcpServer {
+    fn protocol_version(&self) -> &str {
+        match &self.surface {
+            McpToolSurface::EffectLanes(_) => "2025-11-25",
+            McpToolSurface::Native(surface) => surface.snapshot().protocol_version(),
+        }
+    }
+
+    fn validate_protocol(
+        &self,
+        request_meta: Option<&Meta>,
+        context: &RequestContext<RoleServer>,
+    ) -> std::result::Result<(), rmcp::ErrorData> {
+        const KEY: &str = "io.modelcontextprotocol/protocolVersion";
+        let request = request_meta.and_then(|meta| meta.0.get(KEY));
+        let transport = context.meta.0.get(KEY);
+        let negotiated = context
+            .peer
+            .peer_info()
+            .map(|info| info.protocol_version.as_str());
+        validate_protocol_observations(self.protocol_version(), request, transport, negotiated)
+    }
+
+    fn ensure_tasks_supported(&self) -> std::result::Result<(), rmcp::ErrorData> {
+        if matches!(self.surface, McpToolSurface::EffectLanes(_)) {
+            Ok(())
+        } else {
+            Err(rmcp::ErrorData::invalid_params(
+                "Task requests are unavailable on native tool surfaces",
+                None,
+            ))
+        }
+    }
+
+    pub fn builder(registry: CommandRegistry) -> CliMcpServerBuilder {
+        CliMcpServerBuilder::new(registry)
+    }
+
     pub fn new(registry: CommandRegistry) -> crate::Result<Self> {
-        Self::with_config(registry, CliMcpServerConfig::default())
+        Self::builder(registry).build()
     }
 
     pub fn with_config(
         registry: CommandRegistry,
         config: CliMcpServerConfig,
     ) -> crate::Result<Self> {
+        Self::builder(registry).config(config).build()
+    }
+
+    pub fn with_surface(
+        registry: CommandRegistry,
+        surface: impl Into<McpToolSurface>,
+    ) -> crate::Result<Self> {
+        Self::builder(registry).surface(surface).build()
+    }
+
+    pub fn with_config_and_surface(
+        registry: CommandRegistry,
+        config: CliMcpServerConfig,
+        surface: impl Into<McpToolSurface>,
+    ) -> crate::Result<Self> {
+        Self::builder(registry)
+            .config(config)
+            .surface(surface)
+            .build()
+    }
+
+    fn finish(mut builder: CliMcpServerBuilder) -> crate::Result<Self> {
+        if let Some(error) = builder.errors.into_iter().next() {
+            return Err(error);
+        }
+        let registry = builder.registry;
+        let config = builder.config;
         registry.validate_effects()?;
         registry.validate_guidance()?;
         registry.validate_types()?;
@@ -200,24 +401,77 @@ impl CliMcpServer {
         registry.validate_capabilities()?;
         registry.validate_resources()?;
         registry.validate_results()?;
-        for lane in registry.lane_specs(&config.execution_tool_name) {
-            let display_title = format!("{} execution", lane.tool_name);
-            crate::SurfacePresentationDefaults::new(
-                format!("Running {display_title}"),
-                "Confirmation required",
-                format!("Run {display_title}?"),
-            )?;
+
+        let surface = match builder.surface.take() {
+            Some(surface) => surface,
+            None => {
+                let tools = effect_lane_tools(&registry, &config)?;
+                let defaults = effect_lane_presentation_defaults(&registry, &config)?;
+                let instructions = effect_lane_instructions(&registry, &config);
+                McpToolSurface::EffectLanes(crate::native_surfaces::compile_effect_lane_surface(
+                    &registry,
+                    &tools,
+                    &instructions,
+                    &defaults,
+                )?)
+            }
+        };
+
+        let catalog_hash = registry.catalog_identity().catalog_hash;
+        if let McpToolSurface::Native(native) = &surface {
+            if native.snapshot().catalog_hash() != catalog_hash {
+                return Err(FrameworkError::Build(
+                    "native surface was compiled for a different command catalog".to_string(),
+                ));
+            }
+            if native
+                .snapshot()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation.spec().task_support, TaskSupportSpec::Required))
+            {
+                return Err(FrameworkError::Build(
+                    "native ordinary delivery cannot serve required task support".to_string(),
+                ));
+            }
+            match (
+                native.confirmation_route(),
+                builder.native_confirmation_bridge.is_some(),
+            ) {
+                (NativeConfirmationRoute::Bridge, false) => {
+                    return Err(FrameworkError::Build(
+                        "native bridge confirmation route requires a bridge".to_string(),
+                    ));
+                }
+                (NativeConfirmationRoute::Unavailable, true) => {
+                    return Err(FrameworkError::Build(
+                        "native unavailable confirmation route rejects a bridge".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        } else if builder.native_confirmation_bridge.is_some() {
+            return Err(FrameworkError::Build(
+                "effect-lane surfaces reject a native confirmation bridge".to_string(),
+            ));
         }
+
+        let surface_identity = surface_identity(&surface)?;
         let identity = registry
             .runtime_identity()
-            .with_server_version(env!("CARGO_PKG_VERSION"));
+            .with_server_version(env!("CARGO_PKG_VERSION"))
+            .with_surface(surface_identity);
         Ok(Self {
             registry: Arc::new(registry),
             config,
+            surface,
+            native_confirmation_bridge: builder.native_confirmation_bridge,
             tasks: Arc::new(Mutex::new(BTreeMap::new())),
             task_counter: Arc::new(AtomicU64::new(1)),
             replay: Arc::new(Mutex::new(BTreeMap::new())),
-            authorizer: Arc::new(DefaultPermissionAuthorizer),
+            authorizer: builder
+                .authorizer
+                .unwrap_or_else(|| Arc::new(DefaultPermissionAuthorizer)),
             events: Arc::new(NoopEventSink),
             identity: Arc::new(identity),
         })
@@ -282,48 +536,26 @@ impl CliMcpServer {
     }
 
     fn tools(&self) -> Vec<Tool> {
-        let mut tools = vec![self.help_tool()];
-        tools.extend(
-            self.execution_lanes()
-                .into_iter()
-                .map(|lane| self.execution_tool(lane)),
-        );
-        tools
-    }
-
-    fn help_tool(&self) -> Tool {
-        Tool::new(
-            "help",
-            "Return consistent help for the server or a CLI-shaped command.",
-            schema_for_type::<HelpRequest>(),
-        )
-        .annotate(
-            ToolAnnotations::new()
-                .read_only(true)
-                .destructive(false)
-                .idempotent(true)
-                .open_world(false),
-        )
-    }
-
-    fn execution_tool(&self, lane: ToolLaneSpec) -> Tool {
-        Tool::new(
-            lane.tool_name.clone(),
-            lane.description,
-            schema_for_type::<RunRequest>(),
-        )
-        .with_execution(ToolExecution::new().with_task_support(TaskSupport::Optional))
-        .annotate(annotations_for_lane(lane.lane, &lane.tool_name))
+        match &self.surface {
+            McpToolSurface::EffectLanes(surface) => surface.tools().to_vec(),
+            McpToolSurface::Native(surface) => surface.snapshot().tools().to_vec(),
+        }
     }
 
     fn resources(&self) -> Vec<RawResource> {
-        let mut resources = vec![
-            RawResource::new("cli://server/overview", "Server overview"),
+        let effect_lanes = matches!(self.surface, McpToolSurface::EffectLanes(_));
+        let mut resources = Vec::new();
+        if effect_lanes {
+            resources.push(RawResource::new("cli://server/overview", "Server overview"));
+        }
+        resources.extend([
             RawResource::new("cli://catalog", "Command catalog"),
             RawResource::new("cli://commands", "Command catalog"),
             RawResource::new("cli://permissions", "Permission model"),
-            RawResource::new("cli://lanes", "Effect-lane tools"),
-        ];
+        ]);
+        if effect_lanes {
+            resources.push(RawResource::new("cli://lanes", "Effect-lane tools"));
+        }
         resources.extend(self.registry.command_specs().map(|spec| {
             RawResource::new(
                 format!("cli://commands/{}", spec.path.join("/")),
@@ -331,6 +563,38 @@ impl CliMcpServer {
             )
         }));
         resources
+    }
+
+    fn catalog_resource_text(&self) -> Option<String> {
+        let mut catalog = serde_json::to_value(self.registry.catalog()).ok()?;
+        let active_surface = match &self.surface {
+            McpToolSurface::EffectLanes(surface) => json!({
+                "version": surface.document()["version"],
+                "protocolVersion": surface.document()["protocolVersion"],
+                "name": surface.identity().name,
+                "surfaceHash": surface.identity().hash,
+                "routes": surface.tools().iter().map(|tool| json!({
+                    "tool": tool.name,
+                })).collect::<Vec<_>>(),
+            }),
+            McpToolSurface::Native(surface) => json!({
+                "version": surface.snapshot().version(),
+                "protocolVersion": surface.snapshot().protocol_version(),
+                "name": surface.snapshot().name(),
+                "surfaceHash": surface.snapshot().surface_hash(),
+                "exposure": surface.declaration().exposure,
+                "confirmation": surface.declaration().confirmation,
+                "routes": surface.snapshot().operations().iter().map(|operation| json!({
+                    "operationId": operation.spec().id,
+                    "tool": operation.call().tool(),
+                    "arguments": operation.call().arguments(),
+                })).collect::<Vec<_>>(),
+            }),
+        };
+        catalog
+            .as_object_mut()?
+            .insert("activeSurface".to_string(), active_surface);
+        serde_json::to_string_pretty(&catalog).ok()
     }
 
     async fn execute_run_tool(
@@ -361,6 +625,204 @@ impl CliMcpServer {
             result.content.extend(links);
             result
         }
+    }
+
+    async fn execute_native_tool(
+        self,
+        tool_name: String,
+        request_meta: Option<Meta>,
+        context_meta: Meta,
+        client: Peer<RoleServer>,
+        arguments: rmcp::model::JsonObject,
+    ) -> CallToolResult {
+        let outcome = self
+            .run_native_tool_flow(tool_name, request_meta, context_meta, client, arguments)
+            .await;
+        if self.events.enabled() {
+            self.events.record(
+                FrameworkEvent::from_envelope(&outcome.envelope, outcome.plan.as_ref())
+                    .with_runtime((*self.identity).clone()),
+            );
+        }
+        outcome.result
+    }
+
+    async fn run_native_tool_flow(
+        &self,
+        tool_name: String,
+        request_meta: Option<Meta>,
+        context_meta: Meta,
+        client: Peer<RoleServer>,
+        arguments: rmcp::model::JsonObject,
+    ) -> NativeRunOutcome {
+        let surface = match &self.surface {
+            McpToolSurface::Native(surface) => surface,
+            McpToolSurface::EffectLanes(_) => {
+                return native_framework_outcome(
+                    FrameworkError::Build(
+                        "effect-lane surface entered the native execution path".to_string(),
+                    ),
+                    None,
+                );
+            }
+        };
+        let progress_meta = progress_meta(request_meta.as_ref(), &context_meta);
+        let effective_meta = effective_application_meta(request_meta.as_ref(), &context_meta);
+        let invocation_context = match invocation_context_from_meta(
+            &effective_meta,
+            self.config.conversation_identity_compatibility,
+        ) {
+            Ok(context) => context,
+            Err(error) => return native_framework_outcome(error, None),
+        };
+        let codex = match codex_sandbox_observation(
+            &effective_meta,
+            self.config.workspace_metadata_compatibility,
+        ) {
+            Ok(observation) => observation,
+            Err(error) => return native_framework_outcome(error, None),
+        };
+        let resolved = Self::resolve_workspaces_for_call(&self.registry, codex, &client).await;
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 1.0, 5.0, "Planning native invocation").await;
+        }
+        let (operation_id, selected_arguments) = match surface.resolve_call(&tool_name, arguments) {
+            Ok(call) => call,
+            Err(error) => return native_framework_outcome(error, None),
+        };
+        let identity = match surface.identity() {
+            Ok(identity) => identity,
+            Err(error) => return native_framework_outcome(error, None),
+        };
+        let plan = match self.registry.build_native_operation_plan(
+            &operation_id,
+            selected_arguments.clone(),
+            &resolved,
+            &invocation_context,
+            identity,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                if let Some(operation) = surface.snapshot().operation(&operation_id) {
+                    return native_framework_outcome_for_operation(error, operation.spec());
+                }
+                return native_framework_outcome(error, None);
+            }
+        };
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 2.0, 5.0, "Invocation plan ready").await;
+        }
+        let plan_for_event = PlanFacts::from(&plan);
+
+        if let Err(error) = self.registry.check_plan_policy(&plan) {
+            return native_framework_outcome(error, Some((plan, plan_for_event)));
+        }
+
+        match self.authorizer.decide(&plan) {
+            PermissionDecision::Allow => {}
+            PermissionDecision::Deny { reason } => {
+                return native_framework_outcome(
+                    FrameworkError::PermissionDenied {
+                        effect: effect_label(&plan.effect),
+                        scope: reason,
+                    },
+                    Some((plan, plan_for_event)),
+                );
+            }
+            PermissionDecision::RequireConfirmation => {
+                if matches!(
+                    surface.confirmation_route(),
+                    NativeConfirmationRoute::Unavailable
+                ) {
+                    return native_framework_outcome(
+                        FrameworkError::ConfirmationUnavailable {
+                            operation_id: plan.operation_id.clone(),
+                        },
+                        Some((plan, plan_for_event)),
+                    );
+                }
+                let Some(defaults) = surface.presentation_defaults(&operation_id) else {
+                    return native_framework_outcome(
+                        FrameworkError::Build(format!(
+                            "native surface has no presentation defaults for `{operation_id}`"
+                        )),
+                        Some((plan, plan_for_event)),
+                    );
+                };
+                let confirmation = match self.registry.prepare_native_confirmation(&plan, defaults)
+                {
+                    Ok(confirmation) => confirmation,
+                    Err(error) => {
+                        return native_framework_outcome(error, Some((plan, plan_for_event)));
+                    }
+                };
+                let preview = crate::response::permission_preview(&plan, true, Some(confirmation));
+                let bridge_request = NativeConfirmationRequest::new(
+                    preview,
+                    selected_arguments
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect(),
+                    plan.invocation_fingerprint.clone(),
+                );
+                let bridge = self
+                    .native_confirmation_bridge
+                    .as_ref()
+                    .expect("bridge route was validated at server construction");
+                if let Some(meta) = progress_meta {
+                    Self::notify_progress(meta, &client, 3.0, 5.0, "Confirmation required").await;
+                }
+                match bridge.confirm(bridge_request).await {
+                    Ok(NativeConfirmationDecision::Allow) => {}
+                    Ok(NativeConfirmationDecision::Deny) => {
+                        return native_framework_outcome(
+                            FrameworkError::PermissionDenied {
+                                effect: effect_label(&plan.effect),
+                                scope: "native confirmation denied".to_string(),
+                            },
+                            Some((plan, plan_for_event)),
+                        );
+                    }
+                    Ok(NativeConfirmationDecision::Canceled) => {
+                        return native_framework_outcome(
+                            FrameworkError::ConfirmationCanceled {
+                                operation_id: plan.operation_id.clone(),
+                            },
+                            Some((plan, plan_for_event)),
+                        );
+                    }
+                    Err(_) => {
+                        return native_framework_outcome(
+                            FrameworkError::ConfirmationFailed {
+                                operation_id: plan.operation_id.clone(),
+                            },
+                            Some((plan, plan_for_event)),
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 4.0, 5.0, "Dispatching command handler").await;
+        }
+        let outcome = match self
+            .registry
+            .dispatch_operation_plan(selected_arguments, plan.clone(), &invocation_context)
+            .await
+        {
+            Ok(crate::CommandExecutionOutcome::Success(response)) => {
+                native_success_outcome(self, surface, &operation_id, response, plan_for_event)
+            }
+            Ok(crate::CommandExecutionOutcome::ApplicationError { plan, error }) => {
+                native_application_error_outcome(surface, plan, error, plan_for_event)
+            }
+            Err(error) => native_framework_outcome(error, Some((plan, plan_for_event))),
+        };
+        if let Some(meta) = progress_meta {
+            Self::notify_progress(meta, &client, 5.0, 5.0, "Command complete").await;
+        }
+        outcome
     }
 
     /// Grants and listings become `resource_link` content parts, but only
@@ -436,10 +898,26 @@ impl CliMcpServer {
         if let Some(meta) = progress_meta {
             Self::notify_progress(meta, &client, 1.0, 4.0, "Parsing command template").await;
         }
-        let mut plan = match registry.build_plan_with_workspaces_and_context(
+        let effect_surface = match &self.surface {
+            McpToolSurface::EffectLanes(surface) => surface,
+            McpToolSurface::Native(_) => {
+                return RunOutcome::envelope(
+                    ResponseEnvelope::framework_error(
+                        FrameworkError::Build(
+                            "native surface entered the effect-lane execution path".to_string(),
+                        ),
+                        Some(request),
+                        None,
+                    ),
+                    None,
+                );
+            }
+        };
+        let mut plan = match registry.build_effect_lane_plan(
             &request,
             &resolved,
             &invocation_context,
+            effect_surface.identity(),
         ) {
             Ok(plan) => plan,
             Err(error) => {
@@ -707,40 +1185,322 @@ impl CliMcpServer {
     }
 }
 
+fn effect_lane_help_tool() -> Tool {
+    Tool::new(
+        "help",
+        "Return consistent help for the server or a CLI-shaped command.",
+        schema_for_type::<HelpRequest>(),
+    )
+    .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden))
+    .annotate(
+        ToolAnnotations::new()
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    )
+}
+
+fn effect_lane_tools(
+    registry: &CommandRegistry,
+    config: &CliMcpServerConfig,
+) -> crate::Result<Vec<Tool>> {
+    let mut tools = vec![effect_lane_help_tool()];
+    for lane in registry.lane_specs(&config.execution_tool_name) {
+        let support = registry.lane_task_support(lane.lane, &config.execution_tool_name)?;
+        tools.push(
+            Tool::new(
+                lane.tool_name.clone(),
+                lane.description,
+                schema_for_type::<RunRequest>(),
+            )
+            .with_execution(ToolExecution::new().with_task_support(rmcp_task_support(&support)))
+            .annotate(annotations_for_lane(lane.lane, &lane.tool_name)),
+        );
+    }
+    Ok(tools)
+}
+
+fn effect_lane_presentation_defaults(
+    registry: &CommandRegistry,
+    config: &CliMcpServerConfig,
+) -> crate::Result<BTreeMap<String, SurfacePresentationDefaults>> {
+    registry
+        .lane_specs(&config.execution_tool_name)
+        .into_iter()
+        .map(|lane| {
+            let display_title = format!("{} execution", lane.tool_name);
+            Ok((
+                lane.tool_name,
+                SurfacePresentationDefaults::new(
+                    format!("Running {display_title}"),
+                    "Confirmation required",
+                    format!("Run {display_title}?"),
+                )?,
+            ))
+        })
+        .collect()
+}
+
+fn effect_lane_instructions(registry: &CommandRegistry, config: &CliMcpServerConfig) -> String {
+    let mut instructions = String::new();
+    if let Some(preamble) = registry.preamble() {
+        instructions.push_str(preamble);
+        instructions.push_str("\n\n");
+    }
+    instructions.push_str(&format!(
+        "Use `help` to discover command templates. Start execution with `{}`; the framework returns structured retry data when another effect-lane tool is required. Command strings are typed templates, not shell programs.",
+        config.execution_tool_name
+    ));
+    instructions
+}
+
+fn surface_identity(surface: &McpToolSurface) -> crate::Result<ServingSurfaceIdentity> {
+    match surface {
+        McpToolSurface::EffectLanes(surface) => Ok(surface.identity().clone()),
+        McpToolSurface::Native(surface) => surface.identity(),
+    }
+}
+
+fn rmcp_task_support(support: &TaskSupportSpec) -> TaskSupport {
+    match support {
+        TaskSupportSpec::Forbidden => TaskSupport::Forbidden,
+        TaskSupportSpec::Optional => TaskSupport::Optional,
+        TaskSupportSpec::Required => TaskSupport::Required,
+    }
+}
+
+fn native_result(value: Value, is_error: bool, mut extra: Vec<Content>) -> CallToolResult {
+    let text = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
+    let mut content = vec![Content::text(text)];
+    content.append(&mut extra);
+    if is_error {
+        CallToolResult::error(content)
+    } else {
+        let mut result = CallToolResult::structured(value);
+        result.content = content;
+        result
+    }
+}
+
+fn native_framework_outcome(
+    error: FrameworkError,
+    planned: Option<(InvocationPlan, PlanFacts)>,
+) -> NativeRunOutcome {
+    let (plan, plan_facts) = planned
+        .map(|(plan, facts)| (Some(plan), Some(facts)))
+        .unwrap_or((None, None));
+    let envelope = ResponseEnvelope::framework_error(error, None, plan);
+    let value = native_framework_error_value(envelope.error.as_ref());
+    NativeRunOutcome {
+        result: native_result(value, true, Vec::new()),
+        envelope,
+        plan: plan_facts,
+    }
+}
+
+fn native_framework_outcome_for_operation(
+    error: FrameworkError,
+    operation: &crate::OperationSpec,
+) -> NativeRunOutcome {
+    let envelope =
+        ResponseEnvelope::framework_error_for_operation(error, &operation.id, &operation.path);
+    let value = native_framework_error_value(envelope.error.as_ref());
+    NativeRunOutcome {
+        result: native_result(value, true, Vec::new()),
+        envelope,
+        plan: Some(PlanFacts {
+            operation_id: operation.id.clone(),
+            command_path: operation.path.clone(),
+            effect: operation.effect.clone(),
+        }),
+    }
+}
+
+fn native_framework_error_value(error: Option<&crate::ErrorBody>) -> Value {
+    let Some(error) = error else {
+        return json!({ "code": "handler_failed", "message": "framework failure" });
+    };
+    let mut error = error.clone();
+    let recovery_field = match &error.code {
+        crate::ErrorCode::CapabilityMissing => {
+            error.message = "Required capability proof is missing".to_string();
+            Some("providers")
+        }
+        crate::ErrorCode::CapabilityDenied => {
+            error.message = "Capability proof was denied".to_string();
+            Some("providers")
+        }
+        crate::ErrorCode::ResourceRefused => {
+            error.message = "Resource reference was refused".to_string();
+            Some("recover")
+        }
+        _ => None,
+    };
+    if let Some(details) = error.details.as_object_mut()
+        && let Some(field) = recovery_field
+    {
+        details.remove(field);
+    }
+    serde_json::to_value(error)
+        .unwrap_or_else(|_| json!({ "code": "handler_failed", "message": "framework failure" }))
+}
+
+fn native_success_outcome(
+    server: &CliMcpServer,
+    surface: &NativeToolSurface,
+    operation_id: &str,
+    response: RunResponse,
+    plan: PlanFacts,
+) -> NativeRunOutcome {
+    let mut value = response
+        .output
+        .as_ref()
+        .and_then(|output| output.structured.clone())
+        .unwrap_or_else(|| json!({}));
+    if let Some(arguments) = surface
+        .snapshot()
+        .operation(operation_id)
+        .and_then(|operation| operation.call().arguments())
+        && let Err(error) = inject_native_call_arguments(&mut value, arguments)
+    {
+        return native_framework_outcome(error, Some((response.plan.clone(), plan)));
+    }
+    let envelope = ResponseEnvelope::success(response, ResponseProfile::CompactStructured);
+    let links = server.resource_links(&envelope);
+    NativeRunOutcome {
+        result: native_result(value, false, links),
+        envelope,
+        plan: Some(plan),
+    }
+}
+
+fn inject_native_call_arguments(
+    value: &mut Value,
+    arguments: &BTreeMap<String, Value>,
+) -> crate::Result<()> {
+    let object = value
+        .as_object_mut()
+        .ok_or(FrameworkError::ResultContractViolation {
+            boundary: crate::ResultContractBoundary::Success,
+            reason: crate::ResultContractReason::SchemaMismatch,
+        })?;
+    for (name, selected) in arguments {
+        object.insert(name.clone(), selected.clone());
+    }
+    Ok(())
+}
+
+fn native_application_error_outcome(
+    surface: &NativeToolSurface,
+    plan: InvocationPlan,
+    error: crate::ApplicationErrorBody,
+    plan_facts: PlanFacts,
+) -> NativeRunOutcome {
+    let value = match surface.declaration().application_errors {
+        NativeApplicationErrorDialect::Canonical => {
+            let recoveries = error
+                .recoveries
+                .iter()
+                .filter_map(|recovery| match recovery {
+                    crate::ApplicationRecovery::Operation { operation_id } => surface
+                        .snapshot()
+                        .operation(operation_id)
+                        .map(|operation| NativeApplicationRecovery::Tool {
+                            tool: operation.call().tool().to_string(),
+                            arguments: operation.call().arguments().cloned().unwrap_or_default(),
+                        }),
+                    crate::ApplicationRecovery::Action { code, summary } => {
+                        Some(NativeApplicationRecovery::Action {
+                            code: code.clone(),
+                            summary: summary.clone(),
+                        })
+                    }
+                })
+                .collect();
+            serde_json::to_value(NativeApplicationErrorBody {
+                code: error.code.clone(),
+                message: error.message.clone(),
+                details: error.details.clone(),
+                recoveries,
+            })
+            .unwrap_or_else(|_| json!({}))
+        }
+        NativeApplicationErrorDialect::FlatSingleRecovery => {
+            let recovery = error
+                .recoveries
+                .first()
+                .and_then(|recovery| match recovery {
+                    crate::ApplicationRecovery::Operation { operation_id } => surface
+                        .snapshot()
+                        .operation(operation_id)
+                        .map(|operation| operation.call().tool().to_string()),
+                    crate::ApplicationRecovery::Action { code, .. } => Some(code.clone()),
+                });
+            serde_json::to_value(crate::FlatNativeApplicationErrorBody {
+                code: error.code.clone(),
+                message: error.message.clone(),
+                recovery,
+            })
+            .unwrap_or_else(|_| json!({}))
+        }
+    };
+    let envelope =
+        ResponseEnvelope::application_error(plan, error, ResponseProfile::CompactStructured);
+    NativeRunOutcome {
+        result: native_result(value, true, Vec::new()),
+        envelope,
+        plan: Some(plan_facts),
+    }
+}
+
 impl ServerHandler for CliMcpServer {
     fn get_info(&self) -> ServerInfo {
-        let capabilities = ServerCapabilities::builder()
-            .enable_tools()
-            .enable_resources()
-            .enable_prompts()
-            .enable_tasks_with(TasksCapability::server_default())
-            .build();
+        let capabilities = if matches!(self.surface, McpToolSurface::EffectLanes(_)) {
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .enable_tasks_with(TasksCapability::server_default())
+                .build()
+        } else {
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build()
+        };
         let mut implementation =
             Implementation::new(self.registry.server_name(), env!("CARGO_PKG_VERSION"));
         implementation.title = Some("MCP Twill".to_string());
         implementation.description = Some(self.registry.server_description().to_string());
 
+        let (instructions, protocol_version) = match &self.surface {
+            McpToolSurface::EffectLanes(surface) => (
+                surface.instructions().to_string(),
+                ProtocolVersion::V_2025_11_25,
+            ),
+            McpToolSurface::Native(surface) => (
+                surface.snapshot().server_instructions().to_string(),
+                serde_json::from_value(json!(surface.snapshot().protocol_version()))
+                    .expect("compiled protocol target is a protocol version"),
+            ),
+        };
         ServerInfo::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions({
-                let mut instructions = String::new();
-                if let Some(preamble) = self.registry.preamble() {
-                    instructions.push_str(preamble);
-                    instructions.push_str("\n\n");
-                }
-                instructions.push_str(&format!(
-                    "Use `help` to discover command templates. Start execution with `{}`; the framework returns structured retry data when another effect-lane tool is required. Command strings are typed templates, not shell programs.",
-                    self.config.execution_tool_name
-                ));
-                instructions
-            })
+            .with_protocol_version(protocol_version)
+            .with_instructions(instructions)
     }
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, rmcp::ErrorData> {
+        self.validate_protocol(
+            request.as_ref().and_then(|request| request.meta.as_ref()),
+            &context,
+        )?;
         Ok(ListToolsResult::with_all_items(self.tools()))
     }
 
@@ -753,42 +1513,95 @@ impl ServerHandler for CliMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
+        self.validate_protocol(request.meta.as_ref(), &context)?;
         let tool_name = request.name.to_string();
-        if tool_name == "help" {
+        let is_help = match &self.surface {
+            McpToolSurface::EffectLanes(_) => tool_name == "help",
+            McpToolSurface::Native(surface) => matches!(
+                &surface.declaration().framework_help,
+                crate::FrameworkHelpProjection::Tool { name } if name == &tool_name
+            ),
+        };
+        if is_help {
             let help_request = Self::parse_arguments::<HelpRequest>(request.arguments)?;
-            return Ok(help_result(self.registry.help(help_request)));
+            let help = match &self.surface {
+                McpToolSurface::EffectLanes(_) => self.registry.help(help_request),
+                McpToolSurface::Native(surface) => surface.help(help_request),
+            };
+            return Ok(help_result(help));
         }
 
-        if self
-            .registry
-            .tool_lane(&self.config.execution_tool_name, &tool_name)
-            .is_none()
-        {
-            return Err(rmcp::ErrorData::invalid_params(
-                format!("Unknown tool {tool_name}"),
-                None,
-            ));
+        match &self.surface {
+            McpToolSurface::EffectLanes(_) => {
+                let Some(lane) = self
+                    .registry
+                    .tool_lane(&self.config.execution_tool_name, &tool_name)
+                else {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        format!("Unknown tool {tool_name}"),
+                        None,
+                    ));
+                };
+                let task_support = self
+                    .registry
+                    .lane_task_support(lane, &self.config.execution_tool_name)
+                    .map_err(|_| {
+                        rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
+                    })?;
+                if matches!(task_support, TaskSupportSpec::Required) {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        format!("Tool {tool_name} requires task-augmented execution"),
+                        None,
+                    ));
+                }
+                let request_meta = request.meta.clone();
+                let run_request = self.parse_run_request(request.arguments)?;
+                Ok(self
+                    .clone()
+                    .execute_run_tool(
+                        tool_name,
+                        request_meta,
+                        context.meta.clone(),
+                        context.peer.clone(),
+                        run_request,
+                    )
+                    .await)
+            }
+            McpToolSurface::Native(surface) => {
+                if surface
+                    .snapshot()
+                    .tools()
+                    .iter()
+                    .all(|tool| tool.name != tool_name)
+                {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        format!("Unknown tool {tool_name}"),
+                        None,
+                    ));
+                }
+                Ok(self
+                    .clone()
+                    .execute_native_tool(
+                        tool_name,
+                        request.meta.clone(),
+                        context.meta.clone(),
+                        context.peer.clone(),
+                        request.arguments.unwrap_or_default(),
+                    )
+                    .await)
+            }
         }
-
-        let request_meta = request.meta.clone();
-        let run_request = self.parse_run_request(request.arguments)?;
-        Ok(self
-            .clone()
-            .execute_run_tool(
-                tool_name,
-                request_meta,
-                context.meta.clone(),
-                context.peer.clone(),
-                run_request,
-            )
-            .await)
     }
 
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListResourcesResult, rmcp::ErrorData> {
+        self.validate_protocol(
+            request.as_ref().and_then(|request| request.meta.as_ref()),
+            &context,
+        )?;
         Ok(ListResourcesResult::with_all_items(
             self.resources()
                 .into_iter()
@@ -800,8 +1613,9 @@ impl ServerHandler for CliMcpServer {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<ReadResourceResult, rmcp::ErrorData> {
+        self.validate_protocol(request.meta.as_ref(), &context)?;
         if let Some((decl, id)) = self.registry.match_resource_uri(&request.uri) {
             let name = decl.name.clone();
             let reader = self.registry.resource_reader(&name).ok_or_else(|| {
@@ -821,8 +1635,27 @@ impl ServerHandler for CliMcpServer {
                 ResourceContents::text(text, request.uri).with_mime_type("application/json"),
             ]));
         }
-        let text = if request.uri == "cli://lanes" {
-            lanes_text(&self.execution_lanes())
+        let text = if request.uri == "cli://lanes" || request.uri == "cli://server/overview" {
+            if !matches!(self.surface, McpToolSurface::EffectLanes(_)) {
+                return Err(rmcp::ErrorData::invalid_params(
+                    format!("Unknown resource {}", request.uri),
+                    None,
+                ));
+            }
+            if request.uri == "cli://lanes" {
+                lanes_text(&self.execution_lanes())
+            } else {
+                self.registry.resource_text(&request.uri).ok_or_else(|| {
+                    rmcp::ErrorData::invalid_params(
+                        format!("Unknown resource {}", request.uri),
+                        None,
+                    )
+                })?
+            }
+        } else if request.uri == "cli://catalog" {
+            self.catalog_resource_text().ok_or_else(|| {
+                rmcp::ErrorData::internal_error("Cannot serialize active catalog", None)
+            })?
         } else {
             self.registry.resource_text(&request.uri).ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(format!("Unknown resource {}", request.uri), None)
@@ -835,9 +1668,13 @@ impl ServerHandler for CliMcpServer {
 
     async fn list_prompts(
         &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListPromptsResult, rmcp::ErrorData> {
+        self.validate_protocol(
+            request.as_ref().and_then(|request| request.meta.as_ref()),
+            &context,
+        )?;
         Ok(ListPromptsResult::with_all_items(vec![
             rmcp::model::Prompt::new("getting_started", Some("How to use MCP Twill"), None),
         ]))
@@ -846,46 +1683,62 @@ impl ServerHandler for CliMcpServer {
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetPromptResult, rmcp::ErrorData> {
+        self.validate_protocol(request.meta.as_ref(), &context)?;
         if request.name != "getting_started" {
             return Err(rmcp::ErrorData::invalid_params(
                 format!("Unknown prompt {}", request.name),
                 None,
             ));
         }
-        let mut text = String::new();
-        if let Some(preamble) = self.registry.preamble() {
-            text.push_str(preamble);
-            text.push_str("\n\n");
-        }
-        text.push_str(&format!(
-            "First call `help` with no command. Then call `help` for a command. Start execution with `{}` and use escalated lane tools only when a structured response asks for one. Use typed `$args.*` values; do not use shell syntax in the command string.",
-            self.config.execution_tool_name
-        ));
-        let guidance = self.registry.guidance();
-        if !guidance.is_empty() {
-            text.push_str("\n\nGuidance:");
-            for entry in guidance {
-                match entry.kind {
-                    crate::GuidanceKind::RunCommand => {
-                        text.push_str(&format!("\n- `{}` ({})", entry.text, entry.surface));
-                    }
-                    crate::GuidanceKind::HumanAction => {
-                        text.push_str(&format!(
-                            "\n- (human action) {} ({})",
-                            entry.text, entry.surface
-                        ));
-                    }
-                    crate::GuidanceKind::ExternalShell => {
-                        text.push_str(&format!(
-                            "\n- (external shell, not a framework command) `{}` ({})",
-                            entry.text, entry.surface
-                        ));
+        let text = match &self.surface {
+            McpToolSurface::Native(surface) => {
+                let mut text = surface.snapshot().server_instructions().to_string();
+                text.push_str("\n\nCall the named MCP tools directly.");
+                if let crate::FrameworkHelpProjection::Tool { name } =
+                    &surface.declaration().framework_help
+                {
+                    text.push_str(&format!(" Use `{name}` for surface-filtered catalog help."));
+                }
+                text
+            }
+            McpToolSurface::EffectLanes(_) => {
+                let mut text = String::new();
+                if let Some(preamble) = self.registry.preamble() {
+                    text.push_str(preamble);
+                    text.push_str("\n\n");
+                }
+                text.push_str(&format!(
+                    "First call `help` with no command. Then call `help` for a command. Start execution with `{}` and use escalated lane tools only when a structured response asks for one. Use typed `$args.*` values; do not use shell syntax in the command string.",
+                    self.config.execution_tool_name
+                ));
+                let guidance = self.registry.guidance();
+                if !guidance.is_empty() {
+                    text.push_str("\n\nGuidance:");
+                    for entry in guidance {
+                        match entry.kind {
+                            crate::GuidanceKind::RunCommand => {
+                                text.push_str(&format!("\n- `{}` ({})", entry.text, entry.surface));
+                            }
+                            crate::GuidanceKind::HumanAction => {
+                                text.push_str(&format!(
+                                    "\n- (human action) {} ({})",
+                                    entry.text, entry.surface
+                                ));
+                            }
+                            crate::GuidanceKind::ExternalShell => {
+                                text.push_str(&format!(
+                                    "\n- (external shell, not a framework command) `{}` ({})",
+                                    entry.text, entry.surface
+                                ));
+                            }
+                        }
                     }
                 }
+                text
             }
-        }
+        };
         Ok(GetPromptResult::new(vec![
             rmcp::model::PromptMessage::new_text(rmcp::model::PromptMessageRole::User, text),
         ]))
@@ -896,14 +1749,27 @@ impl ServerHandler for CliMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<CreateTaskResult, rmcp::ErrorData> {
+        self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let tool_name = request.name.to_string();
-        if self
+        let Some(lane) = self
             .registry
             .tool_lane(&self.config.execution_tool_name, &tool_name)
-            .is_none()
-        {
+        else {
             return Err(rmcp::ErrorData::invalid_params(
                 format!("Only execution tools support task-augmented execution: {tool_name}"),
+                None,
+            ));
+        };
+        let task_support = self
+            .registry
+            .lane_task_support(lane, &self.config.execution_tool_name)
+            .map_err(|_| {
+                rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
+            })?;
+        if matches!(task_support, TaskSupportSpec::Forbidden) {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("Tool {tool_name} does not support task-augmented execution"),
                 None,
             ));
         }
@@ -961,9 +1827,14 @@ impl ServerHandler for CliMcpServer {
 
     async fn list_tasks(
         &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListTasksResult, rmcp::ErrorData> {
+        self.validate_protocol(
+            request.as_ref().and_then(|request| request.meta.as_ref()),
+            &context,
+        )?;
+        self.ensure_tasks_supported()?;
         let tasks = self.tasks.lock().await;
         Ok(ListTasksResult::new(
             tasks.values().map(|record| record.task.clone()).collect(),
@@ -973,8 +1844,10 @@ impl ServerHandler for CliMcpServer {
     async fn get_task_info(
         &self,
         request: GetTaskInfoParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetTaskResult, rmcp::ErrorData> {
+        self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let tasks = self.tasks.lock().await;
         let record = tasks.get(&request.task_id).ok_or_else(|| {
             rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
@@ -988,8 +1861,10 @@ impl ServerHandler for CliMcpServer {
     async fn get_task_result(
         &self,
         request: GetTaskResultParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetTaskPayloadResult, rmcp::ErrorData> {
+        self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let tasks = self.tasks.lock().await;
         let record = tasks.get(&request.task_id).ok_or_else(|| {
             rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
@@ -1006,8 +1881,10 @@ impl ServerHandler for CliMcpServer {
     async fn cancel_task(
         &self,
         request: CancelTaskParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> std::result::Result<CancelTaskResult, rmcp::ErrorData> {
+        self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_tasks_supported()?;
         let mut tasks = self.tasks.lock().await;
         let record = tasks.get_mut(&request.task_id).ok_or_else(|| {
             rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
@@ -1445,6 +2322,77 @@ mod tests {
     }
 
     #[test]
+    fn protocol_observations_include_the_negotiated_peer_version() {
+        let compiled = "2025-11-25";
+        let matching = json!(compiled);
+        let mismatched = json!("2026-06-30");
+        assert!(
+            validate_protocol_observations(
+                compiled,
+                Some(&matching),
+                Some(&matching),
+                Some(compiled),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_protocol_observations(compiled, Some(&mismatched), None, None)
+                .unwrap_err()
+                .message
+                .contains("does not match compiled surface")
+        );
+        assert!(
+            validate_protocol_observations(compiled, Some(&matching), None, Some("2025-06-18"),)
+                .unwrap_err()
+                .message
+                .contains("Conflicting MCP protocol version")
+        );
+        assert!(
+            validate_protocol_observations(compiled, None, None, None)
+                .unwrap_err()
+                .message
+                .contains("Missing MCP protocol version observation")
+        );
+    }
+
+    #[test]
+    fn native_framework_errors_suppress_effect_lane_recovery_names() {
+        let capability = crate::ErrorBody {
+            code: crate::ErrorCode::CapabilityMissing,
+            message: "missing capability".to_string(),
+            details: json!({
+                "capability": "validated-build",
+                "carrier": "validation_token",
+                "providers": ["build validate"]
+            }),
+        };
+        let resource = crate::ErrorBody {
+            code: crate::ErrorCode::ResourceRefused,
+            message: "missing resource".to_string(),
+            details: json!({
+                "resource": "tab",
+                "recover": {
+                    "enumerate": ["tabs list"],
+                    "establish": ["tabs new"]
+                }
+            }),
+        };
+
+        let capability = native_framework_error_value(Some(&capability));
+        assert_eq!(
+            capability["message"],
+            "Required capability proof is missing"
+        );
+        assert_eq!(capability["details"]["providers"], Value::Null);
+        assert!(!capability.to_string().contains("build validate"));
+        let resource = native_framework_error_value(Some(&resource));
+        assert_eq!(resource["message"], "Resource reference was refused");
+        assert_eq!(resource["details"]["recover"], Value::Null);
+        assert!(!resource.to_string().contains("tabs list"));
+        assert!(!resource.to_string().contains("tabs new"));
+    }
+
+    #[test]
     fn trusted_codex_workspace_metadata_is_strict_and_default_disabled() {
         let malformed = effective_application_meta(
             Some(&meta([(CODEX_SANDBOX_META_KEY, json!({"sandboxCwd": 7}))])),
@@ -1537,6 +2485,23 @@ mod tests {
         );
         let success = CallToolResult::structured(json!({ "status": "ok" }));
         assert_eq!(task_completion_message(&success), "Run command completed");
+    }
+
+    #[test]
+    fn grouped_selector_injection_rejects_non_object_results_without_panicking() {
+        let mut value = json!("invalid grouped result");
+        let error = inject_native_call_arguments(
+            &mut value,
+            &BTreeMap::from([("operation".to_string(), json!("get"))]),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            FrameworkError::ResultContractViolation {
+                boundary: crate::ResultContractBoundary::Success,
+                reason: crate::ResultContractReason::SchemaMismatch,
+            }
+        ));
     }
 
     #[tokio::test]

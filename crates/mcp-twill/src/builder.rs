@@ -423,6 +423,7 @@ pub struct CommandBuilder {
     stdin: Option<StdinContract>,
     progress: Vec<ProgressPhaseSpec>,
     idempotent: bool,
+    task_support: crate::TaskSupportSpec,
     workspaces: Vec<String>,
     optional_workspaces: Vec<String>,
     uses_conversation_identity: bool,
@@ -455,6 +456,7 @@ impl CommandBuilder {
             stdin: None,
             progress: Vec::new(),
             idempotent: false,
+            task_support: crate::TaskSupportSpec::Optional,
             workspaces: Vec::new(),
             optional_workspaces: Vec::new(),
             uses_conversation_identity: false,
@@ -529,6 +531,11 @@ impl CommandBuilder {
     /// handler actually deduplicates; the declaration is the author's promise.
     pub fn idempotent(&mut self) -> &mut Self {
         self.idempotent = true;
+        self
+    }
+
+    pub fn task_support(&mut self, support: crate::TaskSupportSpec) -> &mut Self {
+        self.task_support = support;
         self
     }
 
@@ -958,6 +965,7 @@ impl CommandBuilder {
         if self.idempotent {
             spec = spec.idempotent();
         }
+        spec = spec.task_support(self.task_support);
         for workspace in self.workspaces {
             spec = spec.uses_workspace(workspace);
         }

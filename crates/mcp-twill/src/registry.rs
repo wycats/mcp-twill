@@ -102,6 +102,15 @@ enum ResultHandlerKind {
     Dynamic,
 }
 
+struct PlanRoute {
+    referenced: BTreeSet<String>,
+    tokens: Vec<InvocationToken>,
+    origin: crate::InvocationOrigin,
+    raw_command: Option<String>,
+    surface: Option<crate::ServingSurfaceIdentity>,
+    fingerprint_surface: Value,
+}
+
 impl CommandRegistry {
     pub fn new(server_name: impl Into<String>, server_description: impl Into<String>) -> Self {
         Self {
@@ -650,6 +659,42 @@ impl CommandRegistry {
         })
     }
 
+    pub(crate) fn prepare_native_confirmation(
+        &self,
+        plan: &InvocationPlan,
+        defaults: &crate::SurfacePresentationDefaults,
+    ) -> Result<crate::PreparedConfirmation> {
+        let command = self.commands.get(&plan.command_path).ok_or_else(|| {
+            FrameworkError::Build(format!(
+                "planned command `{}` is missing from the registry",
+                plan.command_path.join(" ")
+            ))
+        })?;
+        let arguments = plan
+            .bound_args
+            .iter()
+            .map(|(name, argument)| (name.clone(), argument.value.clone()))
+            .collect();
+        command
+            .spec
+            .prepare_validated_presentation(
+                defaults,
+                &plan.operation_id,
+                &arguments,
+                crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault,
+            )
+            .confirmation
+            .ok_or_else(|| {
+                FrameworkError::Build(
+                    "native presentation did not prepare confirmation".to_string(),
+                )
+            })
+    }
+
+    pub(crate) fn check_plan_policy(&self, plan: &InvocationPlan) -> Result<()> {
+        self.policy.check(&plan.permissions)
+    }
+
     pub(crate) fn bind_effect_lane_presentation_fingerprint(
         &self,
         plan: &mut InvocationPlan,
@@ -839,6 +884,31 @@ impl CommandRegistry {
                 }
             })
             .collect()
+    }
+
+    pub(crate) fn lane_task_support(
+        &self,
+        lane: EffectLane,
+        primary_tool_name: &str,
+    ) -> Result<crate::TaskSupportSpec> {
+        let mut support = None;
+        for operation in self
+            .operation_specs()
+            .into_iter()
+            .filter(|operation| operation.lane() == lane)
+        {
+            match &support {
+                Some(existing) if existing != &operation.task_support => {
+                    return Err(FrameworkError::Build(format!(
+                        "effect lane `{}` contains mixed task support",
+                        lane.tool_name(primary_tool_name)
+                    )));
+                }
+                Some(_) => {}
+                None => support = Some(operation.task_support),
+            }
+        }
+        Ok(support.unwrap_or_default())
     }
 
     pub fn tool_lane(&self, primary_tool_name: &str, tool_name: &str) -> Option<EffectLane> {
@@ -1239,7 +1309,7 @@ impl CommandRegistry {
     /// Commands that can establish a capability from absence. Recovery
     /// paths use only this set: a refresh provider cannot run without the
     /// proof it would replace.
-    fn capability_bootstrap_providers(&self, capability: &str) -> Vec<String> {
+    pub(crate) fn capability_bootstrap_providers(&self, capability: &str) -> Vec<String> {
         self.capability_provider_specs(capability, |spec| {
             !spec.requires.iter().any(|required| required == capability)
         })
@@ -2127,6 +2197,21 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
     ) -> Result<InvocationPlan> {
+        self.build_command_plan_prepared(
+            request,
+            resolved,
+            context,
+            json!({ "kind": "bareRegistry" }),
+        )
+    }
+
+    fn build_command_plan_prepared(
+        &self,
+        request: &RunRequest,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
+        fingerprint_surface: Value,
+    ) -> Result<InvocationPlan> {
         let template = CommandTemplate::parse(&request.command)?;
         let registered =
             self.match_command(&template)
@@ -2134,6 +2219,132 @@ impl CommandRegistry {
                     command: request.command.clone(),
                     nearest: self.nearest_commands(&template.literal_prefix()),
                 })?;
+        let referenced = template
+            .placeholders()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        let tokens = template
+            .tokens
+            .iter()
+            .map(|token| match token {
+                TemplateToken::Literal(value) => InvocationToken::Literal {
+                    value: value.clone(),
+                },
+                TemplateToken::Placeholder(name) => InvocationToken::Placeholder {
+                    name: name.clone(),
+                    value: request.args.get(name).cloned().unwrap_or(Value::Null),
+                },
+            })
+            .collect();
+        self.build_plan_for_registered(
+            request,
+            resolved,
+            context,
+            registered,
+            PlanRoute {
+                referenced,
+                tokens,
+                origin: crate::InvocationOrigin::CommandTemplate,
+                raw_command: Some(request.command.clone()),
+                surface: None,
+                fingerprint_surface,
+            },
+        )
+    }
+
+    pub(crate) fn build_effect_lane_plan(
+        &self,
+        request: &RunRequest,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
+        surface: &crate::ServingSurfaceIdentity,
+    ) -> Result<InvocationPlan> {
+        self.build_command_plan_prepared(
+            request,
+            resolved,
+            context,
+            json!({
+                "kind": "effectLanes",
+                "name": surface.name,
+                "hash": surface.hash,
+            }),
+        )
+    }
+
+    fn build_operation_plan_prepared(
+        &self,
+        operation_id: &str,
+        arguments: BTreeMap<String, Value>,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
+        surface: Option<crate::ServingSurfaceIdentity>,
+        fingerprint_surface: Value,
+    ) -> Result<InvocationPlan> {
+        let mut matching = self
+            .commands
+            .values()
+            .filter(|command| command.spec.path.join(".") == operation_id);
+        let registered = matching
+            .next()
+            .ok_or_else(|| FrameworkError::UnknownCommand {
+                command: operation_id.to_string(),
+                nearest: Vec::new(),
+            })?;
+        if matching.next().is_some() {
+            return Err(FrameworkError::Build(format!(
+                "ambiguous operation id `{operation_id}`"
+            )));
+        }
+        let referenced = arguments.keys().cloned().collect();
+        let request = RunRequest {
+            command: String::new(),
+            args: arguments,
+            stdin: None,
+            // Native/operation-id calls advertise the application success
+            // schema directly. Generic CLI shaping (especially the default
+            // byte cap) would replace a valid large result with a truncation
+            // object that no longer satisfies that schema.
+            output: Some(crate::OutputSpec {
+                max_bytes: None,
+                ..crate::OutputSpec::default()
+            }),
+            mode: crate::RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        };
+        self.build_plan_for_registered(
+            &request,
+            resolved,
+            context,
+            registered,
+            PlanRoute {
+                referenced,
+                tokens: Vec::new(),
+                origin: crate::InvocationOrigin::OperationId,
+                raw_command: None,
+                surface,
+                fingerprint_surface,
+            },
+        )
+    }
+
+    fn build_plan_for_registered(
+        &self,
+        request: &RunRequest,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
+        registered: &RegisteredCommand,
+        route: PlanRoute,
+    ) -> Result<InvocationPlan> {
+        let PlanRoute {
+            referenced,
+            tokens,
+            origin,
+            raw_command,
+            surface,
+            fingerprint_surface,
+        } = route;
         let operation = OperationSpec::from_command_spec(&registered.spec);
         let identity = self.catalog_identity();
 
@@ -2158,11 +2369,6 @@ impl CommandRegistry {
             _ => {}
         }
 
-        let referenced: BTreeSet<_> = template
-            .placeholders()
-            .into_iter()
-            .map(ToOwned::to_owned)
-            .collect();
         for arg_name in &referenced {
             if registered.spec.arg(arg_name).is_none() {
                 return Err(FrameworkError::UnknownArgument(arg_name.clone()));
@@ -2445,19 +2651,6 @@ impl CommandRegistry {
             }
         }
 
-        let tokens = template
-            .tokens
-            .iter()
-            .map(|token| match token {
-                TemplateToken::Literal(value) => InvocationToken::Literal {
-                    value: value.clone(),
-                },
-                TemplateToken::Placeholder(name) => InvocationToken::Placeholder {
-                    name: name.clone(),
-                    value: request.args.get(name).cloned().unwrap_or(Value::Null),
-                },
-            })
-            .collect();
         let output = request.output.clone().unwrap_or_default();
         let workspaces = self.workspaces.values().cloned().collect::<Vec<_>>();
         let workspace_roots: Vec<crate::PlanWorkspaceRoot> = resolved
@@ -2474,6 +2667,10 @@ impl CommandRegistry {
             })
         });
         let mut fingerprint_input = json!({
+            "invocation": {
+                "origin": origin,
+                "surface": fingerprint_surface,
+            },
             "normalizedCommand": {
                 "path": &registered.spec.path,
                 "tokens": &tokens,
@@ -2558,7 +2755,9 @@ impl CommandRegistry {
         Ok(InvocationPlan {
             operation_id: operation.id.clone(),
             command_path: registered.spec.path.clone(),
-            raw_command: request.command.clone(),
+            origin,
+            raw_command,
+            surface,
             catalog_hash: identity.catalog_hash,
             invocation_fingerprint,
             effect: operation.effect.clone(),
@@ -2585,6 +2784,67 @@ impl CommandRegistry {
     ) -> Result<CommandExecutionOutcome> {
         let resolved = self.resolve_context_workspaces(&context);
         self.run_with_lane_prepared(request, None, None, None, &resolved, &context)
+            .await
+    }
+
+    pub async fn run_operation_with_context(
+        &self,
+        operation_id: &str,
+        arguments: rmcp::model::JsonObject,
+        invocation: crate::InvocationContext,
+    ) -> Result<CommandExecutionOutcome> {
+        self.validate_invocation_contracts()?;
+        let resolved = self.resolve_context_workspaces(&invocation);
+        let plan = self.build_operation_plan_prepared(
+            operation_id,
+            arguments.clone().into_iter().collect(),
+            &resolved,
+            &invocation,
+            None,
+            json!({ "kind": "bareRegistry" }),
+        )?;
+        self.dispatch_operation_plan(arguments, plan, &invocation)
+            .await
+    }
+
+    pub(crate) fn build_native_operation_plan(
+        &self,
+        operation_id: &str,
+        arguments: rmcp::model::JsonObject,
+        resolved: &ResolvedWorkspaceSet,
+        context: &crate::InvocationContext,
+        surface: crate::ServingSurfaceIdentity,
+    ) -> Result<InvocationPlan> {
+        self.build_operation_plan_prepared(
+            operation_id,
+            arguments.into_iter().collect(),
+            resolved,
+            context,
+            Some(surface.clone()),
+            json!({
+                "kind": "native",
+                "name": surface.name,
+                "hash": surface.hash,
+            }),
+        )
+    }
+
+    pub(crate) async fn dispatch_operation_plan(
+        &self,
+        arguments: rmcp::model::JsonObject,
+        plan: InvocationPlan,
+        context: &crate::InvocationContext,
+    ) -> Result<CommandExecutionOutcome> {
+        let request = RunRequest {
+            command: String::new(),
+            args: arguments.into_iter().collect(),
+            stdin: None,
+            output: None,
+            mode: crate::RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        };
+        self.dispatch_prepared_plan_with_context(request, plan, context)
             .await
     }
 
@@ -2663,9 +2923,7 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
     ) -> Result<CommandExecutionOutcome> {
-        self.validate_argument_schemas()?;
-        self.validate_presentations()?;
-        self.validate_results()?;
+        self.validate_invocation_contracts()?;
         let plan = self.build_plan_prepared(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
             && plan.lane != current_lane
@@ -2680,6 +2938,12 @@ impl CommandRegistry {
 
         self.dispatch_prepared_plan_with_context(request, plan, context)
             .await
+    }
+
+    fn validate_invocation_contracts(&self) -> Result<()> {
+        self.validate_argument_schemas()?;
+        self.validate_presentations()?;
+        self.validate_results()
     }
 
     pub(crate) async fn dispatch_prepared_plan_with_context(

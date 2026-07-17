@@ -1999,7 +1999,7 @@ fn schema_is_provably_non_null(
     non_null
 }
 
-fn value_matches_schema(value: &Value, schema: &Value, root: &Value) -> bool {
+pub(crate) fn value_matches_schema(value: &Value, schema: &Value, root: &Value) -> bool {
     let Some(object) = schema.as_object() else {
         return false;
     };

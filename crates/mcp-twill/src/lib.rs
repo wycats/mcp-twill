@@ -7,6 +7,7 @@ pub mod error;
 pub mod event;
 pub mod help;
 pub mod model;
+pub mod native_surfaces;
 pub mod presentation;
 pub mod registry;
 pub mod resource;
@@ -20,7 +21,10 @@ pub mod types;
 pub use argument_schemas::*;
 pub use builder::*;
 pub use catalog::*;
-pub use contract::{ContractViolation, check_confirmation_projection, verify_catalog_coverage};
+pub use contract::{
+    ContractViolation, check_confirmation_projection, check_native_surface_projection,
+    verify_catalog_coverage,
+};
 pub use conversation_identity::{
     CONVERSATION_IDENTITY_META_KEY, ConversationIdentity, InvocationContext,
 };
@@ -31,6 +35,7 @@ pub use mcp_workspace_resolver::{
     HostWorkspaceRoot, HostWorkspaceRootError, HostWorkspaceRootsObservation,
 };
 pub use model::*;
+pub use native_surfaces::*;
 pub use presentation::*;
 pub use registry::{CommandHandler, CommandRegistry, HandlerFuture};
 pub use resource::{

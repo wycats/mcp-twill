@@ -24,6 +24,8 @@ pub struct RuntimeIdentity {
     pub run_schema_hash: String,
     pub help_schema_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<crate::ServingSurfaceIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<u32>,
@@ -42,6 +44,7 @@ impl RuntimeIdentity {
             catalog_hash: identity.catalog_hash,
             run_schema_hash: identity.run_schema_hash,
             help_schema_hash: identity.help_schema_hash,
+            surface: None,
             executable_hash: None,
             process_id: None,
             started_at_unix_ms: None,
@@ -50,6 +53,11 @@ impl RuntimeIdentity {
 
     pub fn with_server_version(mut self, version: impl Into<String>) -> Self {
         self.server_version = Some(version.into());
+        self
+    }
+
+    pub(crate) fn with_surface(mut self, surface: crate::ServingSurfaceIdentity) -> Self {
+        self.surface = Some(surface);
         self
     }
 }

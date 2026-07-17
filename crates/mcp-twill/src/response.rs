@@ -55,6 +55,9 @@ pub enum ErrorCode {
     WrongEffectLane,
     PermissionRequired,
     PermissionDenied,
+    ConfirmationUnavailable,
+    ConfirmationCanceled,
+    ConfirmationFailed,
     ApprovalInvalid,
     BuildFailed,
     HandlerFailed,
@@ -89,6 +92,9 @@ impl ErrorCode {
             | FrameworkError::InvalidPreResolvedWorkspaceSet { .. } => Self::InvalidRequestContext,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
+            FrameworkError::ConfirmationUnavailable { .. } => Self::ConfirmationUnavailable,
+            FrameworkError::ConfirmationCanceled { .. } => Self::ConfirmationCanceled,
+            FrameworkError::ConfirmationFailed { .. } => Self::ConfirmationFailed,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
             FrameworkError::WrongEffectLane { .. } => Self::WrongEffectLane,
             FrameworkError::Build(_) => Self::BuildFailed,
@@ -667,6 +673,23 @@ impl ResponseEnvelope {
         }
     }
 
+    pub(crate) fn framework_error_for_operation(
+        error: FrameworkError,
+        operation_id: &str,
+        command_path: &[String],
+    ) -> Self {
+        let mut envelope = Self::framework_error(error, None, None);
+        envelope.command = Some(command_path.to_vec());
+        if let Some(details) = envelope
+            .error
+            .as_mut()
+            .and_then(|error| error.details.as_object_mut())
+        {
+            details.insert("operation".to_string(), json!(operation_id));
+        }
+        envelope
+    }
+
     pub fn display_text(&self) -> String {
         self.display
             .as_ref()
@@ -773,7 +796,10 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
         FrameworkError::PermissionDenied { .. } => ResponseStatus::PermissionDenied,
         FrameworkError::WrongEffectLane { .. } => ResponseStatus::WrongEffectLane,
         FrameworkError::ApprovalInvalid(_) => ResponseStatus::ApprovalInvalid,
-        FrameworkError::Handler(_)
+        FrameworkError::ConfirmationUnavailable { .. }
+        | FrameworkError::ConfirmationCanceled { .. }
+        | FrameworkError::ConfirmationFailed { .. }
+        | FrameworkError::Handler(_)
         | FrameworkError::Build(_)
         | FrameworkError::ResultContractViolation { .. }
         | FrameworkError::ArgumentContractViolation { .. } => ResponseStatus::Failed,
@@ -955,6 +981,11 @@ fn error_details(error: &FrameworkError) -> Value {
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
         }
+        FrameworkError::ConfirmationUnavailable { operation_id }
+        | FrameworkError::ConfirmationCanceled { operation_id }
+        | FrameworkError::ConfirmationFailed { operation_id } => {
+            json!({ "operationId": operation_id })
+        }
         FrameworkError::ApprovalInvalid(value) => json!({ "reason": value }),
         FrameworkError::WrongEffectLane {
             current_tool,
@@ -982,7 +1013,7 @@ fn error_details(error: &FrameworkError) -> Value {
     }
 }
 
-fn permission_preview(
+pub(crate) fn permission_preview(
     plan: &InvocationPlan,
     requires_confirmation: bool,
     confirmation: Option<crate::PreparedConfirmation>,

@@ -178,6 +178,12 @@ pub enum FrameworkError {
     StdinMismatch(String),
     #[error("permission denied for `{effect}` on `{scope}`")]
     PermissionDenied { effect: String, scope: String },
+    #[error("confirmation is unavailable for operation `{operation_id}`")]
+    ConfirmationUnavailable { operation_id: String },
+    #[error("confirmation was canceled for operation `{operation_id}`")]
+    ConfirmationCanceled { operation_id: String },
+    #[error("confirmation failed for operation `{operation_id}`")]
+    ConfirmationFailed { operation_id: String },
     #[error("approval invalid: {0}")]
     ApprovalInvalid(String),
     #[error("This command requires {required_tool}.")]

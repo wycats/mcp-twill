@@ -757,6 +757,8 @@ pub struct CommandSpec {
     /// A declaration the framework trusts, like every other catalog fact.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent: bool,
+    #[serde(default, skip_serializing_if = "crate::TaskSupportSpec::is_optional")]
+    pub task_support: crate::TaskSupportSpec,
     /// Workspaces this command requires resolved, beyond those referenced
     /// by path arguments. Names must match server-declared workspaces. The
     /// resolved root is delivered to the handler through the plan; it is
@@ -826,6 +828,7 @@ impl CommandSpec {
             examples: Vec::new(),
             progress: Vec::new(),
             idempotent: false,
+            task_support: crate::TaskSupportSpec::Optional,
             workspaces: Vec::new(),
             optional_workspaces: Vec::new(),
             uses_conversation_identity: false,
@@ -875,6 +878,11 @@ impl CommandSpec {
     /// deduplication key is the plan's `invocation_fingerprint`.
     pub fn idempotent(mut self) -> Self {
         self.idempotent = true;
+        self
+    }
+
+    pub fn task_support(mut self, support: crate::TaskSupportSpec) -> Self {
+        self.task_support = support;
         self
     }
 
@@ -1105,12 +1113,93 @@ pub enum InvocationToken {
     Placeholder { name: String, value: Value },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum InvocationOrigin {
+    #[default]
+    CommandTemplate,
+    OperationId,
+}
+
+pub(crate) fn is_command_template(origin: &InvocationOrigin) -> bool {
+    matches!(origin, InvocationOrigin::CommandTemplate)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServingSurfaceIdentity {
+    pub name: String,
+    pub hash: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ServingSurfaceIdentityWire {
+    name: String,
+    hash: String,
+}
+
+impl ServingSurfaceIdentity {
+    pub fn new(name: impl Into<String>, hash: impl Into<String>) -> crate::Result<Self> {
+        let identity = Self {
+            name: name.into(),
+            hash: hash.into(),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    fn validate(&self) -> crate::Result<()> {
+        let valid_name = !self.name.is_empty()
+            && self.name.len() <= 64
+            && self.name.is_ascii()
+            && self.name.split('-').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            });
+        if !valid_name {
+            return Err(crate::FrameworkError::Build(
+                "serving surface name must be 1-64 lowercase kebab-case ASCII characters"
+                    .to_string(),
+            ));
+        }
+        if self.hash.len() != 64
+            || !self
+                .hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(crate::FrameworkError::Build(
+                "serving surface hash must be a lowercase SHA-256 digest".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl<'de> Deserialize<'de> for ServingSurfaceIdentity {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = ServingSurfaceIdentityWire::deserialize(deserializer)?;
+        Self::new(wire.name, wire.hash).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InvocationPlan {
     pub operation_id: String,
     pub command_path: Vec<String>,
-    pub raw_command: String,
+    #[serde(default, skip_serializing_if = "is_command_template")]
+    pub origin: InvocationOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<ServingSurfaceIdentity>,
     pub catalog_hash: String,
     pub invocation_fingerprint: String,
     pub effect: crate::EffectSpec,
