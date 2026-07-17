@@ -297,14 +297,34 @@ pub enum PlanResourceBindingSource {
     Absent,
 }
 
+#[serde(rename_all = "camelCase")]
 pub struct InvocationPlan {
     // ...existing fields...
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_binding_facts: Vec<PlanResourceBindingFact>,
 }
+
+#[serde(rename_all = "camelCase")]
+pub struct PermissionPreview {
+    // ...existing fields...
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_binding_facts: Vec<PlanResourceBindingFact>,
+}
+
+#[serde(rename_all = "camelCase")]
+pub struct FrameworkEvent {
+    // ...existing fields...
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_binding_facts: Vec<PlanResourceBindingFact>,
+}
+
+pub struct PlanFacts {
+    // ...existing fields...
+    pub resource_binding_facts: Vec<PlanResourceBindingFact>,
+}
 ```
 
-The active RFC 0016 native-surface preparer records one fact per resource binding it selected. Every effect-lane and bare-registry call remains argument-bound, keeps the list empty, and preserves its serialized shape. A native optional-override call records `Argument` or `Ambient`; an optional extractor with no source records `Absent`. The fact contains no reference, identity, digest, workspace value, or binder state. It participates in the invocation fingerprint alongside the private binding digest, and lets `PermissionAuthorizer`, previews, and trusted confirmation bridges distinguish authority paths without receiving private context.
+The active RFC 0016 native-surface preparer records one fact per resource binding it selected. Every effect-lane and bare-registry call remains argument-bound, keeps the lists empty, and preserves its serialized shape. A native optional-override call records `Argument` or `Ambient`; an optional extractor with no source records `Absent`. The fact contains no reference, identity, digest, workspace value, or binder state. It participates in the invocation fingerprint alongside the private binding digest, and lets `PermissionAuthorizer`, previews, trusted confirmation bridges, and events distinguish authority paths without receiving private context. `PermissionPreview` and `FrameworkEvent` copy the exact sorted facts from the prepared plan; `PlanFacts` carries that same slice into event construction without retaining the rest of the plan. The three serialized fields use the exact camel-case spelling `resourceBindingFacts`, default to empty when absent, and are omitted when empty.
 
 The redacted fact remains serialized on native plans and framework events in the initial contract. Binding source is an execution and authorization fact—an explicit override and an ambient selection may carry different human meaning—even though the selected identity/reference is private. Keeping the three-value source makes previews and audit records self-describing, parallels RFC 0015's public surface identity, and does not disclose more than active help/schema already promises about available binding modes.
 
@@ -510,11 +530,20 @@ impl ServerBuilder {
     where
         T: Resource;
 }
+
+impl CommandRegistry {
+    pub fn with_resolver_with_errors<T>(
+        self,
+        resolver: impl ResolveResourceWithErrors<T>,
+    ) -> Self
+    where
+        T: Resource;
+}
 ```
 
 `ResourceResolutionFailure::Application(error)` becomes an RFC 0014 application outcome only when the value's code belongs to the resolver footprint and the selected command declares that code, message/details contract, and selected recovery. Registration checks the code footprint against every command that can use the resolver. `Refused` preserves RFC 0012 behavior. This gives VBL a truthful path for `unknown_tab`, `tab_not_owned`, and `session_expired` without a surface rewriting generic framework failures.
 
-The additive builder entry point is `server.resolver_with_errors::<T>(resolver)`. The concrete resolver names its error type and producer footprint through associated types. A resource registers either the existing plain resolver or the typed-error resolver, never both.
+The additive ergonomic entry point is `server.resolver_with_errors::<T>(resolver)`. Its low-level equivalent is `registry.with_resolver_with_errors::<T>(resolver)`, matching RFC 0012's existing `resolver`/`with_resolver` construction pair. Both paths record the same typed resolver and producer footprint, compile to the same catalog and runtime behavior, and reject a resource that registers both the existing plain resolver and the typed-error resolver. The concrete resolver names its error type and producer footprint through associated types.
 
 Both public traits follow RFC 0012's existing return-position-future style. The public trait spells `fn -> impl Future + Send` so the `Send` contract is explicit and the crate remains clean under Rust's `async_fn_in_trait` lint. A downstream implementation may write the corresponding `async fn bind` or `async fn resolve`; Rust accepts that implementation against the RPITIT declaration, and this is the preferred warning-free authoring form when the body would otherwise return only `async move { ... }`. Implementations that return a meaningful named or composed future may retain the explicit return form. Their associated `ErrorFootprint` names the exact producer code inventory rather than requiring every command to accept every code in a broad application enum. Recovery declarations remain command-owned under RFC 0014. Registration wraps the concrete binder or resolver in a private erased adapter that boxes the future and erases the concrete types only after recording their resource and application-error footprint. The public traits do not need to be object-safe, and existing `ResolveResource<T>` implementations remain untouched.
 
@@ -529,7 +558,15 @@ RFC 0020 deferred execution moves the private prepared carrier, including its pl
 Optional extraction composes the existing resource extractor with `Option`:
 
 ```rust
+#[serde(rename_all = "camelCase")]
 pub struct CommandSpec {
+    // ...existing fields...
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_resources: Vec<String>,
+}
+
+#[serde(rename_all = "camelCase")]
+pub struct OperationSpec {
     // ...existing fields...
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub optional_resources: Vec<String>,
@@ -562,7 +599,7 @@ impl<T: Resource> ResourceParam for Option<Res<T>> {
 }
 ```
 
-The new trait methods are additive defaults, so existing `ResourceParam`/`ResourceParams` implementations remain required and source-compatible. Twill updates its single-parameter and tuple implementations to aggregate optional names while preserving the existing `ResourceUse` shape. `Option<Res<T>>` derives `optionalResources: [T::NAME]` rather than `requiresResources`; registration rejects optional release semantics and still requires a resolver. A selected argument or ambient source is resolved; refusal remains an error. Only source absence becomes `None`.
+The new trait methods are additive defaults, so existing `ResourceParam`/`ResourceParams` implementations remain required and source-compatible. Twill updates its single-parameter and tuple implementations to aggregate optional names while preserving the existing `ResourceUse` shape. `Option<Res<T>>` derives `optionalResources: [T::NAME]` rather than `requiresResources`; `OperationSpec::from_command_spec` copies that canonical set into the public operation catalog and native snapshot. Both fields default to empty on deserialization and are omitted when empty, preserving existing catalog bytes. Registration rejects optional release semantics and still requires a resolver. A selected argument or ambient source is resolved; refusal remains an error. Only source absence becomes `None`.
 
 Repeated uses in one signature deduplicate within a mode. Registration rejects the same resource appearing as both required and optional because the optional extractor could never observe absence, and rejects any optional/release combination. Authors choose one consumption mode per resource per command.
 
@@ -586,7 +623,7 @@ Binder failures are expected application failures only when their codes are decl
 - **Catalog.** Core resource edges remain catalog facts. The active surface projects binding source, explicit-carrier policy, and missing behavior.
 - **Help.** Requirements say `supplied by argument`, `supplied by host`, or `supplied by host; explicit override accepted`.
 - **Examples.** Ambient examples omit the carrier. Explicit-fallback examples appear only in help for the missing-binding recovery path.
-- **Preview.** Public preview names the resource, configured binding mode, and redacted selected source (`argument`, `ambient`, or `absent`). It never reveals the ambient identity, digest, or private reference.
+- **Preview.** The compiled surface declaration names the configured binding mode. Public preview copies the plan's resource and redacted selected source (`argument`, `ambient`, or `absent`). It never reveals the ambient identity, digest, or private reference.
 - **Events and logs.** Framework-owned events may record the same redacted selected-source enum for auditability, never the identity, digest, workspace value, reference, or resolver prose.
 - **Contracts.** `check_resource_binding_projection` verifies schema/help/example agreement, binding coverage, missing-error declarations, and non-disclosure.
 
@@ -642,18 +679,18 @@ Acceptance lives in `crates/mcp-twill/tests/ambient_resources.rs` and uses instr
 - An ordinary resolver that embeds an adversarial ambient reference in `ResourceRefusal.detail` produces redacted `AmbientResourceRefused` with only catalog-derived recovery, while the same resolver on an explicit carrier retains the existing caller-visible reference/detail diagnostic.
 - A binder infrastructure source containing adversarial text becomes redacted `HandlerFailed`; its wrapper has static `Display`/`Debug`, exposes no `Error::source`, and never reaches framework-owned logs. The binder API cannot emit a forged permission, workspace, or request-context framework error.
 - `PrivateResourceReference::from_id` accepts every RFC 0012 URI-unreserved id and rejects empty, URI-shaped, whitespace, control-bearing, slash-bearing, and non-ASCII values without retaining or displaying them. `?` converts either constructor reason into the redacted binder infrastructure path. Compile-pass fixtures exercise the exact `From<E>` bounds for binder and resolver application failures; compile-fail coverage rejects a mismatched footprint and proves application code cannot read or construct the private field directly.
-- An external crate implements `BindAmbientResource` and `ResolveResourceWithErrors` with `async fn` methods against the public `fn -> impl Future + Send` declarations and passes `cargo clippy --all-targets -- -D warnings`; the same fixture proves the returned futures may borrow both `&self` and the supplied context. The public traits themselves require no `async_fn_in_trait` allowance, and implementations need no `manual_async_fn` allowance.
+- An external crate implements `BindAmbientResource` and `ResolveResourceWithErrors` with `async fn` methods against the public `fn -> impl Future + Send` declarations and passes `cargo clippy --all-targets -- -D warnings`; the same fixture proves the returned futures may borrow both `&self` and the supplied context. The public traits themselves require no `async_fn_in_trait` allowance, and implementations need no `manual_async_fn` allowance. `ServerBuilder::resolver_with_errors` and `CommandRegistry::with_resolver_with_errors` compile the same typed resolver footprint and runtime behavior, while either path rejects coexistence with RFC 0012's plain resolver.
 - Registration checks `missing_as` against required exposed consumers only and rejects it when any such command omits the code or declares a runtime message/non-empty-required details shape that absence cannot construct. Optional-only consumers need not declare the unreachable code, and a binding with no required consumer rejects dead `missing_as` configuration. Typed binders and resolvers are rejected when commands omit any error they may emit.
 - With neither source, instrumented surface preparation proves it completed one `Absent` plan and wrong-lane execution still redirects first. On the correct lane, permission preview, dry run, and ordinary execution return the declared `session_required` outcome with that completed plan before policy, authorizer, replay consumption, or application hooks. RFC 0020 deferred delivery carries the identical application-error tool result and never creates an authority-bearing capsule. `Option<Res<Session>>` instead continues and reaches its handler as `None` on approved execution. Public bare-registry `build_plan*` remains argument-bound and never claims an ambient preparation mode.
 - The same required-absence fixture without `missing_as` returns `ResourceBindingMissing`/`InvalidInput` with only resource, `binding: "absent"`, and catalog-derived establishment operations. Ordinary, preview, dry-run, RFC 0020 deferred, generated-host, event, and framework-log projections preserve that owner and contain no identity, digest, reference, or resolver detail.
 - `Option<Res<Session>>` receives an error rather than `None` when a selected explicit or ambient source refuses resolution.
-- Existing custom `ResourceParam` and `ResourceParams` implementations remain required through the default methods; optional extraction changes no public `ResourceUse` fields or existing source behavior.
+- Existing custom `ResourceParam` and `ResourceParams` implementations remain required through the default methods; optional extraction changes no public `ResourceUse` fields or existing source behavior. `CommandSpec` and `OperationSpec` project the same canonical `optionalResources` set, and omitted/empty fields preserve pre-adoption catalog and snapshot bytes.
 - Registration rejects mixed required/optional or optional/release use of one resource in a handler signature; duplicate uses within one mode deduplicate.
 - Preview, dry run, wrong-lane routing, and denied authorization do not call the binder or create a session. Approved dispatch calls it once.
 - Instrumented preparation proves ordinary and native execution select bindings once, pass the same private carrier through authorization/confirmation, and never rebuild source state before dispatch; replay alone prepares fresh state and must match the stored fingerprint.
 - A valid single-use replay is consumed before binder realization. Binder, resolver, handler, result-contract, and transport failures do not restore it; invalid, expired, mismatched, and concurrently consumed tokens call no binder or handler. A reusable token revalidates a freshly prepared context and fingerprint on every dispatch.
 - Exact fingerprint vectors cover present/absent, explicit/ambient, different explicit references, different resource names, reordered declaration input, and different ambient identities. Canonical sorting makes declaration order irrelevant while every semantic difference produces a distinct fingerprint without serializing private binding facts.
-- Native plan, preview, authorizer, and event fixtures expose only the selected-source enum; adversarial identity/reference values never appear in those projections.
+- Native plan, preview, authorizer, and event fixtures expose the same sorted selected-source facts; their `resourceBindingFacts` fields are omitted when empty, and adversarial identity/reference values never appear in those projections. A private comparison-helper fixture deletes the preview or event copy and proves `check_resource_binding_projection` reports the mismatch without adding a public fault-injection hook.
 - An ambient binder receives selected optional workspace context when available and no raw request metadata.
 - Reordering workspace declarations, path arguments, or valid pre-resolved roots gives the binder the same ascending-id workspace slice and the same fingerprint; duplicate or unknown pre-resolved ids fail under RFC 0009 before source selection or binder invocation.
 - A VBL session binder may return its declared `workspace_context_conflict` application outcome when a valid selected root disagrees with the session's application-owned workspace binding. Malformed enabled metadata and dual raw/pre-resolved workspace authority fail as RFC 0009 `InvalidRequestContext` before the binder is called and never acquire the application code.
@@ -695,7 +732,7 @@ RFC 0012 supplies typed resource extraction and resolver-owned liveness. RFC 001
 
 ## Unresolved Questions
 
-No architectural questions remain for the initial binding boundary. The public type and method names in this body are the current Stage-0 proposal; any review-driven rename must amend the managed RFC before Stage 1, and implementation may not substitute an unreviewed API. Such a revision must retain serialized redacted source facts, private logical-slot digests/references, ordinary-resolver reuse, application-producer non-disclosure tests, and a declaration-only missing-source path.
+No architectural questions remain for the initial binding boundary. The public type and method names in this body become the accepted Stage-1 implementation contract on promotion; implementation may not substitute an unreviewed spelling. Any later review-driven rename or ergonomic change must return the RFC to design review and amend the managed body before implementation proceeds. Such a revision must retain serialized redacted source facts, private logical-slot digests/references, ordinary-resolver reuse, application-producer non-disclosure tests, and a declaration-only missing-source path.
 
 ## Future Possibilities
 
