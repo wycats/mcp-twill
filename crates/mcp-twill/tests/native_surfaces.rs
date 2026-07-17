@@ -561,7 +561,31 @@ fn adapter_finalization_rejects_stale_surfaces_and_sidecar_mismatches() -> anyho
         Err(error) => error,
     };
     assert!(error.to_string().contains("rejects a bridge"));
+
+    let required_registry = item_registry(TaskSupportSpec::Required);
+    let required_surface =
+        grouped_surface(&required_registry, NativeConfirmationRoute::Unavailable)?;
+    let required = match CliMcpServer::with_surface(required_registry, required_surface) {
+        Ok(_) => anyhow::bail!("expected ordinary delivery to reject required task support"),
+        Err(error) => error,
+    };
+    assert!(
+        required
+            .to_string()
+            .contains("ordinary delivery cannot serve required task support")
+    );
     Ok(())
+}
+
+#[test]
+fn confirmation_bridge_errors_never_expose_their_source() {
+    let error = NativeConfirmationBridgeError::new(std::io::Error::other("private bridge secret"));
+    assert!(std::error::Error::source(&error).is_none());
+    assert_eq!(error.to_string(), "native confirmation bridge failed");
+    assert_eq!(
+        format!("{error:?}"),
+        "NativeConfirmationBridgeError(<redacted>)"
+    );
 }
 
 #[tokio::test]

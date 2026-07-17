@@ -396,6 +396,16 @@ impl CliMcpServer {
                     "native surface was compiled for a different command catalog".to_string(),
                 ));
             }
+            if native
+                .snapshot()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation.spec().task_support, TaskSupportSpec::Required))
+            {
+                return Err(FrameworkError::Build(
+                    "native ordinary delivery cannot serve required task support".to_string(),
+                ));
+            }
             match (
                 native.confirmation_route(),
                 builder.native_confirmation_bridge.is_some(),
@@ -1255,13 +1265,9 @@ fn native_success_outcome(
         .snapshot()
         .operation(operation_id)
         .and_then(|operation| operation.call().arguments())
+        && let Err(error) = inject_native_call_arguments(&mut value, arguments)
     {
-        let object = value
-            .as_object_mut()
-            .expect("native surface compilation requires object results");
-        for (name, selected) in arguments {
-            object.insert(name.clone(), selected.clone());
-        }
+        return native_framework_outcome(error, Some((response.plan.clone(), plan)));
     }
     let envelope = ResponseEnvelope::success(response, ResponseProfile::CompactStructured);
     let links = server.resource_links(&envelope);
@@ -1270,6 +1276,22 @@ fn native_success_outcome(
         envelope,
         plan: Some(plan),
     }
+}
+
+fn inject_native_call_arguments(
+    value: &mut Value,
+    arguments: &BTreeMap<String, Value>,
+) -> crate::Result<()> {
+    let object = value
+        .as_object_mut()
+        .ok_or(FrameworkError::ResultContractViolation {
+            boundary: crate::ResultContractBoundary::Success,
+            reason: crate::ResultContractReason::SchemaMismatch,
+        })?;
+    for (name, selected) in arguments {
+        object.insert(name.clone(), selected.clone());
+    }
+    Ok(())
 }
 
 fn native_application_error_outcome(
@@ -2264,6 +2286,23 @@ mod tests {
         );
         let success = CallToolResult::structured(json!({ "status": "ok" }));
         assert_eq!(task_completion_message(&success), "Run command completed");
+    }
+
+    #[test]
+    fn grouped_selector_injection_rejects_non_object_results_without_panicking() {
+        let mut value = json!("invalid grouped result");
+        let error = inject_native_call_arguments(
+            &mut value,
+            &BTreeMap::from([("operation".to_string(), json!("get"))]),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            FrameworkError::ResultContractViolation {
+                boundary: crate::ResultContractBoundary::Success,
+                reason: crate::ResultContractReason::SchemaMismatch,
+            }
+        ));
     }
 
     #[tokio::test]

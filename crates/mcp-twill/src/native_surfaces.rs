@@ -763,7 +763,14 @@ impl fmt::Display for NativeConfirmationBridgeError {
     }
 }
 
-impl Error for NativeConfirmationBridgeError {}
+impl Error for NativeConfirmationBridgeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        // The source is retained only for ownership and drop. Exposing it
+        // would let host-private bridge diagnostics cross the framework
+        // boundary through otherwise generic error reporting.
+        None
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
