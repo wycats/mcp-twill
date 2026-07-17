@@ -330,31 +330,61 @@ fn serving_surface_identity_is_closed_and_validated() -> anyhow::Result<()> {
 
 #[test]
 fn native_exec_tools_are_conservatively_open_world() -> anyhow::Result<()> {
-    let registry = CommandRegistry::new("exec", "Exec annotations").register_dynamic(
-        CommandSpec::new(["process", "run"], "Run process", "Run a process")
-            .with_permission(PermissionSpec::new(
-                PermissionEffect::Exec,
-                "process",
-                "Runs an external process",
-            ))
-            .with_output(OutputContract {
-                application: Some(object_contract(
-                    json!({ "ok": { "type": "boolean" } }),
-                    &["ok"],
-                )),
-                ..OutputContract::default()
-            }),
-        |_| async {
-            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
-        },
-    );
+    let output = OutputContract {
+        application: Some(object_contract(
+            json!({ "ok": { "type": "boolean" } }),
+            &["ok"],
+        )),
+        ..OutputContract::default()
+    };
+    let registry = CommandRegistry::new("effects", "Effect annotations")
+        .register_dynamic(
+            CommandSpec::new(["process", "run"], "Run process", "Run a process")
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Exec,
+                    "process",
+                    "Runs an external process",
+                ))
+                .with_output(output.clone()),
+            |_| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+            },
+        )
+        .register_dynamic(
+            CommandSpec::new(["remote", "fetch"], "Fetch remote", "Fetch remote data")
+                .with_permission(PermissionSpec::new(
+                    PermissionEffect::Network,
+                    "remote",
+                    "Contacts an external service",
+                ))
+                .with_output(output),
+            |_| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+            },
+        );
     let surface = NativeToolSurface::builder("exec-tools")
         .framework_help(FrameworkHelpProjection::Omitted)
         .confirmation_route(NativeConfirmationRoute::Unavailable)
         .direct("run_process", "process.run")
+        .direct("fetch_remote", "remote.fetch")
         .build(&registry, McpProtocolTarget::V2025_11_25)?;
-    let annotations = serde_json::to_value(&surface.snapshot().tools()[0].annotations)?;
-    assert_eq!(annotations["openWorldHint"], true);
+    let tools = surface
+        .snapshot()
+        .tools()
+        .iter()
+        .map(|tool| {
+            Ok((
+                tool.name.to_string(),
+                serde_json::to_value(&tool.annotations)?,
+            ))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+    assert_eq!(tools["run_process"]["readOnlyHint"], false);
+    assert_eq!(tools["run_process"]["destructiveHint"], true);
+    assert_eq!(tools["run_process"]["openWorldHint"], true);
+    assert_eq!(tools["fetch_remote"]["readOnlyHint"], true);
+    assert_eq!(tools["fetch_remote"]["destructiveHint"], false);
+    assert_eq!(tools["fetch_remote"]["openWorldHint"], true);
     Ok(())
 }
 
@@ -586,6 +616,36 @@ fn output_roots_and_group_selector_collisions_fail_closed() -> anyhow::Result<()
         .build(&conflicting, McpProtocolTarget::V2025_11_25)
         .unwrap_err();
     assert!(error.to_string().contains("selector"));
+
+    let open = shape_registry(&[
+        (
+            "open",
+            json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } }
+            }),
+        ),
+        (
+            "closed",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+    ]);
+    let error = NativeToolSurface::builder("open-output")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .group("open-output", |group| {
+            group
+                .selector("operation")
+                .member("open", "shape.open")
+                .member("closed", "shape.closed");
+        })
+        .build(&open, McpProtocolTarget::V2025_11_25)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("must exclude undeclared selector")
+    );
 
     let equivalent = shape_registry(&[
         (
@@ -999,6 +1059,47 @@ async fn native_group_dispatches_without_a_command_string() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn native_results_preserve_large_schema_valid_payloads() -> anyhow::Result<()> {
+    let payload = Arc::new("x".repeat(40 * 1024));
+    let registry = CommandRegistry::new("large", "Large native result").register_dynamic(
+        CommandSpec::new(["large"], "Large", "Return a large result").with_output(OutputContract {
+            application: Some(object_contract(
+                json!({ "payload": { "type": "string" } }),
+                &["payload"],
+            )),
+            ..OutputContract::default()
+        }),
+        {
+            let payload = payload.clone();
+            move |_| {
+                let payload = payload.clone();
+                async move {
+                    Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                        "payload": payload.as_str()
+                    })))
+                }
+            }
+        },
+    );
+    let surface = NativeToolSurface::builder("large-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("large", "large")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let result = call_native_tool(
+        CliMcpServer::with_surface(registry, surface)?,
+        "large",
+        json!({}),
+    )
+    .await?;
+    assert_eq!(result.is_error, Some(false));
+    let structured = result.structured_content.expect("structured native result");
+    assert_eq!(structured["payload"].as_str().unwrap().len(), 40 * 1024);
+    assert!(structured.get("truncated").is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn protocol_observations_reject_before_native_tool_routing() -> anyhow::Result<()> {
     let registry = item_registry(TaskSupportSpec::Optional);
     let surface = grouped_surface(&registry, NativeConfirmationRoute::Unavailable)?;
@@ -1051,6 +1152,18 @@ async fn grouped_selector_failures_are_invalid_input() -> anyhow::Result<()> {
         assert_eq!(body["code"], expected_code);
         assert_ne!(body["code"], "build_failed");
     }
+
+    let registry = item_registry(TaskSupportSpec::Optional);
+    let surface = grouped_surface(&registry, NativeConfirmationRoute::Unavailable)?;
+    let result = call_native_tool(
+        CliMcpServer::with_surface(registry, surface)?,
+        "items",
+        json!({ "operation": "get" }),
+    )
+    .await?;
+    let body: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text)?;
+    assert_eq!(body["code"], "missing_argument");
+    assert_eq!(body["details"]["operation"], "items.get");
     Ok(())
 }
 

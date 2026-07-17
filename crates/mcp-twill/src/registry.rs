@@ -2294,7 +2294,14 @@ impl CommandRegistry {
             command: String::new(),
             args: arguments,
             stdin: None,
-            output: None,
+            // Native/operation-id calls advertise the application success
+            // schema directly. Generic CLI shaping (especially the default
+            // byte cap) would replace a valid large result with a truncation
+            // object that no longer satisfies that schema.
+            output: Some(crate::OutputSpec {
+                max_bytes: None,
+                ..crate::OutputSpec::default()
+            }),
             mode: crate::RunMode::Execute,
             approval: None,
             dry_run: false,

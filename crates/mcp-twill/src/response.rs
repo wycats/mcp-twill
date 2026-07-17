@@ -673,6 +673,23 @@ impl ResponseEnvelope {
         }
     }
 
+    pub(crate) fn framework_error_for_operation(
+        error: FrameworkError,
+        operation_id: &str,
+        command_path: &[String],
+    ) -> Self {
+        let mut envelope = Self::framework_error(error, None, None);
+        envelope.command = Some(command_path.to_vec());
+        if let Some(details) = envelope
+            .error
+            .as_mut()
+            .and_then(|error| error.details.as_object_mut())
+        {
+            details.insert("operation".to_string(), json!(operation_id));
+        }
+        envelope
+    }
+
     pub fn display_text(&self) -> String {
         self.display
             .as_ref()

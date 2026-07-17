@@ -666,7 +666,12 @@ impl CliMcpServer {
             identity,
         ) {
             Ok(plan) => plan,
-            Err(error) => return native_framework_outcome(error, None),
+            Err(error) => {
+                if let Some(operation) = surface.snapshot().operation(&operation_id) {
+                    return native_framework_outcome_for_operation(error, operation.spec());
+                }
+                return native_framework_outcome(error, None);
+            }
         };
         let plan_for_event = PlanFacts::from(&plan);
 
@@ -1246,6 +1251,28 @@ fn native_framework_outcome(
         result: native_result(value, true, Vec::new()),
         envelope,
         plan: plan_facts,
+    }
+}
+
+fn native_framework_outcome_for_operation(
+    error: FrameworkError,
+    operation: &crate::OperationSpec,
+) -> NativeRunOutcome {
+    let envelope =
+        ResponseEnvelope::framework_error_for_operation(error, &operation.id, &operation.path);
+    let value = envelope
+        .error
+        .as_ref()
+        .and_then(|error| serde_json::to_value(error).ok())
+        .unwrap_or_else(|| json!({ "code": "handler_failed", "message": "framework failure" }));
+    NativeRunOutcome {
+        result: native_result(value, true, Vec::new()),
+        envelope,
+        plan: Some(PlanFacts {
+            operation_id: operation.id.clone(),
+            command_path: operation.path.clone(),
+            effect: operation.effect.clone(),
+        }),
     }
 }
 

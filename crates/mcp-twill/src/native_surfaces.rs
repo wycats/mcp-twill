@@ -1186,9 +1186,10 @@ fn annotations_for_operations(operations: &[OperationSpec], title: &str) -> Tool
     let read_only = operations
         .iter()
         .all(|operation| !effect_is_mutating(&operation.effect));
-    let destructive = operations
-        .iter()
-        .any(|operation| effect_contains(&operation.effect, &crate::EffectSpec::Delete));
+    let destructive = operations.iter().any(|operation| {
+        effect_contains(&operation.effect, &crate::EffectSpec::Delete)
+            || effect_contains(&operation.effect, &crate::EffectSpec::Exec)
+    });
     let idempotent = operations.iter().all(|operation| operation.idempotent);
     let open_world = operations.iter().any(|operation| {
         effect_contains(&operation.effect, &crate::EffectSpec::Network)
@@ -1603,6 +1604,10 @@ fn remove_matching_selector(
                 "native group `{group}` selector `{selector}` conflicts with operation `{operation_id}` output"
             )));
         }
+    } else if object.get("additionalProperties") != Some(&Value::Bool(false)) {
+        return Err(build_error(format!(
+            "native group `{group}` operation `{operation_id}` must exclude undeclared selector `{selector}` from its output"
+        )));
     }
     if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
         properties.remove(selector);

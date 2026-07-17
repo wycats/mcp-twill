@@ -611,7 +611,7 @@ Omitting the slot preserves `DefaultPermissionAuthorizer`. Each adapter instance
 
 ### Annotations And Effects
 
-A direct tool derives annotations from one command. `readOnlyHint` is true only for pure/read effects; `destructiveHint` reflects delete or explicitly destructive policy; `idempotentHint` reflects the command declaration; `openWorldHint` reflects network or other open-world effects.
+A direct tool derives annotations from one command. `readOnlyHint` is true when the effect contains no write, delete, exec, or custom component; a network component sets `openWorldHint` without by itself making the operation mutating. `destructiveHint` is true for delete, exec, or explicitly destructive policy; `idempotentHint` reflects the command declaration; other open-world effects also set `openWorldHint`. This operation-specific native projection is intentionally finer-grained than the compatibility effect-lane annotations, which remain conservative for their shared lanes.
 
 A group uses truthful worst-case aggregation:
 
