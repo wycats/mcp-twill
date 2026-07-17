@@ -55,6 +55,9 @@ pub enum ErrorCode {
     WrongEffectLane,
     PermissionRequired,
     PermissionDenied,
+    ConfirmationUnavailable,
+    ConfirmationCanceled,
+    ConfirmationFailed,
     ApprovalInvalid,
     BuildFailed,
     HandlerFailed,
@@ -89,6 +92,9 @@ impl ErrorCode {
             | FrameworkError::InvalidPreResolvedWorkspaceSet { .. } => Self::InvalidRequestContext,
             FrameworkError::StdinMismatch(_) => Self::StdinMismatch,
             FrameworkError::PermissionDenied { .. } => Self::PermissionDenied,
+            FrameworkError::ConfirmationUnavailable { .. } => Self::ConfirmationUnavailable,
+            FrameworkError::ConfirmationCanceled { .. } => Self::ConfirmationCanceled,
+            FrameworkError::ConfirmationFailed { .. } => Self::ConfirmationFailed,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
             FrameworkError::WrongEffectLane { .. } => Self::WrongEffectLane,
             FrameworkError::Build(_) => Self::BuildFailed,
@@ -773,7 +779,10 @@ fn status_for_error(error: &FrameworkError) -> ResponseStatus {
         FrameworkError::PermissionDenied { .. } => ResponseStatus::PermissionDenied,
         FrameworkError::WrongEffectLane { .. } => ResponseStatus::WrongEffectLane,
         FrameworkError::ApprovalInvalid(_) => ResponseStatus::ApprovalInvalid,
-        FrameworkError::Handler(_)
+        FrameworkError::ConfirmationUnavailable { .. }
+        | FrameworkError::ConfirmationCanceled { .. }
+        | FrameworkError::ConfirmationFailed { .. }
+        | FrameworkError::Handler(_)
         | FrameworkError::Build(_)
         | FrameworkError::ResultContractViolation { .. }
         | FrameworkError::ArgumentContractViolation { .. } => ResponseStatus::Failed,
@@ -955,6 +964,11 @@ fn error_details(error: &FrameworkError) -> Value {
         FrameworkError::PermissionDenied { effect, scope } => {
             json!({ "effect": effect, "scope": scope })
         }
+        FrameworkError::ConfirmationUnavailable { operation_id }
+        | FrameworkError::ConfirmationCanceled { operation_id }
+        | FrameworkError::ConfirmationFailed { operation_id } => {
+            json!({ "operationId": operation_id })
+        }
         FrameworkError::ApprovalInvalid(value) => json!({ "reason": value }),
         FrameworkError::WrongEffectLane {
             current_tool,
@@ -982,7 +996,7 @@ fn error_details(error: &FrameworkError) -> Value {
     }
 }
 
-fn permission_preview(
+pub(crate) fn permission_preview(
     plan: &InvocationPlan,
     requires_confirmation: bool,
     confirmation: Option<crate::PreparedConfirmation>,

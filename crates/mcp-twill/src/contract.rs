@@ -796,7 +796,9 @@ fn check_confirmation_projection_with_help(
             let plan = crate::InvocationPlan {
                 operation_id: operation_id.clone(),
                 command_path: command.path.clone(),
-                raw_command: command.name(),
+                origin: crate::InvocationOrigin::CommandTemplate,
+                raw_command: Some(command.name()),
+                surface: None,
                 catalog_hash: catalog.identity.catalog_hash.clone(),
                 invocation_fingerprint: "contract-presentation-preview".to_string(),
                 effect: operation.effect.clone(),
@@ -1556,6 +1558,159 @@ pub fn check_guidance_projection(registry: &CommandRegistry) -> Vec<ContractViol
             "guidance",
             "catalog does not project the server preamble",
         ));
+    }
+    violations
+}
+
+/// The immutable native-surface snapshot agrees with its source registry,
+/// declaration, typed accessors, canonical document, and filtered help.
+pub fn check_native_surface_projection(
+    registry: &CommandRegistry,
+    surface: &crate::NativeToolSurface,
+) -> Vec<ContractViolation> {
+    let snapshot = surface.snapshot();
+    let mut violations = Vec::new();
+    let expected_catalog_hash = &registry.catalog_identity().catalog_hash;
+    if snapshot.catalog_hash() != expected_catalog_hash {
+        violations.push(violation(
+            None,
+            "native_surface",
+            "snapshot catalog hash does not match the registry",
+        ));
+    }
+    if snapshot.declaration() != surface.declaration() {
+        violations.push(violation(
+            None,
+            "native_surface",
+            "compiled declaration accessor disagrees with the surface declaration",
+        ));
+    }
+
+    let document = snapshot.document();
+    let scalar_checks = [
+        ("version", serde_json::json!(snapshot.version())),
+        (
+            "protocolVersion",
+            serde_json::json!(snapshot.protocol_version()),
+        ),
+        ("name", serde_json::json!(snapshot.name())),
+        ("catalogHash", serde_json::json!(snapshot.catalog_hash())),
+    ];
+    for (field, expected) in scalar_checks {
+        if document[field] != expected {
+            violations.push(violation(
+                None,
+                "native_surface",
+                format!("document `{field}` disagrees with its typed accessor"),
+            ));
+        }
+    }
+    if document.get("surfaceHash").is_some() {
+        violations.push(violation(
+            None,
+            "native_surface",
+            "canonical document must omit its self-referential surface hash",
+        ));
+    }
+    if document["declaration"]
+        != serde_json::to_value(snapshot.declaration()).unwrap_or(serde_json::Value::Null)
+    {
+        violations.push(violation(
+            None,
+            "native_surface",
+            "document declaration disagrees with the normalized declaration",
+        ));
+    }
+    if document["server"]["instructions"] != snapshot.server_instructions() {
+        violations.push(violation(
+            None,
+            "native_surface",
+            "document instructions disagree with the typed accessor",
+        ));
+    }
+    if document["tools"]
+        != serde_json::to_value(snapshot.tools()).unwrap_or(serde_json::Value::Null)
+    {
+        violations.push(violation(
+            None,
+            "native_surface",
+            "document tools disagree with the typed accessor",
+        ));
+    }
+
+    let catalog = registry
+        .operation_specs()
+        .into_iter()
+        .map(|operation| (operation.id.clone(), operation))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let operation_values = document["operations"].as_array();
+    if operation_values.map(Vec::len) != Some(snapshot.operations().len()) {
+        violations.push(violation(
+            None,
+            "native_surface",
+            "document operation count disagrees with the typed accessor",
+        ));
+    }
+    for (index, operation) in snapshot.operations().iter().enumerate() {
+        let operation_id = &operation.spec().id;
+        if catalog.get(operation_id) != Some(operation.spec()) {
+            violations.push(violation(
+                Some(operation_id),
+                "native_surface",
+                "snapshot operation spec disagrees with the catalog",
+            ));
+        }
+        let expected = serde_json::json!({
+            "spec": operation.spec(),
+            "call": {
+                "tool": operation.call().tool(),
+            },
+            "presentationDefaults": {
+                "invocationMessage": operation.presentation_defaults().invocation_message(),
+                "confirmationTitle": operation.presentation_defaults().confirmation_title(),
+                "confirmationMessage": operation.presentation_defaults().confirmation_message(),
+            },
+        });
+        let mut expected = expected;
+        if let Some(arguments) = operation.call().arguments() {
+            expected["call"]["arguments"] = serde_json::json!(arguments);
+        }
+        if operation_values.and_then(|values| values.get(index)) != Some(&expected) {
+            violations.push(violation(
+                Some(operation_id),
+                "native_surface",
+                "document operation disagrees with its typed accessor",
+            ));
+        }
+        if !snapshot
+            .tools()
+            .iter()
+            .any(|tool| tool.name == operation.call().tool())
+        {
+            violations.push(violation(
+                Some(operation_id),
+                "native_surface",
+                format!(
+                    "compiled call targets missing native tool `{}`",
+                    operation.call().tool()
+                ),
+            ));
+        }
+    }
+
+    let help = surface.help(crate::HelpRequest {
+        command: None,
+        topic: None,
+        detail: None,
+    });
+    for tool in snapshot.tools() {
+        if !help.text.contains(&format!("`{}`", tool.name)) {
+            violations.push(violation(
+                None,
+                "native_surface_help",
+                format!("native tool `{}` is absent from surface help", tool.name),
+            ));
+        }
     }
     violations
 }

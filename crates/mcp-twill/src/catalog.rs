@@ -208,12 +208,19 @@ pub struct ProgressPhaseSpec {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskSupportSpec {
     Forbidden,
+    #[default]
     Optional,
     Required,
+}
+
+impl TaskSupportSpec {
+    pub(crate) fn is_optional(&self) -> bool {
+        matches!(self, Self::Optional)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -424,7 +431,7 @@ impl OperationSpec {
             examples: spec.examples.clone(),
             progress: spec.progress.clone(),
             idempotent: spec.idempotent,
-            task_support: TaskSupportSpec::Optional,
+            task_support: spec.task_support.clone(),
             stability: Stability::Draft,
         }
     }
