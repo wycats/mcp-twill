@@ -300,21 +300,21 @@ pub enum PlanResourceBindingSource {
 #[serde(rename_all = "camelCase")]
 pub struct InvocationPlan {
     // ...existing fields...
-    #[serde(rename = "resourceBindingFacts", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_binding_facts: Vec<PlanResourceBindingFact>,
 }
 
 #[serde(rename_all = "camelCase")]
 pub struct PermissionPreview {
     // ...existing fields...
-    #[serde(rename = "resourceBindingFacts", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_binding_facts: Vec<PlanResourceBindingFact>,
 }
 
 #[serde(rename_all = "camelCase")]
 pub struct FrameworkEvent {
     // ...existing fields...
-    #[serde(rename = "resourceBindingFacts", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_binding_facts: Vec<PlanResourceBindingFact>,
 }
 
@@ -561,14 +561,14 @@ Optional extraction composes the existing resource extractor with `Option`:
 #[serde(rename_all = "camelCase")]
 pub struct CommandSpec {
     // ...existing fields...
-    #[serde(rename = "optionalResources", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub optional_resources: Vec<String>,
 }
 
 #[serde(rename_all = "camelCase")]
 pub struct OperationSpec {
     // ...existing fields...
-    #[serde(rename = "optionalResources", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub optional_resources: Vec<String>,
 }
 
