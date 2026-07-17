@@ -906,16 +906,30 @@ fn flat_recovery_actions_cannot_collide_with_exposed_tool_names() {
     assert!(error.to_string().contains("ambiguous with an exposed tool"));
 }
 
-#[test]
-fn duplicate_operation_ids_fail_native_compilation() {
+#[tokio::test]
+async fn duplicate_operation_ids_fail_native_compilation_and_bare_routing() {
+    let calls = Arc::new(AtomicUsize::new(0));
     let registry = CommandRegistry::new("duplicates", "Duplicate operation ids")
-        .register(CommandSpec::new(["a.b"], "Flat", "Flat path"), |_| async {
-            Ok(CommandOutput::structured(json!({})))
+        .register(CommandSpec::new(["a.b"], "Flat", "Flat path"), {
+            let calls = calls.clone();
+            move |_| {
+                let calls = calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(CommandOutput::structured(json!({})))
+                }
+            }
         })
-        .register(
-            CommandSpec::new(["a", "b"], "Nested", "Nested path"),
-            |_| async { Ok(CommandOutput::structured(json!({}))) },
-        );
+        .register(CommandSpec::new(["a", "b"], "Nested", "Nested path"), {
+            let calls = calls.clone();
+            move |_| {
+                let calls = calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(CommandOutput::structured(json!({})))
+                }
+            }
+        });
     let error = NativeToolSurface::builder("duplicate-tools")
         .framework_help(FrameworkHelpProjection::Omitted)
         .confirmation_route(NativeConfirmationRoute::Unavailable)
@@ -923,6 +937,12 @@ fn duplicate_operation_ids_fail_native_compilation() {
         .build(&registry, McpProtocolTarget::V2025_11_25)
         .unwrap_err();
     assert!(error.to_string().contains("duplicate native operation id"));
+    let error = registry
+        .run_operation_with_context("a.b", serde_json::Map::new(), InvocationContext::default())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("ambiguous operation id `a.b`"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -1009,11 +1029,15 @@ async fn native_group_dispatches_without_a_command_string() -> anyhow::Result<()
         vec!["framework-help", "items"]
     );
     let resources = client.list_resources(Default::default()).await?;
+    assert!(resources.resources.iter().all(|resource| !matches!(
+        resource.uri.as_str(),
+        "cli://lanes" | "cli://server/overview"
+    )));
     assert!(
-        resources
-            .resources
-            .iter()
-            .all(|resource| resource.uri != "cli://lanes")
+        client
+            .read_resource(ReadResourceRequestParams::new("cli://server/overview"))
+            .await
+            .is_err()
     );
     let prompt = client
         .get_prompt(GetPromptRequestParams::new("getting_started"))
@@ -1542,6 +1566,10 @@ fn task_support_builder_and_low_level_paths_are_equivalent() -> anyhow::Result<(
         assert_eq!(
             low_surface.snapshot().canonical_json(),
             high_surface.snapshot().canonical_json()
+        );
+        assert_eq!(
+            low_surface.snapshot().tools()[0].task_support(),
+            rmcp::model::TaskSupport::Forbidden
         );
     }
 

@@ -19,7 +19,6 @@ use sha2::{Digest, Sha256};
 use crate::{
     CommandRegistry, FrameworkError, HelpRequest, HelpResult, OperationSpec, PermissionPreview,
     PreparedConfirmation, Result, ServingSurfaceIdentity, SurfacePresentationDefaults,
-    TaskSupportSpec,
 };
 
 const SNAPSHOT_VERSION: u32 = 1;
@@ -916,10 +915,7 @@ fn compile_native_surface(
                 let output = schema_object(output_schema.clone(), "direct output schema")?;
                 let tool = Tool::new(name.clone(), final_description, input)
                     .with_raw_output_schema(Arc::new(output))
-                    .with_execution(
-                        ToolExecution::new()
-                            .with_task_support(rmcp_task_support(&operation.task_support)),
-                    )
+                    .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden))
                     .annotate(annotations_for_operations(
                         std::slice::from_ref(operation),
                         &display_title,
@@ -1032,8 +1028,7 @@ fn compile_native_surface(
                     Tool::new(name.clone(), final_description, input)
                         .with_raw_output_schema(Arc::new(output))
                         .with_execution(
-                            ToolExecution::new()
-                                .with_task_support(rmcp_task_support(&task_support)),
+                            ToolExecution::new().with_task_support(TaskSupport::Forbidden),
                         )
                         .annotate(annotations_for_operations(
                             &member_operations,
@@ -1164,14 +1159,6 @@ fn application_success_schema(operation: &OperationSpec) -> Result<&Value> {
                 operation.id
             ))
         })
-}
-
-fn rmcp_task_support(support: &TaskSupportSpec) -> TaskSupport {
-    match support {
-        TaskSupportSpec::Forbidden => TaskSupport::Forbidden,
-        TaskSupportSpec::Optional => TaskSupport::Optional,
-        TaskSupportSpec::Required => TaskSupport::Required,
-    }
 }
 
 fn presentation_defaults(title: &str) -> Result<SurfacePresentationDefaults> {

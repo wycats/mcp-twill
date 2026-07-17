@@ -515,13 +515,17 @@ impl CliMcpServer {
     }
 
     fn resources(&self) -> Vec<RawResource> {
-        let mut resources = vec![
-            RawResource::new("cli://server/overview", "Server overview"),
+        let effect_lanes = matches!(self.surface, McpToolSurface::EffectLanes(_));
+        let mut resources = Vec::new();
+        if effect_lanes {
+            resources.push(RawResource::new("cli://server/overview", "Server overview"));
+        }
+        resources.extend([
             RawResource::new("cli://catalog", "Command catalog"),
             RawResource::new("cli://commands", "Command catalog"),
             RawResource::new("cli://permissions", "Permission model"),
-        ];
-        if matches!(self.surface, McpToolSurface::EffectLanes(_)) {
+        ]);
+        if effect_lanes {
             resources.push(RawResource::new("cli://lanes", "Effect-lane tools"));
         }
         resources.extend(self.registry.command_specs().map(|spec| {
@@ -1565,14 +1569,23 @@ impl ServerHandler for CliMcpServer {
                 ResourceContents::text(text, request.uri).with_mime_type("application/json"),
             ]));
         }
-        let text = if request.uri == "cli://lanes" {
+        let text = if request.uri == "cli://lanes" || request.uri == "cli://server/overview" {
             if !matches!(self.surface, McpToolSurface::EffectLanes(_)) {
                 return Err(rmcp::ErrorData::invalid_params(
-                    "Unknown resource cli://lanes",
+                    format!("Unknown resource {}", request.uri),
                     None,
                 ));
             }
-            lanes_text(&self.execution_lanes())
+            if request.uri == "cli://lanes" {
+                lanes_text(&self.execution_lanes())
+            } else {
+                self.registry.resource_text(&request.uri).ok_or_else(|| {
+                    rmcp::ErrorData::invalid_params(
+                        format!("Unknown resource {}", request.uri),
+                        None,
+                    )
+                })?
+            }
         } else if request.uri == "cli://catalog" {
             self.catalog_resource_text().ok_or_else(|| {
                 rmcp::ErrorData::internal_error("Cannot serialize active catalog", None)

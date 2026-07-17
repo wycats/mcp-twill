@@ -2281,14 +2281,21 @@ impl CommandRegistry {
         surface: Option<crate::ServingSurfaceIdentity>,
         fingerprint_surface: Value,
     ) -> Result<InvocationPlan> {
-        let registered = self
+        let mut matching = self
             .commands
             .values()
-            .find(|command| command.spec.path.join(".") == operation_id)
+            .filter(|command| command.spec.path.join(".") == operation_id);
+        let registered = matching
+            .next()
             .ok_or_else(|| FrameworkError::UnknownCommand {
                 command: operation_id.to_string(),
                 nearest: Vec::new(),
             })?;
+        if matching.next().is_some() {
+            return Err(FrameworkError::Build(format!(
+                "ambiguous operation id `{operation_id}`"
+            )));
+        }
         let referenced = arguments.keys().cloned().collect();
         let request = RunRequest {
             command: String::new(),
