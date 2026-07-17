@@ -2348,7 +2348,7 @@ fn canonical_number(number: &serde_json::Number) -> Result<String> {
     let decimal_index = mantissa.find('.').unwrap_or(mantissa.len());
     let digits = mantissa.replace('.', "");
     let normalized_exponent = exponent + i32::try_from(decimal_index).unwrap_or(i32::MAX) - 1;
-    let body = if (-6..21).contains(&normalized_exponent) {
+    let body = if (-6..=20).contains(&normalized_exponent) {
         let point = normalized_exponent + 1;
         if point <= 0 {
             format!("0.{}{}", "0".repeat((-point) as usize), digits)
@@ -2382,14 +2382,14 @@ mod tests {
     fn canonical_json_uses_rfc_8785_number_and_key_spelling() {
         let value: Value = serde_json::from_str(
             r#"{
-                "numbers": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],
+                "numbers": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000001, 0.0000001, 0.000000000000000000000000001],
                 "literals": [null, true, false]
             }"#,
         )
         .unwrap();
         assert_eq!(
             String::from_utf8(canonical_json(&value).unwrap()).unwrap(),
-            r#"{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27]}"#
+            r#"{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,0.000001,1e-7,1e-27]}"#
         );
     }
 
