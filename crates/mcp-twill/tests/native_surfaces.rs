@@ -8,14 +8,15 @@ use std::{
 
 use async_trait::async_trait;
 use mcp_twill::{
-    ApplicationResultContract, ApplicationSuccess, ArgSpec, CliMcpServer, CliMcpServerConfig,
-    CommandContext, CommandOutput, CommandRegistry, CommandSpec, DynamicCommandFailure,
-    FrameworkHelpProjection, InvocationContext, InvocationOrigin, McpProtocolTarget,
+    ApplicationOutput, ApplicationOutputResult, ApplicationResult, ApplicationResultContract,
+    ApplicationSuccess, ArgSpec, CliMcpServer, CliMcpServerConfig, CommandContext, CommandOutput,
+    CommandRegistry, CommandSpec, DynamicCommandFailure, FrameworkHelpProjection, Grant,
+    InvocationContext, InvocationOrigin, InvocationPlan, McpProtocolTarget,
     NativeApplicationErrorDialect, NativeConfirmationBridge, NativeConfirmationBridgeError,
     NativeConfirmationDecision, NativeConfirmationRequest, NativeConfirmationRoute,
     NativeExposurePolicy, NativeToolSurface, OutputContract, PermissionAuthorizer,
-    PermissionDecision, PermissionEffect, PermissionSpec, RunMode, RunRequest,
-    ServingSurfaceIdentity, TaskSupportSpec,
+    PermissionDecision, PermissionEffect, PermissionSpec, Release, ResolveResource, Resource,
+    ResourceDecl, ResourceRefusal, RunMode, RunRequest, ServingSurfaceIdentity, TaskSupportSpec,
 };
 use rmcp::{
     ClientHandler, ServiceExt,
@@ -25,6 +26,8 @@ use rmcp::{
         ResourceContents,
     },
 };
+use schemars::JsonSchema;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 #[path = "support/vbl.rs"]
@@ -110,6 +113,51 @@ fn item_registry_with_calls(
                 })))
             }
         })
+}
+
+struct TestLease {
+    id: String,
+}
+
+impl Resource for TestLease {
+    const NAME: &'static str = "test-lease";
+}
+
+struct TestLeaseResolver;
+
+impl ResolveResource<TestLease> for TestLeaseResolver {
+    async fn resolve(
+        &self,
+        reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<TestLease, ResourceRefusal> {
+        Ok(TestLease {
+            id: reference.to_string(),
+        })
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+struct TestLeaseResult {
+    id: String,
+}
+
+async fn grant_test_lease(
+    _: CommandContext,
+) -> ApplicationOutputResult<mcp_twill::Granted<TestLease, ApplicationSuccess<TestLeaseResult>>> {
+    Ok(ApplicationSuccess::value(TestLeaseResult {
+        id: "lease-1".to_string(),
+    })
+    .grant(Grant::<TestLease>::new("lease-1")))
+}
+
+async fn release_test_lease(
+    lease: Release<TestLease>,
+    _: CommandContext,
+) -> ApplicationResult<TestLeaseResult> {
+    Ok(ApplicationSuccess::value(TestLeaseResult {
+        id: lease.id.clone(),
+    }))
 }
 
 fn grouped_surface(
@@ -281,6 +329,36 @@ fn serving_surface_identity_is_closed_and_validated() -> anyhow::Result<()> {
 }
 
 #[test]
+fn native_exec_tools_are_conservatively_open_world() -> anyhow::Result<()> {
+    let registry = CommandRegistry::new("exec", "Exec annotations").register_dynamic(
+        CommandSpec::new(["process", "run"], "Run process", "Run a process")
+            .with_permission(PermissionSpec::new(
+                PermissionEffect::Exec,
+                "process",
+                "Runs an external process",
+            ))
+            .with_output(OutputContract {
+                application: Some(object_contract(
+                    json!({ "ok": { "type": "boolean" } }),
+                    &["ok"],
+                )),
+                ..OutputContract::default()
+            }),
+        |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+        },
+    );
+    let surface = NativeToolSurface::builder("exec-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("run_process", "process.run")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let annotations = serde_json::to_value(&surface.snapshot().tools()[0].annotations)?;
+    assert_eq!(annotations["openWorldHint"], true);
+    Ok(())
+}
+
+#[test]
 fn builder_slots_and_exposure_are_canonical() -> anyhow::Result<()> {
     let registry = item_registry(TaskSupportSpec::Optional);
     let repeated = NativeToolSurface::builder("item-tools")
@@ -310,6 +388,40 @@ fn builder_slots_and_exposure_are_canonical() -> anyhow::Result<()> {
         complete.snapshot().surface_hash(),
         empty_subset.snapshot().surface_hash()
     );
+    Ok(())
+}
+
+#[test]
+fn explicit_subsets_preserve_granted_resource_lifecycle_edges() -> anyhow::Result<()> {
+    let registry = CommandRegistry::build("leases", "Lease lifecycle", |server| {
+        server.resource(
+            ResourceDecl::new("test-lease", "A test lease")
+                .uri("test://lease/{id}")
+                .expiry("Test leases expire"),
+        );
+        server.resolver::<TestLease>(TestLeaseResolver);
+        server.command("lease start", |command| {
+            command
+                .summary("Start lease")
+                .description("Grant a lease")
+                .handle_result(grant_test_lease);
+        });
+        server.command("lease end", |command| {
+            command
+                .summary("End lease")
+                .description("Release a lease")
+                .handle_result(release_test_lease);
+        });
+    })?;
+    let error = NativeToolSurface::builder("lease-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("start_lease", "lease.start")
+        .exposure(NativeExposurePolicy::explicit_subset(["lease.end"]))
+        .build(&registry, McpProtocolTarget::V2025_11_25)
+        .unwrap_err();
+    assert!(error.to_string().contains("lease.end"));
+    assert!(error.to_string().contains("reachable from `lease.start`"));
     Ok(())
 }
 
@@ -385,6 +497,13 @@ fn declarations_validate_names_coverage_and_required_slots() -> anyhow::Result<(
 fn output_roots_and_group_selector_collisions_fail_closed() -> anyhow::Result<()> {
     let scalar = shape_registry(&[("scalar", json!({ "type": "string" }))]);
     let error = direct_shape_surface(&scalar, &["scalar"]).unwrap_err();
+    assert!(error.to_string().contains("object-only"));
+
+    let implicit_object = shape_registry(&[(
+        "implicit",
+        json!({ "properties": {}, "additionalProperties": false }),
+    )]);
+    let error = direct_shape_surface(&implicit_object, &["implicit"]).unwrap_err();
     assert!(error.to_string().contains("object-only"));
 
     let mixed = shape_registry(&[(
@@ -467,6 +586,45 @@ fn output_roots_and_group_selector_collisions_fail_closed() -> anyhow::Result<()
         .build(&conflicting, McpProtocolTarget::V2025_11_25)
         .unwrap_err();
     assert!(error.to_string().contains("selector"));
+
+    let equivalent = shape_registry(&[
+        (
+            "enumerated",
+            json!({
+                "type": "object",
+                "properties": {
+                    "operation": { "type": "string", "enum": ["enumerated"] }
+                },
+                "required": ["operation"],
+                "additionalProperties": false
+            }),
+        ),
+        (
+            "referenced",
+            json!({
+                "$defs": {
+                    "selector": { "type": "string", "enum": ["referenced"] }
+                },
+                "type": "object",
+                "properties": {
+                    "operation": { "$ref": "#/$defs/selector" }
+                },
+                "required": ["operation"],
+                "additionalProperties": false
+            }),
+        ),
+    ]);
+    let surface = NativeToolSurface::builder("equivalent")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .group("equivalent", |group| {
+            group
+                .selector("operation")
+                .member("enumerated", "shape.enumerated")
+                .member("referenced", "shape.referenced");
+        })
+        .build(&equivalent, McpProtocolTarget::V2025_11_25)?;
+    assert_eq!(surface.snapshot().tools().len(), 1);
     Ok(())
 }
 

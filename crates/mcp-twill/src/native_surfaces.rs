@@ -1190,9 +1190,10 @@ fn annotations_for_operations(operations: &[OperationSpec], title: &str) -> Tool
         .iter()
         .any(|operation| effect_contains(&operation.effect, &crate::EffectSpec::Delete));
     let idempotent = operations.iter().all(|operation| operation.idempotent);
-    let open_world = operations
-        .iter()
-        .any(|operation| effect_contains(&operation.effect, &crate::EffectSpec::Network));
+    let open_world = operations.iter().any(|operation| {
+        effect_contains(&operation.effect, &crate::EffectSpec::Network)
+            || effect_contains(&operation.effect, &crate::EffectSpec::Exec)
+    });
     ToolAnnotations::with_title(title)
         .read_only(read_only)
         .destructive(destructive)
@@ -1525,6 +1526,7 @@ fn compile_group_output(
                 group,
                 &operation.id,
                 &mut shape,
+                source,
                 selector,
                 &member.selector_value,
             )?;
@@ -1579,6 +1581,7 @@ fn remove_matching_selector(
     group: &str,
     operation_id: &str,
     shape: &mut Value,
+    root: &Value,
     selector: &str,
     selector_value: &str,
 ) -> Result<()> {
@@ -1594,13 +1597,7 @@ fn remove_matching_selector(
             .get("required")
             .and_then(Value::as_array)
             .is_some_and(|required| required.iter().any(|name| name == selector));
-        let matches = existing.as_object().is_some_and(|schema| {
-            schema.get("const") == Some(&Value::String(selector_value.to_string()))
-        }) && crate::results::value_matches_schema(
-            &Value::String(selector_value.to_string()),
-            existing,
-            existing,
-        );
+        let matches = schema_proves_string_singleton(existing, root, selector_value)?;
         if !required || !matches {
             return Err(build_error(format!(
                 "native group `{group}` selector `{selector}` conflicts with operation `{operation_id}` output"
@@ -1614,6 +1611,54 @@ fn remove_matching_selector(
         required.retain(|name| name != selector);
     }
     Ok(())
+}
+
+fn schema_proves_string_singleton(schema: &Value, root: &Value, expected: &str) -> Result<bool> {
+    let expected = Value::String(expected.to_string());
+    if !crate::results::value_matches_schema(&expected, schema, root) {
+        return Ok(false);
+    }
+    let Some(candidates) = finite_schema_candidates(schema, root)? else {
+        return Ok(false);
+    };
+    let mut accepted = Vec::new();
+    for candidate in candidates {
+        if crate::results::value_matches_schema(&candidate, schema, root)
+            && !accepted.contains(&candidate)
+        {
+            accepted.push(candidate);
+        }
+    }
+    Ok(accepted == [expected])
+}
+
+fn finite_schema_candidates(schema: &Value, root: &Value) -> Result<Option<Vec<Value>>> {
+    let object = schema
+        .as_object()
+        .ok_or_else(|| build_error("result schema must be a JSON object"))?;
+    if let Some(constant) = object.get("const") {
+        return Ok(Some(vec![constant.clone()]));
+    }
+    if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        return Ok(Some(values.clone()));
+    }
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+        && let Some(candidates) =
+            finite_schema_candidates(resolve_local_ref(root, reference)?, root)?
+    {
+        return Ok(Some(candidates));
+    }
+    if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
+        let mut candidates = Vec::new();
+        for branch in branches {
+            let Some(branch_candidates) = finite_schema_candidates(branch, root)? else {
+                return Ok(None);
+            };
+            candidates.extend(branch_candidates);
+        }
+        return Ok(Some(candidates));
+    }
+    Ok(None)
 }
 
 fn insert_selector(shape: &mut Value, selector: &str, selector_values: &[String]) -> Result<()> {
@@ -1691,7 +1736,7 @@ fn inject_member_union_selector(
         }
         return Ok(());
     }
-    remove_matching_selector(group, operation_id, schema, selector, selector_value)?;
+    remove_matching_selector(group, operation_id, schema, root, selector, selector_value)?;
     insert_selector(schema, selector, &[selector_value.to_string()])
 }
 
@@ -1752,9 +1797,7 @@ fn schema_accepts_objects_only(schema: &Value, root: &Value) -> Result<bool> {
         }
         Some(_) => Ok(false),
         None if object.contains_key("oneOf") || object.contains_key("$ref") => Ok(true),
-        None => {
-            Ok(object.contains_key("properties") || object.contains_key("additionalProperties"))
-        }
+        None => Ok(false),
     }
 }
 
@@ -1837,6 +1880,7 @@ fn validate_steering_closure(
         for resource in operation
             .requires_resources
             .iter()
+            .chain(&operation.grants)
             .chain(&operation.releases)
         {
             for command in registry
