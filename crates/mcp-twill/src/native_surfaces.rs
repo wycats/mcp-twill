@@ -309,16 +309,12 @@ impl NativeToolSurface {
             Some(CompiledNativeRoute::Group { selector, members }) => {
                 let selected = arguments
                     .remove(selector)
-                    .and_then(|value| value.as_str().map(ToOwned::to_owned))
-                    .ok_or_else(|| {
-                        build_error(format!(
-                            "native tool `{tool}` requires string selector `{selector}`"
-                        ))
-                    })?;
+                    .ok_or_else(|| FrameworkError::MissingArgument(selector.clone()))?;
+                let selected = selected.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                    FrameworkError::InvalidArgumentType(selector.clone(), "a string")
+                })?;
                 let operation_id = members.get(&selected).cloned().ok_or_else(|| {
-                    build_error(format!(
-                        "native tool `{tool}` has no `{selector}` member `{selected}`"
-                    ))
+                    FrameworkError::InvalidArgumentType(selector.clone(), "a declared group member")
                 })?;
                 Ok((operation_id, arguments))
             }
@@ -816,15 +812,26 @@ fn compile_native_surface(
     validate_registry(registry)?;
     validate_surface_name(&declaration.name)?;
 
-    let operation_specs = registry
-        .operation_specs()
-        .into_iter()
-        .map(|operation| (operation.id.clone(), operation))
-        .collect::<BTreeMap<_, _>>();
-    let command_specs = registry
-        .command_specs()
-        .map(|command| (command.path.join("."), command))
-        .collect::<BTreeMap<_, _>>();
+    let mut operation_specs = BTreeMap::new();
+    for operation in registry.operation_specs() {
+        if operation_specs
+            .insert(operation.id.clone(), operation)
+            .is_some()
+        {
+            return Err(build_error(
+                "command paths produce a duplicate native operation id",
+            ));
+        }
+    }
+    let mut command_specs = BTreeMap::new();
+    for command in registry.command_specs() {
+        let operation_id = command.path.join(".");
+        if command_specs.insert(operation_id, command).is_some() {
+            return Err(build_error(
+                "command paths produce a duplicate native operation id",
+            ));
+        }
+    }
     let declared_routes = declaration_routes(&declaration);
 
     let mut mapped_operations = BTreeSet::new();
@@ -1910,6 +1917,18 @@ fn validate_application_error_dialect(
                     (format!("operation:{operation_id}"), route.0.clone())
                 }
                 crate::ApplicationRecoveryDecl::Action(action) => {
+                    if declaration.tools.iter().any(|tool| match tool {
+                        NativeToolDecl::Direct { name, .. }
+                        | NativeToolDecl::Group { name, .. } => name == &action.code,
+                    }) || matches!(
+                        &declaration.framework_help,
+                        FrameworkHelpProjection::Tool { name } if name == &action.code
+                    ) {
+                        return Err(build_error(format!(
+                            "flat native recovery token `{}` is ambiguous with an exposed tool",
+                            action.code
+                        )));
+                    }
                     (format!("action:{}", action.code), action.code.clone())
                 }
             };

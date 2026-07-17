@@ -1436,13 +1436,24 @@ impl ServerHandler for CliMcpServer {
 
         match &self.surface {
             McpToolSurface::EffectLanes(_) => {
-                if self
+                let Some(lane) = self
                     .registry
                     .tool_lane(&self.config.execution_tool_name, &tool_name)
-                    .is_none()
-                {
+                else {
                     return Err(rmcp::ErrorData::invalid_params(
                         format!("Unknown tool {tool_name}"),
+                        None,
+                    ));
+                };
+                let task_support = self
+                    .registry
+                    .lane_task_support(lane, &self.config.execution_tool_name)
+                    .map_err(|_| {
+                        rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
+                    })?;
+                if matches!(task_support, TaskSupportSpec::Required) {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        format!("Tool {tool_name} requires task-augmented execution"),
                         None,
                     ));
                 }
@@ -1635,13 +1646,24 @@ impl ServerHandler for CliMcpServer {
         self.validate_protocol(request.meta.as_ref(), &context)?;
         self.ensure_tasks_supported()?;
         let tool_name = request.name.to_string();
-        if self
+        let Some(lane) = self
             .registry
             .tool_lane(&self.config.execution_tool_name, &tool_name)
-            .is_none()
-        {
+        else {
             return Err(rmcp::ErrorData::invalid_params(
                 format!("Only execution tools support task-augmented execution: {tool_name}"),
+                None,
+            ));
+        };
+        let task_support = self
+            .registry
+            .lane_task_support(lane, &self.config.execution_tool_name)
+            .map_err(|_| {
+                rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
+            })?;
+        if matches!(task_support, TaskSupportSpec::Forbidden) {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("Tool {tool_name} does not support task-augmented execution"),
                 None,
             ));
         }

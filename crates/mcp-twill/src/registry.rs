@@ -2779,6 +2779,7 @@ impl CommandRegistry {
         arguments: rmcp::model::JsonObject,
         invocation: crate::InvocationContext,
     ) -> Result<CommandExecutionOutcome> {
+        self.validate_invocation_contracts()?;
         let resolved = self.resolve_context_workspaces(&invocation);
         let plan = self.build_operation_plan_prepared(
             operation_id,
@@ -2908,9 +2909,7 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
     ) -> Result<CommandExecutionOutcome> {
-        self.validate_argument_schemas()?;
-        self.validate_presentations()?;
-        self.validate_results()?;
+        self.validate_invocation_contracts()?;
         let plan = self.build_plan_prepared(&request, resolved, context)?;
         if let Some(current_lane) = current_lane
             && plan.lane != current_lane
@@ -2925,6 +2924,12 @@ impl CommandRegistry {
 
         self.dispatch_prepared_plan_with_context(request, plan, context)
             .await
+    }
+
+    fn validate_invocation_contracts(&self) -> Result<()> {
+        self.validate_argument_schemas()?;
+        self.validate_presentations()?;
+        self.validate_results()
     }
 
     pub(crate) async fn dispatch_prepared_plan_with_context(

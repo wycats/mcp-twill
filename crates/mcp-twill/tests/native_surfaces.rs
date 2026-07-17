@@ -9,11 +9,12 @@ use std::{
 use async_trait::async_trait;
 use mcp_twill::{
     ApplicationResultContract, ApplicationSuccess, ArgSpec, CliMcpServer, CliMcpServerConfig,
-    CommandContext, CommandRegistry, CommandSpec, DynamicCommandFailure, FrameworkHelpProjection,
-    InvocationContext, InvocationOrigin, McpProtocolTarget, NativeApplicationErrorDialect,
-    NativeConfirmationBridge, NativeConfirmationBridgeError, NativeConfirmationDecision,
-    NativeConfirmationRequest, NativeConfirmationRoute, NativeExposurePolicy, NativeToolSurface,
-    OutputContract, PermissionAuthorizer, PermissionDecision, PermissionEffect, PermissionSpec,
+    CommandContext, CommandOutput, CommandRegistry, CommandSpec, DynamicCommandFailure,
+    FrameworkHelpProjection, InvocationContext, InvocationOrigin, McpProtocolTarget,
+    NativeApplicationErrorDialect, NativeConfirmationBridge, NativeConfirmationBridgeError,
+    NativeConfirmationDecision, NativeConfirmationRequest, NativeConfirmationRoute,
+    NativeExposurePolicy, NativeToolSurface, OutputContract, PermissionAuthorizer,
+    PermissionDecision, PermissionEffect, PermissionSpec, RunMode, RunRequest,
     ServingSurfaceIdentity, TaskSupportSpec,
 };
 use rmcp::{
@@ -633,6 +634,80 @@ async fn native_application_errors_use_the_selected_surface_dialect() -> anyhow:
 }
 
 #[test]
+fn flat_recovery_actions_cannot_collide_with_exposed_tool_names() {
+    let success = object_contract(json!({ "started": { "type": "boolean" } }), &["started"]);
+    let failing = object_contract(json!({ "opened": { "type": "boolean" } }), &["opened"])
+        .with_error_spec(mcp_twill::ApplicationErrorSpec {
+            code: "session_required".to_string(),
+            summary: "Start a session first".to_string(),
+            message: mcp_twill::ApplicationMessageDecl::DeclarationSummary,
+            details_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            capability: None,
+            recoveries: vec![mcp_twill::ApplicationRecoveryDecl::Action(
+                mcp_twill::ApplicationActionDecl {
+                    code: "start_session".to_string(),
+                    summary: "Start a session manually".to_string(),
+                },
+            )],
+            recovery_cardinality: mcp_twill::RecoveryCardinality::AtMostOne,
+        });
+    let registry = CommandRegistry::new("errors", "Native application errors")
+        .register_dynamic(
+            CommandSpec::new(["session", "start"], "Start", "Start a session").with_output(
+                OutputContract {
+                    application: Some(success),
+                    ..OutputContract::default()
+                },
+            ),
+            |_| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                    "started": true
+                })))
+            },
+        )
+        .register_dynamic(
+            CommandSpec::new(["browser", "open"], "Open", "Open a browser").with_output(
+                OutputContract {
+                    application: Some(failing),
+                    ..OutputContract::default()
+                },
+            ),
+            |_| async {
+                Err::<ApplicationSuccess<Value>, _>(
+                    mcp_twill::DynamicApplicationError::new("session_required").into(),
+                )
+            },
+        );
+    let error =
+        application_error_surface(&registry, NativeApplicationErrorDialect::FlatSingleRecovery)
+            .unwrap_err();
+    assert!(error.to_string().contains("ambiguous with an exposed tool"));
+}
+
+#[test]
+fn duplicate_operation_ids_fail_native_compilation() {
+    let registry = CommandRegistry::new("duplicates", "Duplicate operation ids")
+        .register(CommandSpec::new(["a.b"], "Flat", "Flat path"), |_| async {
+            Ok(CommandOutput::structured(json!({})))
+        })
+        .register(
+            CommandSpec::new(["a", "b"], "Nested", "Nested path"),
+            |_| async { Ok(CommandOutput::structured(json!({}))) },
+        );
+    let error = NativeToolSurface::builder("duplicate-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("ambiguous", "a.b")
+        .build(&registry, McpProtocolTarget::V2025_11_25)
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate native operation id"));
+}
+
+#[test]
 fn operation_id_planning_is_distinct_from_command_templates() -> anyhow::Result<()> {
     let registry = item_registry(TaskSupportSpec::Optional);
     let runtime = tokio::runtime::Runtime::new()?;
@@ -653,6 +728,40 @@ fn operation_id_planning_is_distinct_from_command_templates() -> anyhow::Result<
     assert!(wire.get("rawCommand").is_none());
     assert!(wire.get("surface").is_none());
     Ok(())
+}
+
+#[tokio::test]
+async fn operation_id_execution_preserves_registry_validation() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let spec = CommandSpec::new(["invalid"], "Invalid", "Invalid legacy result registration")
+        .with_output(OutputContract {
+            application: Some(object_contract(json!({}), &[])),
+            ..OutputContract::default()
+        });
+    let registry = CommandRegistry::new("invalid", "Invalid registry").register(spec, {
+        let calls = calls.clone();
+        move |_| {
+            let calls = calls.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(CommandOutput::structured(json!({})))
+            }
+        }
+    });
+    let error = registry
+        .run_operation_with_context(
+            "invalid",
+            serde_json::Map::new(),
+            InvocationContext::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("legacy command `invalid` cannot declare")
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -759,6 +868,35 @@ async fn protocol_observations_reject_before_native_tool_routing() -> anyhow::Re
 }
 
 #[tokio::test]
+async fn grouped_selector_failures_are_invalid_input() -> anyhow::Result<()> {
+    for (arguments, expected_code) in [
+        (json!({ "id": "42" }), "missing_argument"),
+        (
+            json!({ "operation": 1, "id": "42" }),
+            "invalid_argument_type",
+        ),
+        (
+            json!({ "operation": "missing", "id": "42" }),
+            "invalid_argument_type",
+        ),
+    ] {
+        let registry = item_registry(TaskSupportSpec::Optional);
+        let surface = grouped_surface(&registry, NativeConfirmationRoute::Unavailable)?;
+        let result = call_native_tool(
+            CliMcpServer::with_surface(registry, surface)?,
+            "items",
+            arguments,
+        )
+        .await?;
+        assert_eq!(result.is_error, Some(true));
+        let body: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text)?;
+        assert_eq!(body["code"], expected_code);
+        assert_ne!(body["code"], "build_failed");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_surfaces_fail_closed_for_every_task_request() -> anyhow::Result<()> {
     let registry = item_registry(TaskSupportSpec::Optional);
     let surface = grouped_surface(&registry, NativeConfirmationRoute::Unavailable)?;
@@ -794,6 +932,79 @@ async fn native_surfaces_fail_closed_for_every_task_request() -> anyhow::Result<
         );
     }
 
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn effect_lanes_enforce_forbidden_and_required_task_delivery() -> anyhow::Result<()> {
+    let forbidden_calls = Arc::new(AtomicUsize::new(0));
+    let forbidden = CliMcpServer::new(item_registry_with_calls(
+        TaskSupportSpec::Forbidden,
+        forbidden_calls.clone(),
+    ))?;
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        forbidden.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient.serve(client_transport).await?;
+    let request = RunRequest {
+        command: "items get --id $args.id".to_string(),
+        args: BTreeMap::from([("id".to_string(), json!("42"))]),
+        stdin: None,
+        output: None,
+        mode: RunMode::Execute,
+        approval: None,
+        dry_run: false,
+    };
+    let params = CallToolRequestParams::new("run")
+        .with_arguments(serde_json::from_value(serde_json::to_value(&request)?)?)
+        .with_task(serde_json::Map::new());
+    let error = client
+        .send_request(ClientRequest::CallToolRequest(Request::new(params)))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not support task-based invocation")
+            || error
+                .to_string()
+                .contains("does not support task-augmented execution"),
+        "{error:?}"
+    );
+    assert_eq!(forbidden_calls.load(Ordering::SeqCst), 0);
+    client.cancel().await?;
+    server_handle.await??;
+
+    let required_calls = Arc::new(AtomicUsize::new(0));
+    let required = CliMcpServer::new(item_registry_with_calls(
+        TaskSupportSpec::Required,
+        required_calls.clone(),
+    ))?;
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        required.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient.serve(client_transport).await?;
+    let error = client
+        .call_tool(
+            CallToolRequestParams::new("run")
+                .with_arguments(serde_json::from_value(serde_json::to_value(request)?)?),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("requires task-based invocation")
+            || error
+                .to_string()
+                .contains("requires task-augmented execution"),
+        "{error:?}"
+    );
+    assert_eq!(required_calls.load(Ordering::SeqCst), 0);
     client.cancel().await?;
     server_handle.await??;
     Ok(())
