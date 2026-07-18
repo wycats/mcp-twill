@@ -1470,11 +1470,11 @@ fn refine_input_schema_for_bindings(
             crate::ResourceBindingMode::Ambient {
                 explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
                 ..
-            } => refine_carrier(Value::Object(schema.clone()), &carrier, false, schema),
+            } => refine_carrier(schema, &carrier, false),
             crate::ResourceBindingMode::Ambient {
                 explicit: crate::ExplicitCarrierPolicy::Omitted,
                 ..
-            } => refine_carrier(Value::Object(schema.clone()), &carrier, true, schema),
+            } => refine_carrier(schema, &carrier, true),
         }
     }
 }
@@ -1527,7 +1527,7 @@ fn append_resource_binding_guidance<'a>(
     description
 }
 
-fn refine_carrier(mut value: Value, carrier: &str, omit: bool, destination: &mut JsonObject) {
+fn refine_carrier(schema: &mut JsonObject, carrier: &str, omit: bool) {
     fn visit(value: &mut Value, carrier: &str, omit: bool) {
         let Some(object) = value.as_object_mut() else {
             return;
@@ -1552,11 +1552,12 @@ fn refine_carrier(mut value: Value, carrier: &str, omit: bool, destination: &mut
             }
         }
     }
+    let mut value = Value::Object(std::mem::take(schema));
     visit(&mut value, carrier, omit);
-    *destination = value
-        .as_object()
-        .cloned()
-        .expect("native input schema remains an object");
+    let Value::Object(refined) = value else {
+        unreachable!("native input schema remains an object")
+    };
+    *schema = refined;
 }
 
 fn validate_surface_name(name: &str) -> Result<()> {
