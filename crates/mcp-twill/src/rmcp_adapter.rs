@@ -721,8 +721,8 @@ impl CliMcpServer {
                 Ok(crate::CommandExecutionOutcome::ApplicationError { plan, error }) => {
                     native_application_error_outcome(surface, plan, error, plan_for_event)
                 }
-                Ok(crate::CommandExecutionOutcome::Success(response)) => {
-                    native_success_outcome(self, surface, &operation_id, response, plan_for_event)
+                Ok(crate::CommandExecutionOutcome::Success(_)) => {
+                    unreachable!("binding_availability never returns a Success outcome")
                 }
                 Err(error) => native_framework_outcome(error, Some((plan, plan_for_event))),
             };

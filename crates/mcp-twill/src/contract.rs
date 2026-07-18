@@ -1394,40 +1394,50 @@ fn check_resource_binding_projection_with_help(
     violations
 }
 
+const COMPOSITION_KEYWORDS: &[&str] = &["allOf", "anyOf", "oneOf", "if", "then", "else"];
+
 fn schema_has_property(schema: &serde_json::Value, property: &str) -> bool {
-    match schema {
-        serde_json::Value::Object(object) => {
-            object
-                .get("properties")
-                .and_then(serde_json::Value::as_object)
-                .is_some_and(|properties| properties.contains_key(property))
-                || object
-                    .values()
-                    .any(|value| schema_has_property(value, property))
-        }
-        serde_json::Value::Array(values) => values
-            .iter()
-            .any(|value| schema_has_property(value, property)),
-        _ => false,
+    let Some(object) = schema.as_object() else {
+        return false;
+    };
+    if object
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|properties| properties.contains_key(property))
+    {
+        return true;
     }
+    COMPOSITION_KEYWORDS.iter().any(|key| {
+        match object.get(*key) {
+            Some(serde_json::Value::Array(branches)) => {
+                branches.iter().any(|v| schema_has_property(v, property))
+            }
+            Some(child) => schema_has_property(child, property),
+            None => false,
+        }
+    })
 }
 
 fn schema_requires_property(schema: &serde_json::Value, property: &str) -> bool {
-    match schema {
-        serde_json::Value::Object(object) => {
-            object
-                .get("required")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|required| required.iter().any(|name| name.as_str() == Some(property)))
-                || object
-                    .values()
-                    .any(|value| schema_requires_property(value, property))
-        }
-        serde_json::Value::Array(values) => values
-            .iter()
-            .any(|value| schema_requires_property(value, property)),
-        _ => false,
+    let Some(object) = schema.as_object() else {
+        return false;
+    };
+    if object
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|required| required.iter().any(|name| name.as_str() == Some(property)))
+    {
+        return true;
     }
+    COMPOSITION_KEYWORDS.iter().any(|key| {
+        match object.get(*key) {
+            Some(serde_json::Value::Array(branches)) => branches
+                .iter()
+                .any(|v| schema_requires_property(v, property)),
+            Some(child) => schema_requires_property(child, property),
+            None => false,
+        }
+    })
 }
 
 /// Capability declarations honor the registration promises (declared,
