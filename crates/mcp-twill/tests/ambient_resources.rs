@@ -594,6 +594,20 @@ fn grouped_ambient_refinement_preserves_other_members_ordinary_arguments() -> an
             command
                 .summary("New tab")
                 .description("Open a tab in the selected session")
+                .arg(
+                    mcp_twill::arg::inline_schema(
+                        "payload",
+                        json!({
+                            "type": "object",
+                            "properties": {
+                                "agent_session_id": { "type": "string" }
+                            },
+                            "required": ["agent_session_id"],
+                            "additionalProperties": false
+                        }),
+                    )
+                    .summary("Nested payload"),
+                )
                 .handle_result(use_group_session);
         });
         server.command("session identify", |command| {
@@ -626,7 +640,14 @@ fn grouped_ambient_refinement_preserves_other_members_ordinary_arguments() -> an
         })
         .build(&registry, McpProtocolTarget::V2025_11_25)?;
 
-    assert!(tool_schema(&surface, "session")["properties"]["agent_session_id"].is_object());
+    let schema = tool_schema(&surface, "session");
+    assert!(schema["properties"]["agent_session_id"].is_object());
+    assert!(schema["properties"]["payload"]["properties"]["agent_session_id"].is_object());
+    assert_eq!(
+        schema["properties"]["payload"]["required"],
+        json!(["agent_session_id"])
+    );
+    assert!(mcp_twill::check_resource_binding_projection(&registry, &surface).is_empty());
     Ok(())
 }
 

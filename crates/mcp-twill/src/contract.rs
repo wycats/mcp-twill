@@ -1282,8 +1282,17 @@ fn check_resource_binding_projection_with_help(
 
     let bindings = declarations
         .iter()
-        .map(|binding| (binding.resource.as_str(), &binding.mode))
+        .map(|binding| (binding.resource.clone(), binding.mode.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let grouped_tools = surface
+        .declaration()
+        .tools
+        .iter()
+        .filter_map(|tool| match tool {
+            crate::NativeToolDecl::Group { name, .. } => Some(name.as_str()),
+            crate::NativeToolDecl::Direct { .. } => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     for operation in surface.snapshot().operations() {
         let spec = operation.spec();
         let used = spec
@@ -1347,7 +1356,36 @@ fn check_resource_binding_projection_with_help(
                 ));
                 continue;
             };
-            let schema = serde_json::Value::Object((*tool.input_schema).clone());
+            let schema = if grouped_tools.contains(tool_name) {
+                let Some(command) = registry
+                    .command_specs()
+                    .find(|command| command.path.join(".") == spec.id)
+                else {
+                    violations.push(violation(
+                        Some(&spec.id),
+                        "resource bindings",
+                        "native operation is missing its registry command",
+                    ));
+                    continue;
+                };
+                let Some(mut schema) = registry.arg_schema(command).as_object().cloned() else {
+                    violations.push(violation(
+                        Some(&spec.id),
+                        "resource bindings",
+                        "native operation has a non-object registry input schema",
+                    ));
+                    continue;
+                };
+                crate::native_surfaces::refine_input_schema_for_bindings(
+                    &mut schema,
+                    command,
+                    registry,
+                    &bindings,
+                );
+                serde_json::Value::Object(schema)
+            } else {
+                serde_json::Value::Object((*tool.input_schema).clone())
+            };
             let has_carrier = schema_has_property(&schema, &carrier);
             let carrier_required = schema_requires_property(&schema, &carrier);
             match mode {

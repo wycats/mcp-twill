@@ -1444,7 +1444,7 @@ fn normalize_resource_bindings(
     Ok(())
 }
 
-fn refine_input_schema_for_bindings(
+pub(crate) fn refine_input_schema_for_bindings(
     schema: &mut JsonObject,
     command: &crate::CommandSpec,
     registry: &CommandRegistry,
@@ -1538,14 +1538,14 @@ fn refine_carrier(schema: &mut JsonObject, carrier: &str, omit: bool) {
         {
             properties.remove(carrier);
         }
-        for child in object.values_mut() {
-            match child {
-                Value::Array(values) => {
-                    for value in values {
-                        visit(value, carrier, omit);
+        for keyword in ["allOf", "anyOf", "oneOf", "if", "then", "else"] {
+            match object.get_mut(keyword) {
+                Some(Value::Array(branches)) => {
+                    for branch in branches {
+                        visit(branch, carrier, omit);
                     }
                 }
-                Value::Object(_) => visit(child, carrier, omit),
+                Some(branch @ Value::Object(_)) => visit(branch, carrier, omit),
                 _ => {}
             }
         }
