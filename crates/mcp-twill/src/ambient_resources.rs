@@ -328,6 +328,7 @@ pub trait ResolveResourceWithErrors<T: Resource>: Send + Sync + 'static {
 pub(crate) enum ErasedAmbientBindingFailure {
     Application(crate::results::RawApplicationError),
     Infrastructure,
+    Framework(FrameworkError),
 }
 
 type AmbientBindFuture<'a> = Pin<
@@ -424,9 +425,10 @@ where
         Box::pin(async move {
             match self.binder.bind(context).await {
                 Ok(reference) => Ok(reference),
-                Err(AmbientBindingFailure::Application(error)) => {
-                    Err(ErasedAmbientBindingFailure::Application(error.into_raw()))
-                }
+                Err(AmbientBindingFailure::Application(error)) => match error.into_raw() {
+                    Ok(error) => Err(ErasedAmbientBindingFailure::Application(error)),
+                    Err(error) => Err(ErasedAmbientBindingFailure::Framework(error)),
+                },
                 Err(AmbientBindingFailure::Infrastructure(_)) => {
                     Err(ErasedAmbientBindingFailure::Infrastructure)
                 }

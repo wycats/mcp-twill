@@ -3609,6 +3609,9 @@ impl CommandRegistry {
                                 "ambient resource binding failed".to_string(),
                             ));
                         }
+                        Err(crate::ambient_resources::ErasedAmbientBindingFailure::Framework(
+                            error,
+                        )) => return Err(error),
                     };
                     (reference.as_id().to_string(), true)
                 }
@@ -3677,6 +3680,9 @@ impl CommandRegistry {
                         })?;
                     let error = crate::results::validate_application_error(contract, raw)?;
                     return Ok(SignatureResourceResolution::ApplicationError(error));
+                }
+                Err(crate::resource::ErasedResolutionFailure::Framework(error)) => {
+                    return Err(error);
                 }
             }
         }

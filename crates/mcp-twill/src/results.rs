@@ -436,13 +436,20 @@ where
     E: ApplicationError,
     F: ApplicationErrorFootprint<E>,
 {
-    pub(crate) fn into_raw(self) -> RawApplicationError {
-        RawApplicationError {
-            code: self._error.code().to_string(),
+    pub(crate) fn into_raw(self) -> crate::Result<RawApplicationError> {
+        let code = self._error.code();
+        if !F::codes().contains(&code) {
+            return Err(FrameworkError::ResultContractViolation {
+                boundary: ResultContractBoundary::ApplicationError,
+                reason: ResultContractReason::UndeclaredCode,
+            });
+        }
+        Ok(RawApplicationError {
+            code: code.to_string(),
             message: self._error.runtime_message().map(Cow::into_owned),
             details: self._error.details(),
             recovery: self._error.recovery(),
-        }
+        })
     }
 }
 

@@ -128,6 +128,7 @@ mcp_twill::application_error_set! {
 enum BinderFailureMode {
     None,
     Application,
+    OutsideFootprint,
     Infrastructure,
 }
 
@@ -177,6 +178,7 @@ impl BindAmbientResource<Session> for SessionBinder {
                 PrivateResourceReference::from_id(format!("ambient-{call}")).map_err(Into::into)
             }
             BinderFailureMode::Application => Err(BrowserFailure::BrokerUnavailable.into()),
+            BinderFailureMode::OutsideFootprint => Err(BrowserFailure::SessionExpired.into()),
             BinderFailureMode::Infrastructure => Err(AmbientBindingInfrastructureError::new(
                 AdversarialError("private-broker-reference"),
             )
@@ -229,6 +231,23 @@ struct TypedSessionResolver;
 impl ResolveResourceWithErrors<Session> for TypedSessionResolver {
     type Error = BrowserFailure;
     type ErrorFootprint = ResolverErrors;
+
+    async fn resolve(
+        &self,
+        _reference: &str,
+        _plan: &InvocationPlan,
+    ) -> std::result::Result<Session, ResourceResolutionFailure<Self::Error, Self::ErrorFootprint>>
+    {
+        Err(BrowserFailure::SessionExpired.into())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct OutsideFootprintSessionResolver;
+
+impl ResolveResourceWithErrors<Session> for OutsideFootprintSessionResolver {
+    type Error = BrowserFailure;
+    type ErrorFootprint = BinderErrors;
 
     async fn resolve(
         &self,
@@ -851,20 +870,20 @@ async fn ambient_refusal_and_infrastructure_errors_are_redacted() -> anyhow::Res
 
 #[tokio::test]
 async fn binder_application_errors_use_the_declared_result_contract() -> anyhow::Result<()> {
-    let fixture = fixture();
+    let valid_fixture = fixture();
     let binder = SessionBinder {
         calls: Arc::new(AtomicUsize::new(0)),
         observations: Arc::new(Mutex::new(Vec::new())),
         mode: BinderFailureMode::Application,
     };
     let ambient_surface = surface(
-        &fixture.registry,
+        &valid_fixture.registry,
         binder,
         mcp_twill::ExplicitCarrierPolicy::OptionalOverride,
         true,
     )?;
     let result = call_native(
-        CliMcpServer::with_surface(fixture.registry, ambient_surface)?,
+        CliMcpServer::with_surface(valid_fixture.registry, ambient_surface)?,
         "new_tab",
         json!({}),
         Some(canonical_meta("ambient-secret")),
@@ -872,6 +891,31 @@ async fn binder_application_errors_use_the_declared_result_contract() -> anyhow:
     .await?;
     let body = result_body(&result);
     assert_eq!(body["code"], "broker_unavailable");
+    assert!(!body.to_string().contains("ambient-secret"));
+
+    let fixture = fixture();
+    let outside_footprint = surface(
+        &fixture.registry,
+        SessionBinder {
+            calls: Arc::new(AtomicUsize::new(0)),
+            observations: Arc::new(Mutex::new(Vec::new())),
+            mode: BinderFailureMode::OutsideFootprint,
+        },
+        mcp_twill::ExplicitCarrierPolicy::OptionalOverride,
+        true,
+    )?;
+    let result = call_native(
+        CliMcpServer::with_surface(fixture.registry, outside_footprint)?,
+        "new_tab",
+        json!({}),
+        Some(canonical_meta("ambient-secret")),
+    )
+    .await?;
+    let body = result_body(&result);
+    assert_eq!(body["code"], "result_contract_violation");
+    assert_eq!(body["details"]["boundary"], "applicationError");
+    assert_eq!(body["details"]["reason"], "undeclaredCode");
+    assert!(!body.to_string().contains("session_expired"));
     assert!(!body.to_string().contains("ambient-secret"));
     Ok(())
 }
@@ -1321,6 +1365,47 @@ async fn typed_resolver_errors_share_the_application_result_boundary() -> anyhow
         .unwrap_err()
         .to_string();
     assert!(invalid.contains("does not declare"), "{invalid}");
+
+    let outside_footprint = CommandRegistry::build("outside", "Outside footprint", |server| {
+        server.resource(
+            ResourceDecl::new("session", "A session")
+                .uri("test://session/{id}")
+                .carrier("agent_session_id")
+                .expiry("session leases expire"),
+        );
+        server.resolver_with_errors::<Session>(OutsideFootprintSessionResolver);
+        server.command("session start", |command| {
+            command
+                .summary("Start")
+                .description("Start a session")
+                .handle_result(start_session);
+        });
+        server.command("tabs new", |command| {
+            command
+                .summary("New tab")
+                .description("Open a tab")
+                .handle_result(use_session);
+        });
+    })?;
+    let outside_footprint = outside_footprint
+        .run(RunRequest {
+            command: "tabs new --agent-session-id $args.agent_session_id".to_string(),
+            args: BTreeMap::from([("agent_session_id".to_string(), json!("session-1"))]),
+            stdin: None,
+            output: None,
+            mode: RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        outside_footprint,
+        FrameworkError::ResultContractViolation {
+            boundary: mcp_twill::ResultContractBoundary::ApplicationError,
+            reason: mcp_twill::ResultContractReason::UndeclaredCode,
+        }
+    ));
     Ok(())
 }
 

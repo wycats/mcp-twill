@@ -78,6 +78,7 @@ type ResolveFuture<'a> = Pin<
 pub(crate) enum ErasedResolutionFailure {
     Refused(ResourceRefusal),
     Application(crate::results::RawApplicationError),
+    Framework(FrameworkError),
 }
 
 type ReadFuture<'a> =
@@ -156,9 +157,10 @@ where
                 Err(ResourceResolutionFailure::Refused(refusal)) => {
                     Err(ErasedResolutionFailure::Refused(refusal))
                 }
-                Err(ResourceResolutionFailure::Application(error)) => {
-                    Err(ErasedResolutionFailure::Application(error.into_raw()))
-                }
+                Err(ResourceResolutionFailure::Application(error)) => match error.into_raw() {
+                    Ok(error) => Err(ErasedResolutionFailure::Application(error)),
+                    Err(error) => Err(ErasedResolutionFailure::Framework(error)),
+                },
             }
         })
     }
