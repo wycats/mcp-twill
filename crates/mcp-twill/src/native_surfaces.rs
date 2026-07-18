@@ -1538,6 +1538,19 @@ fn refine_carrier(schema: &mut JsonObject, carrier: &str, omit: bool) {
         {
             properties.remove(carrier);
         }
+        for keyword in ["dependentRequired", "dependencies"] {
+            let Some(dependencies) = object.get_mut(keyword).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            if omit {
+                dependencies.remove(carrier);
+            }
+            for targets in dependencies.values_mut().filter_map(Value::as_array_mut) {
+                targets.retain(|target| target.as_str() != Some(carrier));
+            }
+            dependencies
+                .retain(|_, targets| targets.as_array().is_none_or(|targets| !targets.is_empty()));
+        }
         for keyword in ["allOf", "anyOf", "oneOf", "if", "then", "else"] {
             match object.get_mut(keyword) {
                 Some(Value::Array(branches)) => {
@@ -1804,7 +1817,24 @@ fn compile_group_input(
             Some(current) => current.intersection(&required).cloned().collect(),
             None => required,
         });
-        member_properties.push((command, own_properties));
+        let own_relationships = ["dependentRequired", "dependencies"]
+            .into_iter()
+            .filter_map(|keyword| object.get(keyword).and_then(Value::as_object))
+            .flat_map(|relationships| relationships.iter())
+            .filter_map(|(trigger, targets)| {
+                targets.as_array().map(|targets| {
+                    (
+                        trigger.clone(),
+                        targets
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .collect::<BTreeSet<_>>(),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        member_properties.push((own_properties, own_relationships));
     }
 
     let mut relationships = BTreeMap::<String, BTreeSet<String>>::new();
@@ -1814,14 +1844,11 @@ fn compile_group_input(
         .collect::<BTreeSet<_>>();
     for trigger in triggers {
         let mut common: Option<BTreeSet<String>> = None;
-        for (command, own_properties) in &member_properties {
+        for (own_properties, own_relationships) in &member_properties {
             if !own_properties.contains_key(&trigger) {
                 continue;
             }
-            let targets = command
-                .arg(&trigger)
-                .map(|argument| argument.requires_arguments.iter().cloned().collect())
-                .unwrap_or_default();
+            let targets = own_relationships.get(&trigger).cloned().unwrap_or_default();
             if let Some(existing) = &common {
                 if existing != &targets {
                     return Err(build_error(format!(

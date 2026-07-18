@@ -20,7 +20,7 @@ use mcp_twill::{
     FrameworkHelpProjection, Grant, InMemoryEventSink, InvocationPlan, McpProtocolTarget,
     NativeApplicationErrorDialect, NativeConfirmationRoute, NativeToolSurface,
     PermissionAuthorizer, PermissionDecision, PlanResourceBindingFact, PlanResourceBindingSource,
-    PrivateResourceReference, Res, ResolveResource, ResolveResourceWithErrors, Resource,
+    PrivateResourceReference, Release, Res, ResolveResource, ResolveResourceWithErrors, Resource,
     ResourceBindingDecl, ResourceBindingMode, ResourceDecl, ResourceRefusal,
     ResourceResolutionFailure, ResponseEnvelope, ResponseStatus, RunMode, RunRequest,
     WorkspaceDecl,
@@ -115,6 +115,12 @@ struct ResolverErrors;
 impl ApplicationErrorFootprint<BrowserFailure> for ResolverErrors {
     fn codes() -> Vec<&'static str> {
         vec!["session_expired"]
+    }
+}
+
+mcp_twill::application_error_set! {
+    struct ResolverBlindErrors for BrowserFailure {
+        ApplicationErrorUse::new("broker_unavailable"),
     }
 }
 
@@ -261,6 +267,16 @@ async fn use_session(
     }))
 }
 
+async fn use_session_without_resolver_error(
+    session: Res<Session>,
+    _: CommandContext,
+) -> ApplicationResult<SessionResult, BrowserFailure, ResolverBlindErrors> {
+    Ok(ApplicationSuccess::value(SessionResult {
+        session: Some(session.id.clone()),
+        reused: true,
+    }))
+}
+
 async fn maybe_session(
     session: Option<Res<Session>>,
     _: CommandContext,
@@ -294,18 +310,29 @@ struct GroupSessionResult {
     session: String,
 }
 
-async fn use_group_session(
-    session: Res<Session>,
+async fn use_optional_group_session(
+    session: Option<Res<Session>>,
     _: CommandContext,
 ) -> ApplicationResult<GroupSessionResult, BrowserFailure, BrowserErrors> {
     Ok(ApplicationSuccess::value(GroupSessionResult {
-        session: session.id.clone(),
+        session: session
+            .map(|session| session.id.clone())
+            .unwrap_or_else(|| "absent".to_string()),
     }))
 }
 
 async fn identify_group_session(_: CommandContext) -> ApplicationResult<GroupSessionResult> {
     Ok(ApplicationSuccess::value(GroupSessionResult {
         session: "ordinary".to_string(),
+    }))
+}
+
+async fn release_group_session(
+    session: Release<Session>,
+    _: CommandContext,
+) -> ApplicationResult<GroupSessionResult> {
+    Ok(ApplicationSuccess::value(GroupSessionResult {
+        session: session.id.clone(),
     }))
 }
 
@@ -564,8 +591,9 @@ fn surface_schema_help_hash_and_contract_follow_binding_mode() -> anyhow::Result
     Ok(())
 }
 
-#[test]
-fn grouped_ambient_refinement_preserves_other_members_ordinary_arguments() -> anyhow::Result<()> {
+#[tokio::test]
+async fn grouped_ambient_refinement_preserves_other_members_ordinary_arguments()
+-> anyhow::Result<()> {
     let reference_schema = json!({
         "type": "string",
         "minLength": 1,
@@ -608,7 +636,13 @@ fn grouped_ambient_refinement_preserves_other_members_ordinary_arguments() -> an
                     )
                     .summary("Nested payload"),
                 )
-                .handle_result(use_group_session);
+                .arg(
+                    mcp_twill::arg::string("trigger")
+                        .summary("Trigger ambient use")
+                        .optional()
+                        .requires_argument("agent_session_id"),
+                )
+                .handle_result(use_optional_group_session);
         });
         server.command("session identify", |command| {
             command
@@ -647,7 +681,21 @@ fn grouped_ambient_refinement_preserves_other_members_ordinary_arguments() -> an
         schema["properties"]["payload"]["required"],
         json!(["agent_session_id"])
     );
+    assert!(schema.get("dependencies").is_none());
     assert!(mcp_twill::check_resource_binding_projection(&registry, &surface).is_empty());
+    let result = call_native(
+        CliMcpServer::with_surface(registry, surface)?,
+        "session",
+        json!({
+            "operation": "new_tab",
+            "payload": { "agent_session_id": "nested" },
+            "trigger": "present"
+        }),
+        Some(canonical_meta("grouped-chat")),
+    )
+    .await?;
+    assert_eq!(result.is_error, Some(false), "{}", result_body(&result));
+    assert_eq!(result_body(&result)["session"], "ambient-1");
     Ok(())
 }
 
@@ -1238,6 +1286,87 @@ async fn typed_resolver_errors_share_the_application_result_boundary() -> anyhow
         .validate_results()
         .unwrap_err();
     assert!(duplicate.to_string().contains("more than one resolver"));
+
+    let invalid = CommandRegistry::new("invalid", "Invalid typed resolver")
+        .declare_resource(
+            ResourceDecl::new("session", "A session")
+                .uri("test://session/{id}")
+                .carrier("agent_session_id")
+                .expiry("session leases expire"),
+        )
+        .with_resolver_with_errors::<Session>(TypedSessionResolver)
+        .register_result(
+            mcp_twill::CommandSpec::new(["session", "start"], "Start", "Start an explicit session"),
+            start_session,
+        )
+        .register_result(
+            mcp_twill::CommandSpec::new(
+                ["tabs", "invalid"],
+                "Invalid",
+                "Uses a resolver error outside the handler footprint",
+            ),
+            use_session_without_resolver_error,
+        );
+    let invalid = invalid
+        .run(RunRequest {
+            command: "tabs invalid --agent-session-id $args.agent_session_id".to_string(),
+            args: BTreeMap::from([("agent_session_id".to_string(), json!("session-1"))]),
+            stdin: None,
+            output: None,
+            mode: RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(invalid.contains("does not declare"), "{invalid}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_planning_deduplicates_consume_and_release_carriers() -> anyhow::Result<()> {
+    let registry = CommandRegistry::build("release", "Release resource", |server| {
+        server.resource(
+            ResourceDecl::new("session", "A session")
+                .uri("test://session/{id}")
+                .carrier("agent_session_id")
+                .expiry("session leases expire"),
+        );
+        server.resolver::<Session>(SessionResolver {
+            calls: Arc::new(AtomicUsize::new(0)),
+            seen: Arc::new(Mutex::new(Vec::new())),
+            refuse: Arc::new(AtomicBool::new(false)),
+        });
+        server.command("session start", |command| {
+            command
+                .summary("Start")
+                .description("Start a session")
+                .handle_result(start_session);
+        });
+        server.command("session finish", |command| {
+            command
+                .summary("Finish")
+                .description("Finish a session")
+                .handle_result(release_group_session);
+        });
+    })?;
+    let surface = NativeToolSurface::builder("release-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .application_errors(NativeApplicationErrorDialect::Canonical)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("start_session", "session.start")
+        .direct("finish_session", "session.finish")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let result = call_native(
+        CliMcpServer::with_surface(registry, surface)?,
+        "finish_session",
+        json!({ "agent_session_id": "session-1" }),
+        None,
+    )
+    .await?;
+    assert_eq!(result.is_error, Some(false), "{}", result_body(&result));
+    assert_eq!(result_body(&result)["session"], "session-1");
     Ok(())
 }
 

@@ -2615,6 +2615,12 @@ impl CommandRegistry {
                 }
             }
             for target in &spec.requires_arguments {
+                if native_carriers
+                    .get(target)
+                    .is_some_and(|policy| !policy.required)
+                {
+                    continue;
+                }
                 if !request.args.contains_key(target) {
                     schema_failures.push((
                         spec.name.clone(),
@@ -2970,12 +2976,13 @@ impl CommandRegistry {
         surface: &crate::NativeToolSurface,
     ) -> Result<BTreeMap<String, NativeCarrierPolicy>> {
         let mut policies = BTreeMap::new();
-        for resource in spec
+        let resources = spec
             .requires_resources
             .iter()
             .chain(&spec.optional_resources)
             .chain(&spec.releases)
-        {
+            .collect::<BTreeSet<_>>();
+        for resource in resources {
             let declaration = self.resources.get(resource).ok_or_else(|| {
                 FrameworkError::Build(format!(
                     "command `{}` consumes undeclared resource `{resource}`",
@@ -3381,7 +3388,8 @@ impl CommandRegistry {
     fn validate_invocation_contracts(&self) -> Result<()> {
         self.validate_argument_schemas()?;
         self.validate_presentations()?;
-        self.validate_results()
+        self.validate_results()?;
+        self.validate_resources()
     }
 
     pub(crate) async fn dispatch_prepared_plan_with_context(
