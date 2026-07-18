@@ -349,7 +349,7 @@ async fn identify_group_session(_: CommandContext) -> ApplicationResult<GroupSes
 async fn release_group_session(
     session: Release<Session>,
     _: CommandContext,
-) -> ApplicationResult<GroupSessionResult> {
+) -> ApplicationResult<GroupSessionResult, BrowserFailure, BrowserErrors> {
     Ok(ApplicationSuccess::value(GroupSessionResult {
         session: session.id.clone(),
     }))
@@ -403,6 +403,12 @@ fn fixture() -> Fixture {
             command
                 .summary("Maybe session")
                 .description("Use a session when one is selected")
+                .arg(
+                    mcp_twill::arg::string("trigger")
+                        .summary("Require an explicit session when present")
+                        .optional()
+                        .requires_argument("agent_session_id"),
+                )
                 .handle_result(maybe_session);
         });
     })
@@ -923,6 +929,27 @@ async fn binder_application_errors_use_the_declared_result_contract() -> anyhow:
 #[tokio::test]
 async fn required_and_optional_absence_have_distinct_owner_paths() -> anyhow::Result<()> {
     let fixture = fixture();
+    let argument_surface = NativeToolSurface::builder("argument-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .application_errors(NativeApplicationErrorDialect::Canonical)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("start_session", "session.start")
+        .direct("new_tab", "tabs.new")
+        .direct("maybe_session", "session.maybe")
+        .build(&fixture.registry, McpProtocolTarget::V2025_11_25)?;
+    assert_eq!(
+        tool_schema(&argument_surface, "maybe_session")["dependentRequired"]["trigger"],
+        json!(["agent_session_id"])
+    );
+    let result = call_native(
+        CliMcpServer::with_surface(fixture.registry.clone(), argument_surface)?,
+        "maybe_session",
+        json!({ "trigger": "present" }),
+        None,
+    )
+    .await?;
+    assert_eq!(result_body(&result)["code"], "invalid_argument_type");
+
     let binder_calls = Arc::new(AtomicUsize::new(0));
     let with_missing = surface(
         &fixture.registry,
@@ -985,6 +1012,8 @@ async fn required_and_optional_absence_have_distinct_owner_paths() -> anyhow::Re
     let body = result_body(&result);
     assert_eq!(body["code"], "resource_binding_missing");
     assert_eq!(body["details"]["binding"], "absent");
+    assert!(body["details"].get("establish").is_none());
+    assert!(!body.to_string().contains("session start"));
     let envelope = ResponseEnvelope::framework_error(
         FrameworkError::ResourceBindingMissing {
             resource: "session".to_string(),
@@ -1411,6 +1440,7 @@ async fn typed_resolver_errors_share_the_application_result_boundary() -> anyhow
 
 #[tokio::test]
 async fn native_planning_deduplicates_consume_and_release_carriers() -> anyhow::Result<()> {
+    let resolver_calls = Arc::new(AtomicUsize::new(0));
     let registry = CommandRegistry::build("release", "Release resource", |server| {
         server.resource(
             ResourceDecl::new("session", "A session")
@@ -1419,7 +1449,7 @@ async fn native_planning_deduplicates_consume_and_release_carriers() -> anyhow::
                 .expiry("session leases expire"),
         );
         server.resolver::<Session>(SessionResolver {
-            calls: Arc::new(AtomicUsize::new(0)),
+            calls: resolver_calls.clone(),
             seen: Arc::new(Mutex::new(Vec::new())),
             refuse: Arc::new(AtomicBool::new(false)),
         });
@@ -1436,22 +1466,31 @@ async fn native_planning_deduplicates_consume_and_release_carriers() -> anyhow::
                 .handle_result(release_group_session);
         });
     })?;
+    let binder_calls = Arc::new(AtomicUsize::new(0));
     let surface = NativeToolSurface::builder("release-tools")
         .framework_help(FrameworkHelpProjection::Omitted)
         .application_errors(NativeApplicationErrorDialect::Canonical)
         .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .bind_resource::<Session>(
+            AmbientResourceBinding::from_conversation_identity(SessionBinder::healthy(
+                binder_calls.clone(),
+            ))
+            .omit_explicit_carrier(),
+        )
         .direct("start_session", "session.start")
         .direct("finish_session", "session.finish")
         .build(&registry, McpProtocolTarget::V2025_11_25)?;
     let result = call_native(
         CliMcpServer::with_surface(registry, surface)?,
         "finish_session",
-        json!({ "agent_session_id": "session-1" }),
-        None,
+        json!({}),
+        Some(canonical_meta("release-chat")),
     )
     .await?;
     assert_eq!(result.is_error, Some(false), "{}", result_body(&result));
-    assert_eq!(result_body(&result)["session"], "session-1");
+    assert_eq!(result_body(&result)["session"], "ambient-1");
+    assert_eq!(binder_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(resolver_calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

@@ -128,6 +128,7 @@ enum SignatureResourceResolution {
 struct NativeCarrierPolicy {
     required: bool,
     omitted: bool,
+    suppresses_presence_edges: bool,
 }
 
 impl CommandRegistry {
@@ -2617,7 +2618,7 @@ impl CommandRegistry {
             for target in &spec.requires_arguments {
                 if native_carriers
                     .get(target)
-                    .is_some_and(|policy| !policy.required)
+                    .is_some_and(|policy| policy.suppresses_presence_edges)
                 {
                     continue;
                 }
@@ -2999,6 +3000,7 @@ impl CommandRegistry {
                     required: spec.requires_resources.contains(resource)
                         || spec.releases.contains(resource),
                     omitted: false,
+                    suppresses_presence_edges: false,
                 },
                 crate::ResourceBindingMode::Ambient {
                     explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
@@ -3006,6 +3008,7 @@ impl CommandRegistry {
                 } => NativeCarrierPolicy {
                     required: false,
                     omitted: false,
+                    suppresses_presence_edges: true,
                 },
                 crate::ResourceBindingMode::Ambient {
                     explicit: crate::ExplicitCarrierPolicy::Omitted,
@@ -3013,6 +3016,7 @@ impl CommandRegistry {
                 } => NativeCarrierPolicy {
                     required: false,
                     omitted: true,
+                    suppresses_presence_edges: true,
                 },
             };
             let carrier = declaration.carrier_name();
@@ -3547,12 +3551,13 @@ impl CommandRegistry {
         planned_bindings: &[crate::ambient_resources::PlannedResourceBinding],
     ) -> Result<SignatureResourceResolution> {
         let mut resolved = crate::ResolvedResources::default();
-        for resource_name in spec
+        let resources = spec
             .requires_resources
             .iter()
             .chain(&spec.optional_resources)
             .chain(&spec.releases)
-        {
+            .collect::<BTreeSet<_>>();
+        for resource_name in resources {
             let decl = self.resources.get(resource_name).ok_or_else(|| {
                 FrameworkError::Build(format!(
                     "resource `{resource_name}` is not declared on the server"

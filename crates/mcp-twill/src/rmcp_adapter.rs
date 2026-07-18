@@ -1350,6 +1350,7 @@ fn native_framework_error_value(error: Option<&crate::ErrorBody>) -> Value {
             error.message = "Resource reference was refused".to_string();
             Some("recover")
         }
+        crate::ErrorCode::ResourceBindingMissing => Some("establish"),
         _ => None,
     };
     if let Some(details) = error.details.as_object_mut()
@@ -2392,6 +2393,15 @@ mod tests {
                 }
             }),
         };
+        let missing_binding = crate::ErrorBody {
+            code: crate::ErrorCode::ResourceBindingMissing,
+            message: "missing binding".to_string(),
+            details: json!({
+                "resource": "session",
+                "binding": "absent",
+                "establish": ["session start"]
+            }),
+        };
 
         let capability = native_framework_error_value(Some(&capability));
         assert_eq!(
@@ -2405,6 +2415,9 @@ mod tests {
         assert_eq!(resource["details"]["recover"], Value::Null);
         assert!(!resource.to_string().contains("tabs list"));
         assert!(!resource.to_string().contains("tabs new"));
+        let missing_binding = native_framework_error_value(Some(&missing_binding));
+        assert_eq!(missing_binding["details"]["establish"], Value::Null);
+        assert!(!missing_binding.to_string().contains("session start"));
     }
 
     #[test]
