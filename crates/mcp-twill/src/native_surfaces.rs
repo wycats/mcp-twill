@@ -1156,15 +1156,13 @@ fn compile_native_surface(
                         "native group `{name}` contains mixed task support"
                     )));
                 }
-                let mut input = compile_group_input(registry, name, selector, &member_commands)?;
-                for (command, _) in &member_commands {
-                    refine_input_schema_for_bindings(
-                        &mut input,
-                        command,
-                        registry,
-                        &effective_bindings,
-                    );
-                }
+                let input = compile_group_input(
+                    registry,
+                    name,
+                    selector,
+                    &member_commands,
+                    &effective_bindings,
+                )?;
                 let output = compile_group_output(name, selector, &member_operations, members)?;
                 let display_title = title.clone().unwrap_or_else(|| name.clone());
                 let final_description = description
@@ -1749,6 +1747,7 @@ fn compile_group_input(
     group: &str,
     selector: &str,
     members: &[(&crate::CommandSpec, &NativeToolMember)],
+    bindings: &BTreeMap<String, crate::ResourceBindingMode>,
 ) -> Result<JsonObject> {
     let mut properties = Map::new();
     properties.insert(
@@ -1767,12 +1766,13 @@ fn compile_group_input(
 
     for (command, member) in members {
         let schema = registry.arg_schema(command);
-        let object = schema.as_object().ok_or_else(|| {
+        let mut object = schema.as_object().cloned().ok_or_else(|| {
             build_error(format!(
                 "native group `{group}` member `{}` has non-object input schema",
                 member.operation_id
             ))
         })?;
+        refine_input_schema_for_bindings(&mut object, command, registry, bindings);
         let own_properties = object
             .get("properties")
             .and_then(Value::as_object)
@@ -2426,6 +2426,7 @@ fn validate_steering_closure(
         for resource in operation
             .requires_resources
             .iter()
+            .chain(&operation.optional_resources)
             .chain(&operation.grants)
             .chain(&operation.enumerates)
             .chain(&operation.releases)

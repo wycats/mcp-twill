@@ -4501,6 +4501,14 @@ fn validate_result_resource_modes(
     uses: &[crate::resource::ResourceUse],
     optional_resources: &[&'static str],
 ) -> Result<()> {
+    validate_result_resource_modes_for_name(&spec.name(), uses, optional_resources)
+}
+
+pub(crate) fn validate_result_resource_modes_for_name(
+    command_name: &str,
+    uses: &[crate::resource::ResourceUse],
+    optional_resources: &[&'static str],
+) -> Result<()> {
     let mut non_release_counts = BTreeMap::<&str, usize>::new();
     let mut releases = BTreeSet::<&str>::new();
     for resource_use in uses {
@@ -4521,14 +4529,12 @@ fn validate_result_resource_modes(
             .unwrap_or_default();
         if releases.contains(resource) {
             return Err(FrameworkError::Build(format!(
-                "command `{}` consumes resource `{resource}` as both optional and released",
-                spec.name()
+                "command `{command_name}` consumes resource `{resource}` as both optional and released"
             )));
         }
         if optional_count != non_release_count {
             return Err(FrameworkError::Build(format!(
-                "command `{}` consumes resource `{resource}` as both required and optional",
-                spec.name()
+                "command `{command_name}` consumes resource `{resource}` as both required and optional"
             )));
         }
     }

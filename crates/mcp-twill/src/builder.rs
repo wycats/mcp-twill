@@ -768,7 +768,15 @@ impl CommandBuilder {
         H: ResourceDialect<M>,
     {
         let optional = H::optional_resources();
-        for resource_use in H::resource_uses() {
+        let resource_uses = H::resource_uses();
+        if let Err(error) = crate::registry::validate_result_resource_modes_for_name(
+            &self.path.join(" "),
+            &resource_uses,
+            &optional,
+        ) {
+            self.errors.push(error);
+        }
+        for resource_use in resource_uses {
             if resource_use.released {
                 self.releases.push(resource_use.resource.to_string());
             } else if optional.contains(&resource_use.resource) {

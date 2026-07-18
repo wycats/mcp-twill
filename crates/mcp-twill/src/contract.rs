@@ -1407,15 +1407,15 @@ fn schema_has_property(schema: &serde_json::Value, property: &str) -> bool {
     {
         return true;
     }
-    COMPOSITION_KEYWORDS.iter().any(|key| {
-        match object.get(*key) {
+    COMPOSITION_KEYWORDS
+        .iter()
+        .any(|key| match object.get(*key) {
             Some(serde_json::Value::Array(branches)) => {
                 branches.iter().any(|v| schema_has_property(v, property))
             }
             Some(child) => schema_has_property(child, property),
             None => false,
-        }
-    })
+        })
 }
 
 fn schema_requires_property(schema: &serde_json::Value, property: &str) -> bool {
@@ -1429,15 +1429,15 @@ fn schema_requires_property(schema: &serde_json::Value, property: &str) -> bool 
     {
         return true;
     }
-    COMPOSITION_KEYWORDS.iter().any(|key| {
-        match object.get(*key) {
+    COMPOSITION_KEYWORDS
+        .iter()
+        .any(|key| match object.get(*key) {
             Some(serde_json::Value::Array(branches)) => branches
                 .iter()
                 .any(|v| schema_requires_property(v, property)),
             Some(child) => schema_requires_property(child, property),
             None => false,
-        }
-    })
+        })
 }
 
 /// Capability declarations honor the registration promises (declared,

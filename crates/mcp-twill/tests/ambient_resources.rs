@@ -16,7 +16,7 @@ use mcp_twill::{
     AmbientResourceBinding, ApplicationError, ApplicationErrorDecl, ApplicationErrorFootprint,
     ApplicationErrorUse, ApplicationOutput, ApplicationOutputResult, ApplicationRecoverySelection,
     ApplicationResult, ApplicationSuccess, BindAmbientResource, CONVERSATION_IDENTITY_META_KEY,
-    CliMcpServer, CommandContext, CommandRegistry, ErrorCode, FrameworkError,
+    CliMcpServer, CommandContext, CommandOutput, CommandRegistry, ErrorCode, FrameworkError,
     FrameworkHelpProjection, Grant, InMemoryEventSink, InvocationPlan, McpProtocolTarget,
     NativeApplicationErrorDialect, NativeConfirmationRoute, NativeToolSurface,
     PermissionAuthorizer, PermissionDecision, PlanResourceBindingFact, PlanResourceBindingSource,
@@ -281,6 +281,34 @@ async fn mixed_session_modes(
     }))
 }
 
+async fn mixed_session_modes_legacy(
+    _: (Res<Session>, Option<Res<Session>>),
+    _: CommandContext,
+) -> mcp_twill::Result<CommandOutput> {
+    Ok(CommandOutput::structured(json!({ "ok": true })))
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupSessionResult {
+    session: String,
+}
+
+async fn use_group_session(
+    session: Res<Session>,
+    _: CommandContext,
+) -> ApplicationResult<GroupSessionResult, BrowserFailure, BrowserErrors> {
+    Ok(ApplicationSuccess::value(GroupSessionResult {
+        session: session.id.clone(),
+    }))
+}
+
+async fn identify_group_session(_: CommandContext) -> ApplicationResult<GroupSessionResult> {
+    Ok(ApplicationSuccess::value(GroupSessionResult {
+        session: "ordinary".to_string(),
+    }))
+}
+
 #[derive(Clone)]
 struct Fixture {
     registry: CommandRegistry,
@@ -533,6 +561,72 @@ fn surface_schema_help_hash_and_contract_follow_binding_mode() -> anyhow::Result
     assert!(
         help.contains("`session` supplied by host; explicit override `agent_session_id` accepted")
     );
+    Ok(())
+}
+
+#[test]
+fn grouped_ambient_refinement_preserves_other_members_ordinary_arguments() -> anyhow::Result<()> {
+    let reference_schema = json!({
+        "type": "string",
+        "minLength": 1,
+        "description": "Explicit fallback handle. Omit unless a missing-session recovery returned one."
+    });
+    let registry = CommandRegistry::build("grouped", "Grouped resource tests", |server| {
+        server.resource(
+            ResourceDecl::new("session", "A browser session")
+                .uri("test://session/{id}")
+                .carrier("agent_session_id")
+                .reference_schema(reference_schema.clone())
+                .expiry("sessions expire when their lease becomes idle"),
+        );
+        server.resolver::<Session>(SessionResolver {
+            calls: Arc::new(AtomicUsize::new(0)),
+            seen: Arc::new(Mutex::new(Vec::new())),
+            refuse: Arc::new(AtomicBool::new(false)),
+        });
+        server.command("session start", |command| {
+            command
+                .summary("Start")
+                .description("Start an explicit browser session")
+                .handle_result(start_session);
+        });
+        server.command("tabs new", |command| {
+            command
+                .summary("New tab")
+                .description("Open a tab in the selected session")
+                .handle_result(use_group_session);
+        });
+        server.command("session identify", |command| {
+            command
+                .summary("Identify")
+                .description("Use an ordinary argument with the carrier's name")
+                .arg(
+                    mcp_twill::arg::inline_schema("agent_session_id", reference_schema)
+                        .summary("Explicit fallback handle. Omit unless a missing-session recovery returned one."),
+                )
+                .handle_result(identify_group_session);
+        });
+    })?;
+    let surface = NativeToolSurface::builder("grouped-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .application_errors(NativeApplicationErrorDialect::Canonical)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .bind_resource::<Session>(
+            AmbientResourceBinding::from_conversation_identity(SessionBinder::healthy(Arc::new(
+                AtomicUsize::new(0),
+            )))
+            .omit_explicit_carrier(),
+        )
+        .direct("start_session", "session.start")
+        .group("session", |group| {
+            group
+                .selector("operation")
+                .member("new_tab", "tabs.new")
+                .member("identify", "session.identify");
+        })
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+
+    assert!(tool_schema(&surface, "session")["properties"]["agent_session_id"].is_object());
     Ok(())
 }
 
@@ -1011,7 +1105,45 @@ fn optional_resource_modes_and_dead_missing_errors_fail_registration() {
         "{mixed}"
     );
 
+    let mixed_legacy = CommandRegistry::build("mixed", "Mixed resource modes", |server| {
+        server.resource(
+            ResourceDecl::new("session", "A session")
+                .uri("test://session/{id}")
+                .carrier("agent_session_id")
+                .expiry("session leases expire"),
+        );
+        server.resolver::<Session>(SessionResolver {
+            calls: Arc::new(AtomicUsize::new(0)),
+            seen: Arc::new(Mutex::new(Vec::new())),
+            refuse: Arc::new(AtomicBool::new(false)),
+        });
+        server.command("session mixed", |command| {
+            command
+                .summary("Mixed")
+                .description("Invalid mixed legacy resource modes")
+                .handle(mixed_session_modes_legacy);
+        });
+    })
+    .err()
+    .expect("mixed legacy resource modes must fail")
+    .to_string();
+    assert!(mixed_legacy.contains("both required and optional"));
+
     let fixture = fixture();
+    let error = NativeToolSurface::builder("optional-closure")
+        .exposure(mcp_twill::NativeExposurePolicy::explicit_subset([
+            "session.start",
+            "tabs.new",
+        ]))
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .application_errors(NativeApplicationErrorDialect::Canonical)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("maybe_session", "session.maybe")
+        .build(&fixture.registry, McpProtocolTarget::V2025_11_25)
+        .unwrap_err();
+    assert!(error.to_string().contains("session.start"));
+    assert!(error.to_string().contains("reachable from `session.maybe`"));
+
     let error = NativeToolSurface::builder("optional-only")
         .exposure(mcp_twill::NativeExposurePolicy::explicit_subset([
             "session.start",
