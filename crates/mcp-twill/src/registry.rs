@@ -69,6 +69,7 @@ pub struct CommandRegistry {
     /// grant, unenumerable grant) own those semantics.
     resource_capabilities: BTreeSet<String>,
     resolvers: BTreeMap<String, Arc<dyn crate::resource::ErasedResolver>>,
+    resolver_error_footprints: BTreeMap<String, Vec<String>>,
     readers: BTreeMap<String, Arc<dyn crate::resource::ErasedReader>>,
     guidance: Vec<CommandGuidance>,
     registration_errors: Vec<FrameworkError>,
@@ -102,13 +103,31 @@ enum ResultHandlerKind {
     Dynamic,
 }
 
-struct PlanRoute {
+struct PlanRoute<'a> {
     referenced: BTreeSet<String>,
     tokens: Vec<InvocationToken>,
     origin: crate::InvocationOrigin,
     raw_command: Option<String>,
     surface: Option<crate::ServingSurfaceIdentity>,
     fingerprint_surface: Value,
+    native_surface: Option<&'a crate::NativeToolSurface>,
+}
+
+struct OperationPlanSurface<'a> {
+    serving: Option<crate::ServingSurfaceIdentity>,
+    native: Option<&'a crate::NativeToolSurface>,
+    fingerprint: Value,
+}
+
+enum SignatureResourceResolution {
+    Resolved(crate::ResolvedResources),
+    ApplicationError(crate::ApplicationErrorBody),
+}
+
+#[derive(Clone, Copy)]
+struct NativeCarrierPolicy {
+    required: bool,
+    omitted: bool,
 }
 
 impl CommandRegistry {
@@ -129,6 +148,7 @@ impl CommandRegistry {
             duplicate_resources: Vec::new(),
             resource_capabilities: BTreeSet::new(),
             resolvers: BTreeMap::new(),
+            resolver_error_footprints: BTreeMap::new(),
             readers: BTreeMap::new(),
             guidance: Vec::new(),
             registration_errors: Vec::new(),
@@ -219,7 +239,12 @@ impl CommandRegistry {
                     .iter()
                     .any(|resource_use| resource_use.resource == resource_name)
                 {
-                    match inject_result_resource_carrier(&mut command.spec, &decl) {
+                    let required = !command
+                        .spec
+                        .optional_resources
+                        .iter()
+                        .any(|resource| resource == &decl.name);
+                    match inject_result_resource_carrier(&mut command.spec, &decl, required) {
                         Ok(()) => canonicalize_result_resource_carriers(
                             &mut command.spec,
                             &command.result_resource_uses,
@@ -240,9 +265,41 @@ impl CommandRegistry {
         mut self,
         resolver: impl crate::ResolveResource<T>,
     ) -> Self {
+        if self.resolvers.contains_key(T::NAME) {
+            self.registration_errors.push(FrameworkError::Build(format!(
+                "resource `{}` binds more than one resolver",
+                T::NAME
+            )));
+            return self;
+        }
         self.resolvers.insert(
             T::NAME.to_string(),
             Arc::new(crate::resource::ResolverAdapter::new(resolver)),
+        );
+        self
+    }
+
+    /// Binds a resolver whose declared domain failures enter RFC 0014's
+    /// application-result channel.
+    pub fn with_resolver_with_errors<T: crate::Resource>(
+        mut self,
+        resolver: impl crate::ResolveResourceWithErrors<T>,
+    ) -> Self {
+        if self.resolvers.contains_key(T::NAME) {
+            self.registration_errors.push(FrameworkError::Build(format!(
+                "resource `{}` binds more than one resolver",
+                T::NAME
+            )));
+            return self;
+        }
+        let codes = resolver_error_codes::<T, _>(&resolver);
+        self.resolver_error_footprints.insert(
+            T::NAME.to_string(),
+            codes.into_iter().map(ToOwned::to_owned).collect(),
+        );
+        self.resolvers.insert(
+            T::NAME.to_string(),
+            Arc::new(crate::resource::ResolverWithErrorsAdapter::new(resolver)),
         );
         self
     }
@@ -338,15 +395,26 @@ impl CommandRegistry {
         mut spec: CommandSpec,
         registration: crate::ConstrainedHandlerRegistration,
     ) -> Self {
+        if let Err(error) = validate_result_resource_modes(
+            &spec,
+            &registration.resource_uses,
+            &registration.optional_resources,
+        ) {
+            self.registration_errors.push(error);
+        }
         project_result_resources(
             &mut spec,
             &registration.resource_uses,
+            &registration.optional_resources,
             &registration.granted,
             &registration.enumerated,
         );
-        if let Err(error) =
-            inject_result_resource_carriers(&mut spec, &registration.resource_uses, &self.resources)
-        {
+        if let Err(error) = inject_result_resource_carriers(
+            &mut spec,
+            &registration.resource_uses,
+            &registration.optional_resources,
+            &self.resources,
+        ) {
             self.registration_errors.push(error);
         }
         normalize_command_spec(&mut spec);
@@ -381,15 +449,26 @@ impl CommandRegistry {
             .output
             .as_ref()
             .is_some_and(|output| output.application.is_some());
+        if let Err(error) = validate_result_resource_modes(
+            &spec,
+            &registration.resource_uses,
+            &registration.optional_resources,
+        ) {
+            self.registration_errors.push(error);
+        }
         project_result_resources(
             &mut spec,
             &registration.resource_uses,
+            &registration.optional_resources,
             &registration.granted,
             &registration.enumerated,
         );
-        if let Err(error) =
-            inject_result_resource_carriers(&mut spec, &registration.resource_uses, &self.resources)
-        {
+        if let Err(error) = inject_result_resource_carriers(
+            &mut spec,
+            &registration.resource_uses,
+            &registration.optional_resources,
+            &self.resources,
+        ) {
             self.registration_errors.push(error);
         }
         normalize_command_spec(&mut spec);
@@ -423,15 +502,26 @@ impl CommandRegistry {
         mut spec: CommandSpec,
         registration: crate::results::DynamicHandlerRegistration,
     ) -> Self {
+        if let Err(error) = validate_result_resource_modes(
+            &spec,
+            &registration.resource_uses,
+            &registration.optional_resources,
+        ) {
+            self.registration_errors.push(error);
+        }
         project_result_resources(
             &mut spec,
             &registration.resource_uses,
+            &registration.optional_resources,
             &registration.granted,
             &registration.enumerated,
         );
-        if let Err(error) =
-            inject_result_resource_carriers(&mut spec, &registration.resource_uses, &self.resources)
-        {
+        if let Err(error) = inject_result_resource_carriers(
+            &mut spec,
+            &registration.resource_uses,
+            &registration.optional_resources,
+            &self.resources,
+        ) {
             self.registration_errors.push(error);
         }
         if let Some(contract) = spec
@@ -997,10 +1087,7 @@ impl CommandRegistry {
                 name: resource.carrier_name(),
                 value_type: crate::ArgType::ResourceRef(resource.name.clone()),
                 required: true,
-                summary: format!(
-                    "The `{}` to operate on; accepts a bare id or its URI.",
-                    resource.name
-                ),
+                summary: resource.reference_summary(),
                 workspace: None,
                 repeated: false,
                 schema: Some(schema.clone()),
@@ -1519,6 +1606,7 @@ impl CommandRegistry {
                 .spec
                 .requires_resources
                 .iter()
+                .chain(&command.spec.optional_resources)
                 .chain(&command.spec.grants)
                 .chain(&command.spec.releases)
                 .chain(&command.spec.enumerates);
@@ -1533,11 +1621,53 @@ impl CommandRegistry {
                 .spec
                 .requires_resources
                 .iter()
+                .chain(&command.spec.optional_resources)
                 .chain(&command.spec.releases)
             {
                 if !self.resolvers.contains_key(resource) {
                     return Err(FrameworkError::Build(format!(
                         "command `{name}` requires resource `{resource}`, which has no bound resolver; bind one with `resolver`"
+                    )));
+                }
+            }
+            for resource in &command.spec.optional_resources {
+                if command.spec.requires_resources.contains(resource) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` consumes resource `{resource}` as both required and optional"
+                    )));
+                }
+                if command.spec.releases.contains(resource) {
+                    return Err(FrameworkError::Build(format!(
+                        "command `{name}` consumes resource `{resource}` as optional and released"
+                    )));
+                }
+            }
+            for resource in command
+                .spec
+                .requires_resources
+                .iter()
+                .chain(&command.spec.optional_resources)
+                .chain(&command.spec.releases)
+            {
+                let Some(codes) = self.resolver_error_footprints.get(resource) else {
+                    continue;
+                };
+                let declared = command
+                    .spec
+                    .output
+                    .as_ref()
+                    .and_then(|output| output.application.as_ref())
+                    .map(|contract| {
+                        contract
+                            .errors
+                            .iter()
+                            .map(|error| error.code.as_str())
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                if let Some(code) = codes.iter().find(|code| !declared.contains(code.as_str())) {
+                    return Err(FrameworkError::Build(format!(
+                        "typed resolver for resource `{resource}` may emit application error `{code}`, which command `{name}` does not declare"
                     )));
                 }
             }
@@ -2249,8 +2379,10 @@ impl CommandRegistry {
                 raw_command: Some(request.command.clone()),
                 surface: None,
                 fingerprint_surface,
+                native_surface: None,
             },
         )
+        .map(crate::ambient_resources::PreparedInvocation::into_plan)
     }
 
     pub(crate) fn build_effect_lane_plan(
@@ -2278,9 +2410,8 @@ impl CommandRegistry {
         arguments: BTreeMap<String, Value>,
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
-        surface: Option<crate::ServingSurfaceIdentity>,
-        fingerprint_surface: Value,
-    ) -> Result<InvocationPlan> {
+        surface: OperationPlanSurface<'_>,
+    ) -> Result<crate::ambient_resources::PreparedInvocation> {
         let mut matching = self
             .commands
             .values()
@@ -2323,8 +2454,9 @@ impl CommandRegistry {
                 tokens: Vec::new(),
                 origin: crate::InvocationOrigin::OperationId,
                 raw_command: None,
-                surface,
-                fingerprint_surface,
+                surface: surface.serving,
+                fingerprint_surface: surface.fingerprint,
+                native_surface: surface.native,
             },
         )
     }
@@ -2335,8 +2467,8 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
         registered: &RegisteredCommand,
-        route: PlanRoute,
-    ) -> Result<InvocationPlan> {
+        route: PlanRoute<'_>,
+    ) -> Result<crate::ambient_resources::PreparedInvocation> {
         let PlanRoute {
             referenced,
             tokens,
@@ -2344,9 +2476,14 @@ impl CommandRegistry {
             raw_command,
             surface,
             fingerprint_surface,
+            native_surface,
         } = route;
         let operation = OperationSpec::from_command_spec(&registered.spec);
         let identity = self.catalog_identity();
+        let native_carriers = native_surface
+            .map(|surface| self.native_carrier_policies(&registered.spec, surface))
+            .transpose()?
+            .unwrap_or_default();
 
         match (&registered.spec.stdin, &request.stdin) {
             (None, Some(_)) => {
@@ -2375,6 +2512,12 @@ impl CommandRegistry {
             }
         }
         for arg_name in request.args.keys() {
+            if native_carriers
+                .get(arg_name)
+                .is_some_and(|policy| policy.omitted)
+            {
+                return Err(FrameworkError::UnknownArgument(arg_name.clone()));
+            }
             if registered.spec.arg(arg_name).is_none() {
                 return Err(FrameworkError::UnknownArgument(arg_name.clone()));
             }
@@ -2391,6 +2534,16 @@ impl CommandRegistry {
             let Some(capability) = self.capabilities.get(capability_name) else {
                 continue;
             };
+            // Resource-derived compatibility capabilities defer carrier
+            // requiredness to the active RFC 0016 native binding. Explicit
+            // capabilities remain argument-bound.
+            if self.resource_capabilities.contains(capability_name)
+                && native_carriers
+                    .get(&capability.carrier)
+                    .is_some_and(|policy| !policy.required)
+            {
+                continue;
+            }
             if !request.args.contains_key(&capability.carrier) {
                 return Err(FrameworkError::CapabilityMissing {
                     capability: capability.name.clone(),
@@ -2412,7 +2565,12 @@ impl CommandRegistry {
             let Some(resource) = self.resources.get(resource_name) else {
                 continue;
             };
-            if !request.args.contains_key(&resource.carrier_name()) {
+            let carrier = resource.carrier_name();
+            let required = native_carriers
+                .get(&carrier)
+                .map(|policy| policy.required)
+                .unwrap_or(true);
+            if required && !request.args.contains_key(&carrier) {
                 return Err(FrameworkError::CapabilityMissing {
                     capability: resource.name.clone(),
                     carrier: resource.carrier_name(),
@@ -2428,7 +2586,11 @@ impl CommandRegistry {
         }
 
         for spec in &registered.spec.args {
-            if spec.required && !request.args.contains_key(&spec.name) {
+            let required = native_carriers
+                .get(&spec.name)
+                .map(|policy| policy.required)
+                .unwrap_or(spec.required);
+            if required && !request.args.contains_key(&spec.name) {
                 return Err(FrameworkError::MissingArgument(spec.name.clone()));
             }
         }
@@ -2489,7 +2651,11 @@ impl CommandRegistry {
         let mut used_workspaces: BTreeSet<String> = BTreeSet::new();
         for spec in &registered.spec.args {
             let Some(value) = request.args.get(&spec.name) else {
-                if spec.required {
+                let required = native_carriers
+                    .get(&spec.name)
+                    .map(|policy| policy.required)
+                    .unwrap_or(spec.required);
+                if required {
                     return Err(FrameworkError::MissingArgument(spec.name.clone()));
                 }
                 continue;
@@ -2659,6 +2825,17 @@ impl CommandRegistry {
             .filter(|root| used_workspaces.contains(root.id.as_str()))
             .map(crate::PlanWorkspaceRoot::from)
             .collect();
+        let (resource_bindings, resource_binding_facts, resource_binding_fingerprint) =
+            if let Some(native_surface) = native_surface {
+                self.prepare_native_resource_bindings(
+                    &registered.spec,
+                    &bound_args,
+                    context,
+                    native_surface,
+                )?
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            };
         let stdin_fingerprint = request.stdin.as_ref().map(|stdin| {
             json!({
                 "mimeType": stdin.mime_type,
@@ -2750,9 +2927,18 @@ impl CommandRegistry {
                     }),
                 );
         }
+        if !resource_binding_fingerprint.is_empty() {
+            fingerprint_input
+                .as_object_mut()
+                .expect("fingerprint input is an object")
+                .insert(
+                    "resourceBindings".to_string(),
+                    Value::Array(resource_binding_fingerprint),
+                );
+        }
         let invocation_fingerprint = stable_hash_value(&fingerprint_input);
 
-        Ok(InvocationPlan {
+        let plan = InvocationPlan {
             operation_id: operation.id.clone(),
             command_path: registered.spec.path.clone(),
             origin,
@@ -2767,9 +2953,208 @@ impl CommandRegistry {
             permissions: registered.spec.permissions.clone(),
             workspaces,
             workspace_roots,
+            resource_binding_facts,
             idempotent: operation.idempotent,
             output,
+        };
+        Ok(crate::ambient_resources::PreparedInvocation {
+            plan,
+            invocation_context: context.clone(),
+            resource_bindings,
         })
+    }
+
+    fn native_carrier_policies(
+        &self,
+        spec: &CommandSpec,
+        surface: &crate::NativeToolSurface,
+    ) -> Result<BTreeMap<String, NativeCarrierPolicy>> {
+        let mut policies = BTreeMap::new();
+        for resource in spec
+            .requires_resources
+            .iter()
+            .chain(&spec.optional_resources)
+            .chain(&spec.releases)
+        {
+            let declaration = self.resources.get(resource).ok_or_else(|| {
+                FrameworkError::Build(format!(
+                    "command `{}` consumes undeclared resource `{resource}`",
+                    spec.name()
+                ))
+            })?;
+            let binding = surface.resource_binding(resource).ok_or_else(|| {
+                FrameworkError::Build(format!(
+                    "native surface is missing normalized binding for resource `{resource}`"
+                ))
+            })?;
+            let policy = match &binding.mode {
+                crate::ResourceBindingMode::Argument => NativeCarrierPolicy {
+                    required: spec.requires_resources.contains(resource)
+                        || spec.releases.contains(resource),
+                    omitted: false,
+                },
+                crate::ResourceBindingMode::Ambient {
+                    explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
+                    ..
+                } => NativeCarrierPolicy {
+                    required: false,
+                    omitted: false,
+                },
+                crate::ResourceBindingMode::Ambient {
+                    explicit: crate::ExplicitCarrierPolicy::Omitted,
+                    ..
+                } => NativeCarrierPolicy {
+                    required: false,
+                    omitted: true,
+                },
+            };
+            let carrier = declaration.carrier_name();
+            if policies.insert(carrier.clone(), policy).is_some() {
+                return Err(FrameworkError::Build(format!(
+                    "native command `{}` has more than one resource using carrier `{carrier}`",
+                    spec.name()
+                )));
+            }
+        }
+        Ok(policies)
+    }
+
+    fn prepare_native_resource_bindings(
+        &self,
+        spec: &CommandSpec,
+        bound_args: &BTreeMap<String, crate::BoundArg>,
+        context: &crate::InvocationContext,
+        surface: &crate::NativeToolSurface,
+    ) -> Result<(
+        Vec<crate::ambient_resources::PlannedResourceBinding>,
+        Vec<crate::PlanResourceBindingFact>,
+        Vec<Value>,
+    )> {
+        let resources = spec
+            .requires_resources
+            .iter()
+            .chain(&spec.optional_resources)
+            .chain(&spec.releases)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut planned = Vec::new();
+        let mut facts = Vec::new();
+        let mut fingerprint = Vec::new();
+        for resource in resources {
+            let declaration = self.resources.get(&resource).ok_or_else(|| {
+                FrameworkError::Build(format!("resource `{resource}` is not declared"))
+            })?;
+            let binding = surface.resource_binding(&resource).ok_or_else(|| {
+                FrameworkError::Build(format!(
+                    "native surface is missing normalized binding for resource `{resource}`"
+                ))
+            })?;
+            let explicit_present = bound_args.contains_key(&declaration.carrier_name());
+            let source = match &binding.mode {
+                crate::ResourceBindingMode::Argument if explicit_present => {
+                    crate::PlanResourceBindingSource::Argument
+                }
+                crate::ResourceBindingMode::Argument => crate::PlanResourceBindingSource::Absent,
+                crate::ResourceBindingMode::Ambient {
+                    explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
+                    ..
+                } if explicit_present => crate::PlanResourceBindingSource::Argument,
+                crate::ResourceBindingMode::Ambient { .. }
+                    if context.conversation_identity().is_some() =>
+                {
+                    crate::PlanResourceBindingSource::Ambient
+                }
+                crate::ResourceBindingMode::Ambient { .. } => {
+                    crate::PlanResourceBindingSource::Absent
+                }
+            };
+            facts.push(crate::PlanResourceBindingFact {
+                resource: resource.clone(),
+                source,
+            });
+            match source {
+                crate::PlanResourceBindingSource::Argument => {
+                    planned.push(crate::ambient_resources::PlannedResourceBinding::Argument {
+                        resource: resource.clone(),
+                    });
+                    fingerprint.push(json!({
+                        "resource": resource,
+                        "source": "argument",
+                    }));
+                }
+                crate::PlanResourceBindingSource::Ambient => {
+                    let identity = context
+                        .conversation_identity()
+                        .expect("ambient source requires normalized conversation identity");
+                    let private_digest = stable_hash_value(&json!([
+                        "ambient-resource-binding",
+                        "conversationIdentity",
+                        resource,
+                        identity.version(),
+                        identity.issuer(),
+                        identity.id(),
+                    ]));
+                    let binder = surface.resource_binder(&resource).ok_or_else(|| {
+                        FrameworkError::Build(format!(
+                            "ambient resource `{resource}` has no attached binder"
+                        ))
+                    })?;
+                    planned.push(crate::ambient_resources::PlannedResourceBinding::Ambient {
+                        resource: resource.clone(),
+                        binder,
+                    });
+                    fingerprint.push(json!({
+                        "resource": resource,
+                        "source": "ambient",
+                        "privateDigest": private_digest,
+                    }));
+                }
+                crate::PlanResourceBindingSource::Absent => {
+                    let behavior = if spec.optional_resources.contains(&resource) {
+                        crate::ambient_resources::PreparedAbsentBinding::Optional
+                    } else {
+                        match &binding.mode {
+                            crate::ResourceBindingMode::Ambient {
+                                missing_error: Some(code),
+                                ..
+                            } => {
+                                let contract = spec
+                                    .output
+                                    .as_ref()
+                                    .and_then(|output| output.application.as_ref())
+                                    .ok_or_else(|| {
+                                        FrameworkError::Build(format!(
+                                            "ambient missing error `{code}` requires an application result contract"
+                                        ))
+                                    })?;
+                                let body = crate::results::validate_application_error(
+                                    contract,
+                                    crate::results::RawApplicationError {
+                                        code: code.clone(),
+                                        message: None,
+                                        details: json!({}),
+                                        recovery: crate::ApplicationRecoverySelection::Declared,
+                                    },
+                                )?;
+                                crate::ambient_resources::PreparedAbsentBinding::RequiredApplication(
+                                    body,
+                                )
+                            }
+                            _ => crate::ambient_resources::PreparedAbsentBinding::RequiredFramework,
+                        }
+                    };
+                    planned.push(crate::ambient_resources::PlannedResourceBinding::Absent {
+                        resource: resource.clone(),
+                        behavior,
+                    });
+                    fingerprint.push(json!({
+                        "resource": resource,
+                        "source": "absent",
+                    }));
+                }
+            }
+        }
+        Ok((planned, facts, fingerprint))
     }
 
     pub async fn run(&self, request: RunRequest) -> Result<CommandExecutionOutcome> {
@@ -2795,15 +3180,18 @@ impl CommandRegistry {
     ) -> Result<CommandExecutionOutcome> {
         self.validate_invocation_contracts()?;
         let resolved = self.resolve_context_workspaces(&invocation);
-        let plan = self.build_operation_plan_prepared(
+        let prepared = self.build_operation_plan_prepared(
             operation_id,
             arguments.clone().into_iter().collect(),
             &resolved,
             &invocation,
-            None,
-            json!({ "kind": "bareRegistry" }),
+            OperationPlanSurface {
+                serving: None,
+                native: None,
+                fingerprint: json!({ "kind": "bareRegistry" }),
+            },
         )?;
-        self.dispatch_operation_plan(arguments, plan, &invocation)
+        self.dispatch_operation_plan(arguments, prepared.into_plan(), &invocation)
             .await
     }
 
@@ -2814,18 +3202,22 @@ impl CommandRegistry {
         resolved: &ResolvedWorkspaceSet,
         context: &crate::InvocationContext,
         surface: crate::ServingSurfaceIdentity,
-    ) -> Result<InvocationPlan> {
+        native_surface: &crate::NativeToolSurface,
+    ) -> Result<crate::ambient_resources::PreparedInvocation> {
         self.build_operation_plan_prepared(
             operation_id,
             arguments.into_iter().collect(),
             resolved,
             context,
-            Some(surface.clone()),
-            json!({
-                "kind": "native",
-                "name": surface.name,
-                "hash": surface.hash,
-            }),
+            OperationPlanSurface {
+                serving: Some(surface.clone()),
+                native: Some(native_surface),
+                fingerprint: json!({
+                    "kind": "native",
+                    "name": surface.name,
+                    "hash": surface.hash,
+                }),
+            },
         )
     }
 
@@ -2846,6 +3238,52 @@ impl CommandRegistry {
         };
         self.dispatch_prepared_plan_with_context(request, plan, context)
             .await
+    }
+
+    pub(crate) async fn dispatch_prepared_operation(
+        &self,
+        arguments: rmcp::model::JsonObject,
+        prepared: crate::ambient_resources::PreparedInvocation,
+    ) -> Result<CommandExecutionOutcome> {
+        let request = RunRequest {
+            command: String::new(),
+            args: arguments.into_iter().collect(),
+            stdin: None,
+            output: None,
+            mode: crate::RunMode::Execute,
+            approval: None,
+            dry_run: false,
+        };
+        self.dispatch_prepared_invocation(request, prepared).await
+    }
+
+    pub(crate) fn binding_availability(
+        &self,
+        prepared: &crate::ambient_resources::PreparedInvocation,
+    ) -> Option<Result<CommandExecutionOutcome>> {
+        for binding in &prepared.resource_bindings {
+            let crate::ambient_resources::PlannedResourceBinding::Absent { resource, behavior } =
+                binding
+            else {
+                continue;
+            };
+            match behavior {
+                crate::ambient_resources::PreparedAbsentBinding::Optional => continue,
+                crate::ambient_resources::PreparedAbsentBinding::RequiredApplication(error) => {
+                    return Some(Ok(CommandExecutionOutcome::ApplicationError {
+                        plan: prepared.plan.clone(),
+                        error: error.clone(),
+                    }));
+                }
+                crate::ambient_resources::PreparedAbsentBinding::RequiredFramework => {
+                    return Some(Err(FrameworkError::ResourceBindingMissing {
+                        resource: resource.clone(),
+                        establish: self.resource_granters(resource).into_boxed_slice(),
+                    }));
+                }
+            }
+        }
+        None
     }
 
     pub async fn run_in_lane(
@@ -2952,6 +3390,26 @@ impl CommandRegistry {
         plan: InvocationPlan,
         context: &crate::InvocationContext,
     ) -> Result<CommandExecutionOutcome> {
+        self.dispatch_prepared_invocation(
+            request,
+            crate::ambient_resources::PreparedInvocation::argument_bound(plan, context.clone()),
+        )
+        .await
+    }
+
+    async fn dispatch_prepared_invocation(
+        &self,
+        request: RunRequest,
+        prepared: crate::ambient_resources::PreparedInvocation,
+    ) -> Result<CommandExecutionOutcome> {
+        if let Some(availability) = self.binding_availability(&prepared) {
+            return availability;
+        }
+        let crate::ambient_resources::PreparedInvocation {
+            plan,
+            invocation_context,
+            resource_bindings,
+        } = prepared;
         if matches!(request.effective_mode(), crate::RunMode::DryRun) {
             return Ok(CommandExecutionOutcome::Success(RunResponse {
                 plan,
@@ -2968,12 +3426,23 @@ impl CommandRegistry {
             }
         })?;
 
-        let resources = self
-            .resolve_signature_resources(&registered.spec, &plan)
-            .await?;
+        let resources = match self
+            .resolve_signature_resources(
+                &registered.spec,
+                &plan,
+                &invocation_context,
+                &resource_bindings,
+            )
+            .await?
+        {
+            SignatureResourceResolution::Resolved(resources) => resources,
+            SignatureResourceResolution::ApplicationError(error) => {
+                return Ok(CommandExecutionOutcome::ApplicationError { plan, error });
+            }
+        };
 
         let handler_context = if registered.spec.uses_conversation_identity {
-            context.clone()
+            invocation_context
         } else {
             crate::InvocationContext::default()
         };
@@ -3066,9 +3535,16 @@ impl CommandRegistry {
         &self,
         spec: &CommandSpec,
         plan: &InvocationPlan,
-    ) -> Result<crate::ResolvedResources> {
+        invocation_context: &crate::InvocationContext,
+        planned_bindings: &[crate::ambient_resources::PlannedResourceBinding],
+    ) -> Result<SignatureResourceResolution> {
         let mut resolved = crate::ResolvedResources::default();
-        for resource_name in spec.requires_resources.iter().chain(&spec.releases) {
+        for resource_name in spec
+            .requires_resources
+            .iter()
+            .chain(&spec.optional_resources)
+            .chain(&spec.releases)
+        {
             let decl = self.resources.get(resource_name).ok_or_else(|| {
                 FrameworkError::Build(format!(
                     "resource `{resource_name}` is not declared on the server"
@@ -3077,20 +3553,101 @@ impl CommandRegistry {
             let resolver = self.resolvers.get(resource_name).ok_or_else(|| {
                 FrameworkError::Build(format!("resource `{resource_name}` has no bound resolver"))
             })?;
-            let carrier = decl.carrier_name();
-            let reference = plan
-                .bound_args
-                .get(&carrier)
-                .and_then(|arg| arg.value.as_str())
-                .ok_or_else(|| FrameworkError::CapabilityMissing {
-                    capability: decl.name.clone(),
-                    carrier: carrier.clone(),
-                    providers: self.resource_granters(&decl.name),
-                })?;
-            let id = decl.normalize_reference(reference);
-            match resolver.resolve_erased(id, plan).await {
+            let planned = planned_bindings.iter().find(|binding| match binding {
+                crate::ambient_resources::PlannedResourceBinding::Argument { resource }
+                | crate::ambient_resources::PlannedResourceBinding::Ambient { resource, .. }
+                | crate::ambient_resources::PlannedResourceBinding::Absent { resource, .. } => {
+                    resource == resource_name
+                }
+            });
+            let (id, ambient) = match planned {
+                Some(crate::ambient_resources::PlannedResourceBinding::Ambient {
+                    binder, ..
+                }) => {
+                    let identity = invocation_context.conversation_identity().ok_or_else(|| {
+                        FrameworkError::Handler(
+                            "prepared ambient binding lost conversation identity".to_string(),
+                        )
+                    })?;
+                    let reference = match binder
+                        .bind_erased(crate::AmbientBindingContext {
+                            operation_id: &plan.operation_id,
+                            conversation_identity: identity,
+                            workspaces: &plan.workspace_roots,
+                        })
+                        .await
+                    {
+                        Ok(reference) => reference,
+                        Err(
+                            crate::ambient_resources::ErasedAmbientBindingFailure::Application(raw),
+                        ) => {
+                            let contract = spec
+                                .output
+                                .as_ref()
+                                .and_then(|output| output.application.as_ref())
+                                .ok_or_else(|| {
+                                    FrameworkError::Build(format!(
+                                        "ambient binder for resource `{resource_name}` reached command `{}` without an application result contract",
+                                        spec.name()
+                                    ))
+                                })?;
+                            let error = crate::results::validate_application_error(contract, raw)?;
+                            return Ok(SignatureResourceResolution::ApplicationError(error));
+                        }
+                        Err(
+                            crate::ambient_resources::ErasedAmbientBindingFailure::Infrastructure,
+                        ) => {
+                            return Err(FrameworkError::Handler(
+                                "ambient resource binding failed".to_string(),
+                            ));
+                        }
+                    };
+                    (reference.as_id().to_string(), true)
+                }
+                Some(crate::ambient_resources::PlannedResourceBinding::Absent {
+                    behavior: crate::ambient_resources::PreparedAbsentBinding::Optional,
+                    ..
+                }) => continue,
+                Some(crate::ambient_resources::PlannedResourceBinding::Absent { .. }) => {
+                    return Err(FrameworkError::Handler(
+                        "required absent resource binding reached dispatch".to_string(),
+                    ));
+                }
+                Some(crate::ambient_resources::PlannedResourceBinding::Argument { .. }) | None => {
+                    let carrier = decl.carrier_name();
+                    let Some(reference) = plan
+                        .bound_args
+                        .get(&carrier)
+                        .and_then(|arg| arg.value.as_str())
+                    else {
+                        if spec.optional_resources.contains(resource_name) {
+                            continue;
+                        }
+                        return Err(FrameworkError::CapabilityMissing {
+                            capability: decl.name.clone(),
+                            carrier: carrier.clone(),
+                            providers: self.resource_granters(&decl.name),
+                        });
+                    };
+                    (decl.normalize_reference(reference).to_string(), false)
+                }
+            };
+            match resolver.resolve_erased(&id, plan).await {
                 Ok(value) => resolved.insert(decl.name.clone(), value),
-                Err(refusal) => {
+                Err(crate::resource::ErasedResolutionFailure::Refused(refusal)) => {
+                    if ambient {
+                        return Err(FrameworkError::AmbientResourceRefused {
+                            resource: decl.name.clone(),
+                            enumerate: self.resource_enumerators(&decl.name).into_boxed_slice(),
+                            establish: self.resource_granters(&decl.name).into_boxed_slice(),
+                        });
+                    }
+                    let carrier = decl.carrier_name();
+                    let reference = plan
+                        .bound_args
+                        .get(&carrier)
+                        .and_then(|arg| arg.value.as_str())
+                        .unwrap_or_default();
                     return Err(FrameworkError::ResourceRefused {
                         resource: decl.name.clone(),
                         reference: reference.to_string(),
@@ -3099,9 +3656,23 @@ impl CommandRegistry {
                         establish: self.resource_granters(&decl.name).into(),
                     });
                 }
+                Err(crate::resource::ErasedResolutionFailure::Application(raw)) => {
+                    let contract = spec
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.application.as_ref())
+                        .ok_or_else(|| {
+                            FrameworkError::Build(format!(
+                                "resource `{resource_name}` has a typed resolver but command `{}` has no application result contract",
+                                spec.name()
+                            ))
+                        })?;
+                    let error = crate::results::validate_application_error(contract, raw)?;
+                    return Ok(SignatureResourceResolution::ApplicationError(error));
+                }
             }
         }
-        Ok(resolved)
+        Ok(SignatureResourceResolution::Resolved(resolved))
     }
 
     /// Mints URIs for the references the handler granted or enumerated,
@@ -3782,6 +4353,14 @@ impl CommandRegistry {
     }
 }
 
+fn resolver_error_codes<T, R>(_resolver: &R) -> Vec<&'static str>
+where
+    T: crate::Resource,
+    R: crate::ResolveResourceWithErrors<T>,
+{
+    <R::ErrorFootprint as crate::ApplicationErrorFootprint<R::Error>>::codes()
+}
+
 fn effect_lane_presentation_defaults(
     tool_name: &str,
 ) -> Result<crate::SurfacePresentationDefaults> {
@@ -3840,6 +4419,8 @@ fn normalize_command_spec(spec: &mut CommandSpec) {
     spec.workspaces.dedup();
     spec.optional_workspaces.sort();
     spec.optional_workspaces.dedup();
+    spec.optional_resources.sort();
+    spec.optional_resources.dedup();
     for arg in &mut spec.args {
         arg.requires_arguments.sort();
         arg.requires_arguments.dedup();
@@ -3878,14 +4459,19 @@ fn command_has_argument_constraints(spec: &CommandSpec) -> bool {
 fn project_result_resources(
     spec: &mut CommandSpec,
     uses: &[crate::resource::ResourceUse],
+    optional_resources: &[&'static str],
     granted: &[&'static str],
     enumerated: &[&'static str],
 ) {
     for resource_use in uses {
-        spec.requires.push(resource_use.resource.to_string());
         if resource_use.released {
+            spec.requires.push(resource_use.resource.to_string());
             spec.releases.push(resource_use.resource.to_string());
+        } else if optional_resources.contains(&resource_use.resource) {
+            spec.optional_resources
+                .push(resource_use.resource.to_string());
         } else {
+            spec.requires.push(resource_use.resource.to_string());
             spec.requires_resources
                 .push(resource_use.resource.to_string());
         }
@@ -3898,6 +4484,7 @@ fn project_result_resources(
         .extend(enumerated.iter().map(|name| (*name).to_string()));
     for values in [
         &mut spec.requires_resources,
+        &mut spec.optional_resources,
         &mut spec.releases,
         &mut spec.grants,
         &mut spec.enumerates,
@@ -3909,9 +4496,49 @@ fn project_result_resources(
     }
 }
 
+fn validate_result_resource_modes(
+    spec: &CommandSpec,
+    uses: &[crate::resource::ResourceUse],
+    optional_resources: &[&'static str],
+) -> Result<()> {
+    let mut non_release_counts = BTreeMap::<&str, usize>::new();
+    let mut releases = BTreeSet::<&str>::new();
+    for resource_use in uses {
+        if resource_use.released {
+            releases.insert(resource_use.resource);
+        } else {
+            *non_release_counts.entry(resource_use.resource).or_default() += 1;
+        }
+    }
+    let mut optional_counts = BTreeMap::<&str, usize>::new();
+    for resource in optional_resources {
+        *optional_counts.entry(resource).or_default() += 1;
+    }
+    for (resource, optional_count) in optional_counts {
+        let non_release_count = non_release_counts
+            .get(resource)
+            .copied()
+            .unwrap_or_default();
+        if releases.contains(resource) {
+            return Err(FrameworkError::Build(format!(
+                "command `{}` consumes resource `{resource}` as both optional and released",
+                spec.name()
+            )));
+        }
+        if optional_count != non_release_count {
+            return Err(FrameworkError::Build(format!(
+                "command `{}` consumes resource `{resource}` as both required and optional",
+                spec.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn inject_result_resource_carriers(
     spec: &mut CommandSpec,
     uses: &[crate::resource::ResourceUse],
+    optional_resources: &[&'static str],
     resources: &BTreeMap<String, crate::ResourceDecl>,
 ) -> Result<()> {
     let resource_names = uses
@@ -3920,7 +4547,11 @@ fn inject_result_resource_carriers(
         .collect::<BTreeSet<_>>();
     for resource_name in resource_names {
         if let Some(decl) = resources.get(resource_name) {
-            inject_result_resource_carrier(spec, decl)?;
+            inject_result_resource_carrier(
+                spec,
+                decl,
+                !optional_resources.contains(&resource_name),
+            )?;
         }
     }
     canonicalize_result_resource_carriers(spec, uses, resources);
@@ -3953,6 +4584,7 @@ fn canonicalize_result_resource_carriers(
 fn inject_result_resource_carrier(
     spec: &mut CommandSpec,
     decl: &crate::ResourceDecl,
+    required: bool,
 ) -> Result<()> {
     let carrier = decl.carrier_name();
     if spec.args.iter().any(|arg| arg.name == carrier) {
@@ -3962,14 +4594,12 @@ fn inject_result_resource_carrier(
             decl.name
         )));
     }
+    let summary = decl.reference_summary();
     spec.args.push(crate::ArgSpec {
         name: carrier,
         value_type: crate::ArgType::ResourceRef(decl.name.clone()),
-        required: true,
-        summary: format!(
-            "The `{}` to operate on; accepts a bare id or its URI.",
-            decl.name
-        ),
+        required,
+        summary,
         workspace: None,
         repeated: false,
         schema: decl.reference_schema.clone(),

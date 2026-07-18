@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::{
     CommandContext, CommandHandler, CommandOutput, FrameworkError, FromCommandArgs, InvocationPlan,
-    ResourceRef, Result,
+    ResolveResourceWithErrors, ResourceRef, ResourceResolutionFailure, Result,
 };
 
 /// Marker trait connecting a handler-side type to a declared resource.
@@ -68,11 +68,17 @@ pub trait ReadResource<T: Resource>: Send + Sync + 'static {
 
 type ResolveFuture<'a> = Pin<
     Box<
-        dyn Future<Output = std::result::Result<Arc<dyn Any + Send + Sync>, ResourceRefusal>>
-            + Send
+        dyn Future<
+                Output = std::result::Result<Arc<dyn Any + Send + Sync>, ErasedResolutionFailure>,
+            > + Send
             + 'a,
     >,
 >;
+
+pub(crate) enum ErasedResolutionFailure {
+    Refused(ResourceRefusal),
+    Application(crate::results::RawApplicationError),
+}
 
 type ReadFuture<'a> =
     Pin<Box<dyn Future<Output = std::result::Result<Value, ResourceRefusal>> + Send + 'a>>;
@@ -110,8 +116,50 @@ where
         plan: &'a InvocationPlan,
     ) -> ResolveFuture<'a> {
         Box::pin(async move {
-            let value = self.resolver.resolve(reference, plan).await?;
+            let value = self
+                .resolver
+                .resolve(reference, plan)
+                .await
+                .map_err(ErasedResolutionFailure::Refused)?;
             Ok(Arc::new(value) as Arc<dyn Any + Send + Sync>)
+        })
+    }
+}
+
+pub(crate) struct ResolverWithErrorsAdapter<T, R> {
+    resolver: R,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T, R> ResolverWithErrorsAdapter<T, R> {
+    pub(crate) fn new(resolver: R) -> Self {
+        Self {
+            resolver,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T, R> ErasedResolver for ResolverWithErrorsAdapter<T, R>
+where
+    T: Resource,
+    R: ResolveResourceWithErrors<T>,
+{
+    fn resolve_erased<'a>(
+        &'a self,
+        reference: &'a str,
+        plan: &'a InvocationPlan,
+    ) -> ResolveFuture<'a> {
+        Box::pin(async move {
+            match self.resolver.resolve(reference, plan).await {
+                Ok(value) => Ok(Arc::new(value) as Arc<dyn Any + Send + Sync>),
+                Err(ResourceResolutionFailure::Refused(refusal)) => {
+                    Err(ErasedResolutionFailure::Refused(refusal))
+                }
+                Err(ResourceResolutionFailure::Application(error)) => {
+                    Err(ErasedResolutionFailure::Application(error.into_raw()))
+                }
+            }
         })
     }
 }
@@ -215,6 +263,9 @@ pub struct ResourceUse {
 /// the resolved value out of the invocation.
 pub trait ResourceParam: Sized + Send + Sync + 'static {
     fn resource_use() -> ResourceUse;
+    fn is_optional_requirement() -> bool {
+        false
+    }
     fn extract(context: &CommandContext) -> Result<Self>;
 }
 
@@ -258,16 +309,40 @@ impl<T: Resource> ResourceParam for Release<T> {
     }
 }
 
+impl<T: Resource> ResourceParam for Option<Res<T>> {
+    fn resource_use() -> ResourceUse {
+        <Res<T> as ResourceParam>::resource_use()
+    }
+
+    fn is_optional_requirement() -> bool {
+        true
+    }
+
+    fn extract(context: &CommandContext) -> Result<Self> {
+        Ok(context.resources.get::<T>().map(Res))
+    }
+}
+
 /// The full resource-parameter position of a handler: one extractor or a
 /// tuple of extractors.
 pub trait ResourceParams: Sized + Send + Sync + 'static {
     fn resource_uses() -> Vec<ResourceUse>;
+    fn optional_resources() -> Vec<&'static str> {
+        Vec::new()
+    }
     fn extract(context: &CommandContext) -> Result<Self>;
 }
 
 impl<P: ResourceParam> ResourceParams for P {
     fn resource_uses() -> Vec<ResourceUse> {
         vec![P::resource_use()]
+    }
+
+    fn optional_resources() -> Vec<&'static str> {
+        P::is_optional_requirement()
+            .then_some(P::resource_use().resource)
+            .into_iter()
+            .collect()
     }
 
     fn extract(context: &CommandContext) -> Result<Self> {
@@ -280,6 +355,13 @@ macro_rules! impl_resource_params_for_tuple {
         impl<$($param: ResourceParam),+> ResourceParams for ($($param,)+) {
             fn resource_uses() -> Vec<ResourceUse> {
                 vec![$($param::resource_use()),+]
+            }
+
+            fn optional_resources() -> Vec<&'static str> {
+                vec![$($param::is_optional_requirement().then_some($param::resource_use().resource)),+]
+                    .into_iter()
+                    .flatten()
+                    .collect()
             }
 
             fn extract(context: &CommandContext) -> Result<Self> {
@@ -465,6 +547,9 @@ pub struct ContextAndArgs<A, O>(PhantomData<fn() -> (A, O)>);
 /// resource relationships, and registration reads them from the type.
 pub trait ResourceDialect<M>: Send + Sync + 'static {
     fn resource_uses() -> Vec<ResourceUse>;
+    fn optional_resources() -> Vec<&'static str> {
+        Vec::new()
+    }
     fn granted() -> Vec<&'static str>;
     fn enumerated() -> Vec<&'static str>;
     #[doc(hidden)]
@@ -488,6 +573,10 @@ where
 {
     fn resource_uses() -> Vec<ResourceUse> {
         P::resource_uses()
+    }
+
+    fn optional_resources() -> Vec<&'static str> {
+        P::optional_resources()
     }
 
     fn granted() -> Vec<&'static str> {
@@ -535,6 +624,10 @@ where
 {
     fn resource_uses() -> Vec<ResourceUse> {
         P::resource_uses()
+    }
+
+    fn optional_resources() -> Vec<&'static str> {
+        P::optional_resources()
     }
 
     fn granted() -> Vec<&'static str> {

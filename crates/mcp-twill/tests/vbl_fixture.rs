@@ -100,6 +100,36 @@ fn every_released_baseline_output_is_an_rfc_0014_source_contract() {
 }
 
 #[test]
+fn authored_ambient_session_declaration_matches_the_released_fallback_carrier() {
+    let baseline = baseline_observation();
+    let new_tab = baseline
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "new_tab")
+        .unwrap();
+    let released = &new_tab["inputSchema"]["properties"]["agent_session_id"];
+    let (resource, binding) = vbl::ambient_session_adoption();
+    let schema = match resource.reference_schema.as_ref().unwrap() {
+        mcp_twill::ArgumentSchemaUse::Inline { schema } => schema,
+        other => panic!("expected inline session schema, got {other:?}"),
+    };
+    assert_eq!(schema, released);
+    assert_eq!(resource.carrier_name(), "agent_session_id");
+    assert_eq!(
+        serde_json::to_value(binding).unwrap(),
+        json!({
+            "resource": "session",
+            "mode": { "ambient": {
+                "context": "conversationIdentity",
+                "explicit": "optionalOverride",
+                "missingError": "session_required"
+            }}
+        })
+    );
+}
+
+#[test]
 fn authored_guidance_accounts_for_every_released_operation() {
     let catalog = baseline_observation();
     let released = catalog

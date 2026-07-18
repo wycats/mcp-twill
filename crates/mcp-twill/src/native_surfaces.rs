@@ -85,6 +85,8 @@ pub struct NativeToolSurfaceDecl {
     )]
     pub application_errors: NativeApplicationErrorDialect,
     pub confirmation: NativeConfirmationRoute,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_bindings: Vec<crate::ResourceBindingDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -177,6 +179,7 @@ pub struct NativeToolSurface {
     declaration: NativeToolSurfaceDecl,
     snapshot: Box<NativeToolSurfaceSnapshot>,
     routes: BTreeMap<String, CompiledNativeRoute>,
+    resource_binders: BTreeMap<String, Arc<dyn crate::ambient_resources::ErasedAmbientBinder>>,
 }
 
 impl fmt::Debug for NativeToolSurface {
@@ -235,6 +238,20 @@ impl NativeToolSurface {
         self.snapshot
             .operation(operation_id)
             .map(NativeSurfaceOperation::presentation_defaults)
+    }
+
+    pub(crate) fn resource_binding(&self, resource: &str) -> Option<&crate::ResourceBindingDecl> {
+        self.declaration
+            .resource_bindings
+            .iter()
+            .find(|binding| binding.resource == resource)
+    }
+
+    pub(crate) fn resource_binder(
+        &self,
+        resource: &str,
+    ) -> Option<Arc<dyn crate::ambient_resources::ErasedAmbientBinder>> {
+        self.resource_binders.get(resource).cloned()
     }
 
     pub(crate) fn help(&self, request: HelpRequest) -> HelpResult {
@@ -331,6 +348,9 @@ pub struct NativeToolSurfaceBuilder {
     framework_help_authored: bool,
     application_errors_authored: bool,
     confirmation_authored: bool,
+    seeded_resource_bindings: BTreeSet<String>,
+    resource_binders: BTreeMap<String, Arc<dyn crate::ambient_resources::ErasedAmbientBinder>>,
+    binder_error_footprints: BTreeMap<String, Vec<String>>,
     errors: Vec<FrameworkError>,
 }
 
@@ -344,11 +364,15 @@ impl NativeToolSurfaceBuilder {
                 framework_help: FrameworkHelpProjection::Omitted,
                 application_errors: NativeApplicationErrorDialect::Canonical,
                 confirmation: NativeConfirmationRoute::Unavailable,
+                resource_bindings: Vec::new(),
             },
             exposure_authored: false,
             framework_help_authored: false,
             application_errors_authored: false,
             confirmation_authored: false,
+            seeded_resource_bindings: BTreeSet::new(),
+            resource_binders: BTreeMap::new(),
+            binder_error_footprints: BTreeMap::new(),
             errors: Vec::new(),
         }
     }
@@ -361,12 +385,20 @@ impl NativeToolSurfaceBuilder {
         ) {
             declaration.exposure = NativeExposurePolicy::Complete;
         }
+        let seeded_resource_bindings = declaration
+            .resource_bindings
+            .iter()
+            .map(|binding| binding.resource.clone())
+            .collect();
         Self {
             declaration,
             exposure_authored: true,
             framework_help_authored: true,
             application_errors_authored: true,
             confirmation_authored: true,
+            seeded_resource_bindings,
+            resource_binders: BTreeMap::new(),
+            binder_error_footprints: BTreeMap::new(),
             errors: Vec::new(),
         }
     }
@@ -431,6 +463,78 @@ impl NativeToolSurfaceBuilder {
         self
     }
 
+    pub fn bind_resource<T>(
+        mut self,
+        binding: crate::AmbientResourceBinding<impl crate::BindAmbientResource<T>>,
+    ) -> Self
+    where
+        T: crate::Resource,
+    {
+        if self.seeded_resource_bindings.contains(T::NAME)
+            || self
+                .declaration
+                .resource_bindings
+                .iter()
+                .any(|entry| entry.resource == T::NAME)
+        {
+            self.errors.push(build_error(format!(
+                "native surface declares resource binding `{}` more than once",
+                T::NAME
+            )));
+            return self;
+        }
+        match binding.into_runtime::<T>() {
+            Ok((declaration, binder, codes)) => {
+                self.declaration.resource_bindings.push(declaration);
+                self.resource_binders.insert(T::NAME.to_string(), binder);
+                self.binder_error_footprints
+                    .insert(T::NAME.to_string(), codes);
+            }
+            Err(error) => self.errors.push(error),
+        }
+        self
+    }
+
+    pub fn attach_resource_binder<T>(mut self, binder: impl crate::BindAmbientResource<T>) -> Self
+    where
+        T: crate::Resource,
+    {
+        let declared = self
+            .declaration
+            .resource_bindings
+            .iter()
+            .find(|binding| binding.resource == T::NAME);
+        if !matches!(
+            declared.map(|binding| &binding.mode),
+            Some(crate::ResourceBindingMode::Ambient { .. })
+        ) {
+            self.errors.push(build_error(format!(
+                "native surface cannot attach a binder for undeclared ambient resource `{}`",
+                T::NAME
+            )));
+            return self;
+        }
+        if self.resource_binders.contains_key(T::NAME) {
+            self.errors.push(build_error(format!(
+                "native surface attaches resource binder `{}` more than once",
+                T::NAME
+            )));
+            return self;
+        }
+        let codes = ambient_binder_error_codes::<T, _>(&binder);
+        self.resource_binders.insert(
+            T::NAME.to_string(),
+            Arc::new(crate::ambient_resources::AmbientBinderAdapter::<T, _>::new(
+                binder,
+            )),
+        );
+        self.binder_error_footprints.insert(
+            T::NAME.to_string(),
+            codes.into_iter().map(ToOwned::to_owned).collect(),
+        );
+        self
+    }
+
     pub fn direct(mut self, name: impl Into<String>, operation_id: impl Into<String>) -> Self {
         self.declaration.tools.push(NativeToolDecl::Direct {
             name: name.into(),
@@ -480,8 +584,22 @@ impl NativeToolSurfaceBuilder {
         ) {
             self.declaration.exposure = NativeExposurePolicy::Complete;
         }
-        compile_native_surface(self.declaration, registry, target)
+        compile_native_surface(
+            self.declaration,
+            self.resource_binders,
+            self.binder_error_footprints,
+            registry,
+            target,
+        )
     }
+}
+
+fn ambient_binder_error_codes<T, B>(_binder: &B) -> Vec<&'static str>
+where
+    T: crate::Resource,
+    B: crate::BindAmbientResource<T>,
+{
+    <B::ErrorFootprint as crate::ApplicationErrorFootprint<B::Error>>::codes()
 }
 
 pub struct NativeToolGroupBuilder {
@@ -804,7 +922,9 @@ pub struct FlatNativeApplicationErrorBody {
 }
 
 fn compile_native_surface(
-    declaration: NativeToolSurfaceDecl,
+    mut declaration: NativeToolSurfaceDecl,
+    resource_binders: BTreeMap<String, Arc<dyn crate::ambient_resources::ErasedAmbientBinder>>,
+    binder_error_footprints: BTreeMap<String, Vec<String>>,
     registry: &CommandRegistry,
     target: McpProtocolTarget,
 ) -> Result<NativeToolSurface> {
@@ -832,6 +952,19 @@ fn compile_native_surface(
         }
     }
     let declared_routes = declaration_routes(&declaration);
+
+    normalize_resource_bindings(
+        &mut declaration,
+        &command_specs,
+        &resource_binders,
+        &binder_error_footprints,
+        registry,
+    )?;
+    let effective_bindings = declaration
+        .resource_bindings
+        .iter()
+        .map(|binding| (binding.resource.clone(), binding.mode.clone()))
+        .collect::<BTreeMap<_, _>>();
 
     let mut mapped_operations = BTreeSet::new();
     let mut tool_names = BTreeSet::new();
@@ -910,8 +1043,20 @@ fn compile_native_surface(
                     &operation_specs,
                     &declared_routes,
                 );
+                let final_description = append_resource_binding_guidance(
+                    final_description,
+                    std::iter::once(*command),
+                    registry,
+                    &effective_bindings,
+                );
                 let defaults = presentation_defaults(&display_title)?;
-                let input = schema_object(registry.arg_schema(command), "direct input schema")?;
+                let mut input = schema_object(registry.arg_schema(command), "direct input schema")?;
+                refine_input_schema_for_bindings(
+                    &mut input,
+                    command,
+                    registry,
+                    &effective_bindings,
+                );
                 let output = schema_object(output_schema.clone(), "direct output schema")?;
                 let tool = Tool::new(name.clone(), final_description, input)
                     .with_title(display_title.clone())
@@ -1011,7 +1156,15 @@ fn compile_native_surface(
                         "native group `{name}` contains mixed task support"
                     )));
                 }
-                let input = compile_group_input(registry, name, selector, &member_commands)?;
+                let mut input = compile_group_input(registry, name, selector, &member_commands)?;
+                for (command, _) in &member_commands {
+                    refine_input_schema_for_bindings(
+                        &mut input,
+                        command,
+                        registry,
+                        &effective_bindings,
+                    );
+                }
                 let output = compile_group_output(name, selector, &member_operations, members)?;
                 let display_title = title.clone().unwrap_or_else(|| name.clone());
                 let final_description = description
@@ -1023,6 +1176,12 @@ fn compile_native_surface(
                     members,
                     &operation_specs,
                     &declared_routes,
+                );
+                let final_description = append_resource_binding_guidance(
+                    final_description,
+                    member_commands.iter().map(|(command, _)| *command),
+                    registry,
+                    &effective_bindings,
                 );
                 let defaults = presentation_defaults(&display_title)?;
                 tools.push(
@@ -1107,6 +1266,7 @@ fn compile_native_surface(
         declaration,
         snapshot: Box::new(snapshot),
         routes,
+        resource_binders,
     })
 }
 
@@ -1121,6 +1281,282 @@ fn validate_registry(registry: &CommandRegistry) -> Result<()> {
     registry.validate_resources()?;
     registry.validate_results()?;
     Ok(())
+}
+
+fn normalize_resource_bindings(
+    declaration: &mut NativeToolSurfaceDecl,
+    command_specs: &BTreeMap<String, &crate::CommandSpec>,
+    resource_binders: &BTreeMap<String, Arc<dyn crate::ambient_resources::ErasedAmbientBinder>>,
+    binder_error_footprints: &BTreeMap<String, Vec<String>>,
+    registry: &CommandRegistry,
+) -> Result<()> {
+    let exposed_operations = declaration
+        .tools
+        .iter()
+        .flat_map(|tool| match tool {
+            NativeToolDecl::Direct { operation_id, .. } => vec![operation_id.as_str()],
+            NativeToolDecl::Group { members, .. } => members
+                .iter()
+                .map(|member| member.operation_id.as_str())
+                .collect(),
+        })
+        .collect::<BTreeSet<_>>();
+    let mut used_resources = BTreeSet::new();
+    for operation_id in &exposed_operations {
+        let Some(command) = command_specs.get(*operation_id) else {
+            continue;
+        };
+        used_resources.extend(command.requires_resources.iter().cloned());
+        used_resources.extend(command.optional_resources.iter().cloned());
+        used_resources.extend(command.releases.iter().cloned());
+    }
+
+    let mut authored = BTreeMap::new();
+    for binding in std::mem::take(&mut declaration.resource_bindings) {
+        if authored.insert(binding.resource.clone(), binding).is_some() {
+            return Err(build_error(
+                "native surface declares a resource binding more than once",
+            ));
+        }
+    }
+    for resource in authored.keys() {
+        if registry.resource_decl(resource).is_none() {
+            return Err(build_error(format!(
+                "native surface binds unknown resource `{resource}`"
+            )));
+        }
+        if !used_resources.contains(resource) {
+            return Err(build_error(format!(
+                "native surface binds unused resource `{resource}`"
+            )));
+        }
+    }
+    for resource in used_resources {
+        authored
+            .entry(resource.clone())
+            .or_insert(crate::ResourceBindingDecl {
+                resource,
+                mode: crate::ResourceBindingMode::Argument,
+            });
+    }
+
+    for (resource, binding) in &authored {
+        match &binding.mode {
+            crate::ResourceBindingMode::Argument => {
+                if resource_binders.contains_key(resource) {
+                    return Err(build_error(format!(
+                        "argument-bound resource `{resource}` cannot have an ambient binder"
+                    )));
+                }
+            }
+            crate::ResourceBindingMode::Ambient { missing_error, .. } => {
+                if !resource_binders.contains_key(resource) {
+                    return Err(build_error(format!(
+                        "ambient resource `{resource}` has no attached binder"
+                    )));
+                }
+                let codes = binder_error_footprints
+                    .get(resource)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let consumers = exposed_operations
+                    .iter()
+                    .filter_map(|operation_id| command_specs.get(*operation_id).copied())
+                    .filter(|command| {
+                        command.requires_resources.contains(resource)
+                            || command.optional_resources.contains(resource)
+                            || command.releases.contains(resource)
+                    })
+                    .collect::<Vec<_>>();
+                for command in &consumers {
+                    let declared = command
+                        .output
+                        .as_ref()
+                        .and_then(|output| output.application.as_ref())
+                        .map(|contract| {
+                            contract
+                                .errors
+                                .iter()
+                                .map(|error| error.code.as_str())
+                                .collect::<BTreeSet<_>>()
+                        })
+                        .unwrap_or_default();
+                    if let Some(code) = codes.iter().find(|code| !declared.contains(code.as_str()))
+                    {
+                        return Err(build_error(format!(
+                            "ambient binder for resource `{resource}` may emit application error `{code}`, which command `{}` does not declare",
+                            command.name()
+                        )));
+                    }
+                }
+                if let Some(code) = missing_error {
+                    let required = consumers
+                        .iter()
+                        .filter(|command| {
+                            command.requires_resources.contains(resource)
+                                || command.releases.contains(resource)
+                        })
+                        .copied()
+                        .collect::<Vec<_>>();
+                    if required.is_empty() {
+                        return Err(build_error(format!(
+                            "ambient resource `{resource}` declares dead missing error `{code}`"
+                        )));
+                    }
+                    for command in required {
+                        let contract = command
+                            .output
+                            .as_ref()
+                            .and_then(|output| output.application.as_ref())
+                            .ok_or_else(|| {
+                                build_error(format!(
+                                    "ambient missing error `{code}` requires command `{}` to use an application result contract",
+                                    command.name()
+                                ))
+                            })?;
+                        crate::results::validate_application_error(
+                            contract,
+                            crate::results::RawApplicationError {
+                                code: code.clone(),
+                                message: None,
+                                details: json!({}),
+                                recovery: crate::ApplicationRecoverySelection::Declared,
+                            },
+                        )
+                        .map_err(|_| {
+                            build_error(format!(
+                                "ambient missing error `{code}` is not a static declaration-summary error with empty details and valid declared recovery on command `{}`",
+                                command.name()
+                            ))
+                        })?;
+                    }
+                }
+            }
+        }
+    }
+    for resource in resource_binders.keys() {
+        if !authored.contains_key(resource) {
+            return Err(build_error(format!(
+                "native surface attaches binder for unused resource `{resource}`"
+            )));
+        }
+    }
+
+    declaration.resource_bindings = authored.into_values().collect();
+    Ok(())
+}
+
+fn refine_input_schema_for_bindings(
+    schema: &mut JsonObject,
+    command: &crate::CommandSpec,
+    registry: &CommandRegistry,
+    bindings: &BTreeMap<String, crate::ResourceBindingMode>,
+) {
+    for resource in command
+        .requires_resources
+        .iter()
+        .chain(&command.optional_resources)
+        .chain(&command.releases)
+    {
+        let Some(mode) = bindings.get(resource) else {
+            continue;
+        };
+        let Some(declaration) = registry.resource_decl(resource) else {
+            continue;
+        };
+        let carrier = declaration.carrier_name();
+        match mode {
+            crate::ResourceBindingMode::Argument => {}
+            crate::ResourceBindingMode::Ambient {
+                explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
+                ..
+            } => refine_carrier(Value::Object(schema.clone()), &carrier, false, schema),
+            crate::ResourceBindingMode::Ambient {
+                explicit: crate::ExplicitCarrierPolicy::Omitted,
+                ..
+            } => refine_carrier(Value::Object(schema.clone()), &carrier, true, schema),
+        }
+    }
+}
+
+fn append_resource_binding_guidance<'a>(
+    mut description: String,
+    commands: impl IntoIterator<Item = &'a crate::CommandSpec>,
+    registry: &CommandRegistry,
+    bindings: &BTreeMap<String, crate::ResourceBindingMode>,
+) -> String {
+    let resources = commands
+        .into_iter()
+        .flat_map(|command| {
+            command
+                .requires_resources
+                .iter()
+                .chain(&command.optional_resources)
+                .chain(&command.releases)
+        })
+        .collect::<BTreeSet<_>>();
+    if resources.is_empty() {
+        return description;
+    }
+
+    description.push_str("\n\nResource bindings:");
+    for resource in resources {
+        let Some(mode) = bindings.get(resource) else {
+            continue;
+        };
+        let carrier = registry
+            .resource_decl(resource)
+            .map(crate::ResourceDecl::carrier_name)
+            .unwrap_or_else(|| format!("{resource}_id"));
+        match mode {
+            crate::ResourceBindingMode::Argument => description.push_str(&format!(
+                "\n- `{resource}` supplied by argument `{carrier}`."
+            )),
+            crate::ResourceBindingMode::Ambient {
+                explicit: crate::ExplicitCarrierPolicy::Omitted,
+                ..
+            } => description.push_str(&format!("\n- `{resource}` supplied by host.")),
+            crate::ResourceBindingMode::Ambient {
+                explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
+                ..
+            } => description.push_str(&format!(
+                "\n- `{resource}` supplied by host; explicit override `{carrier}` accepted."
+            )),
+        }
+    }
+    description
+}
+
+fn refine_carrier(mut value: Value, carrier: &str, omit: bool, destination: &mut JsonObject) {
+    fn visit(value: &mut Value, carrier: &str, omit: bool) {
+        let Some(object) = value.as_object_mut() else {
+            return;
+        };
+        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|name| name.as_str() != Some(carrier));
+        }
+        if omit
+            && let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut)
+        {
+            properties.remove(carrier);
+        }
+        for child in object.values_mut() {
+            match child {
+                Value::Array(values) => {
+                    for value in values {
+                        visit(value, carrier, omit);
+                    }
+                }
+                Value::Object(_) => visit(child, carrier, omit),
+                _ => {}
+            }
+        }
+    }
+    visit(&mut value, carrier, omit);
+    *destination = value
+        .as_object()
+        .cloned()
+        .expect("native input schema remains an object");
 }
 
 fn validate_surface_name(name: &str) -> Result<()> {

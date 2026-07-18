@@ -48,6 +48,8 @@ pub enum ErrorCode {
     /// A resource reference did not resolve to a live value (stale lease,
     /// foreign tab, expired session).
     ResourceRefused,
+    /// A required resource had neither an explicit nor an ambient binding.
+    ResourceBindingMissing,
     /// Host request metadata did not satisfy the conversation-identity
     /// contract or contained conflicting trusted observations.
     InvalidRequestContext,
@@ -84,7 +86,9 @@ impl ErrorCode {
             FrameworkError::WorkspaceUnresolved { .. } => Self::UnresolvedWorkspaceRequirement,
             FrameworkError::CapabilityMissing { .. } => Self::CapabilityMissing,
             FrameworkError::CapabilityDenied { .. } => Self::CapabilityDenied,
-            FrameworkError::ResourceRefused { .. } => Self::ResourceRefused,
+            FrameworkError::ResourceRefused { .. }
+            | FrameworkError::AmbientResourceRefused { .. } => Self::ResourceRefused,
+            FrameworkError::ResourceBindingMissing { .. } => Self::ResourceBindingMissing,
             FrameworkError::InvalidConversationIdentity { .. }
             | FrameworkError::ConflictingConversationIdentity
             | FrameworkError::InvalidWorkspaceMetadata { .. }
@@ -210,6 +214,8 @@ pub struct PermissionPreview {
     /// roots the approval token binds to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_roots: Vec<crate::PlanWorkspaceRoot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_binding_facts: Vec<crate::PlanResourceBindingFact>,
     /// The matched union variant for each argument bound to a named type.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub argument_variants: BTreeMap<String, crate::ArgVariants>,
@@ -231,6 +237,8 @@ struct PermissionPreviewWire {
     workspaces: Vec<WorkspaceDecl>,
     #[serde(default)]
     workspace_roots: Vec<crate::PlanWorkspaceRoot>,
+    #[serde(default)]
+    resource_binding_facts: Vec<crate::PlanResourceBindingFact>,
     #[serde(default)]
     argument_variants: BTreeMap<String, crate::ArgVariants>,
     output: OutputSpec,
@@ -263,6 +271,7 @@ impl TryFrom<PermissionPreviewWire> for PermissionPreview {
             permissions: wire.permissions,
             workspaces: wire.workspaces,
             workspace_roots: wire.workspace_roots,
+            resource_binding_facts: wire.resource_binding_facts,
             argument_variants: wire.argument_variants,
             output: wire.output,
             confirmation_policy: wire.confirmation_policy,
@@ -935,6 +944,24 @@ fn error_details(error: &FrameworkError) -> Value {
                 "establish": establish,
             },
         }),
+        FrameworkError::ResourceBindingMissing {
+            resource,
+            establish,
+        } => json!({
+            "resource": resource,
+            "binding": "absent",
+            "establish": establish,
+        }),
+        FrameworkError::AmbientResourceRefused {
+            resource,
+            enumerate,
+            establish,
+        } => json!({
+            "resource": resource,
+            "binding": "ambient",
+            "enumerate": enumerate,
+            "establish": establish,
+        }),
         FrameworkError::InvalidConversationIdentity {
             observation_source,
             key,
@@ -1035,6 +1062,7 @@ pub(crate) fn permission_preview(
         permissions: plan.permissions.clone(),
         workspaces: plan.workspaces.clone(),
         workspace_roots: plan.workspace_roots.clone(),
+        resource_binding_facts: plan.resource_binding_facts.clone(),
         argument_variants,
         output: plan.output.clone(),
         confirmation_policy: ConfirmationPolicy::EffectDefault,
@@ -1222,8 +1250,27 @@ fn steering_for_error(error: &FrameworkError, retry: Option<&RetryAction>) -> Ve
             providers,
             ..
         } => capability_steering(capability, providers),
+        FrameworkError::ResourceBindingMissing {
+            resource,
+            establish,
+        } => resource_steering(resource, establish),
         _ => Vec::new(),
     }
+}
+
+fn resource_steering(resource: &str, providers: &[String]) -> Vec<SteeringAction> {
+    providers
+        .iter()
+        .map(|provider| SteeringAction {
+            kind: SteeringKind::Help,
+            label: format!("Establish `{resource}` with `{provider}`"),
+            request: json!({
+                "tool": "help",
+                "arguments": { "command": provider },
+            }),
+            priority: SteeringPriority::Primary,
+        })
+        .collect()
 }
 
 /// One steering action per establishing command, derived from `provides`

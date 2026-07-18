@@ -196,6 +196,18 @@ impl ServerBuilder {
         self
     }
 
+    /// Binds a typed resolver whose declared application failures are
+    /// validated against every consuming command's RFC 0014 contract.
+    pub fn resolver_with_errors<T: Resource>(
+        &mut self,
+        resolver: impl crate::ResolveResourceWithErrors<T>,
+    ) -> &mut Self {
+        self.resource_bindings.push(Box::new(move |registry| {
+            registry.with_resolver_with_errors(resolver)
+        }));
+        self
+    }
+
     /// Binds a reader for `T`. On MCP, a bound reader turns grants into
     /// `resource_link` content parts and serves `resources/read` for minted
     /// URIs; without one, the URI in the structured payload is the whole
@@ -344,6 +356,7 @@ impl ServerBuilder {
             let resolved = spec
                 .requires_resources
                 .iter()
+                .chain(&spec.optional_resources)
                 .chain(&spec.releases)
                 .cloned()
                 .collect::<Vec<_>>();
@@ -374,11 +387,9 @@ impl ServerBuilder {
                 spec.args.push(ArgSpec {
                     name: carrier,
                     value_type: ArgType::ResourceRef(resource.clone()),
-                    required: true,
-                    summary: format!(
-                        "The `{}` to operate on; accepts a bare id or its URI.",
-                        decl.name
-                    ),
+                    required: spec.requires_resources.contains(&resource)
+                        || spec.releases.contains(&resource),
+                    summary: decl.reference_summary(),
                     workspace: None,
                     repeated: false,
                     schema: decl.reference_schema.clone(),
@@ -433,6 +444,7 @@ pub struct CommandBuilder {
     alternatives: Vec<Alternative>,
     fallback: Option<Fallback>,
     requires_resources: Vec<String>,
+    optional_resources: Vec<String>,
     grants: Vec<String>,
     releases: Vec<String>,
     enumerates: Vec<String>,
@@ -466,6 +478,7 @@ impl CommandBuilder {
             alternatives: Vec::new(),
             fallback: None,
             requires_resources: Vec::new(),
+            optional_resources: Vec::new(),
             grants: Vec::new(),
             releases: Vec::new(),
             enumerates: Vec::new(),
@@ -754,9 +767,13 @@ impl CommandBuilder {
     where
         H: ResourceDialect<M>,
     {
+        let optional = H::optional_resources();
         for resource_use in H::resource_uses() {
             if resource_use.released {
                 self.releases.push(resource_use.resource.to_string());
+            } else if optional.contains(&resource_use.resource) {
+                self.optional_resources
+                    .push(resource_use.resource.to_string());
             } else {
                 self.requires_resources
                     .push(resource_use.resource.to_string());
@@ -780,6 +797,7 @@ impl CommandBuilder {
         let registration = handler.into_constrained_registration();
         self.apply_result_resource_edges(
             &registration.resource_uses,
+            &registration.optional_resources,
             &registration.granted,
             &registration.enumerated,
         );
@@ -794,6 +812,7 @@ impl CommandBuilder {
         let registration = handler.into_result_registration();
         self.apply_result_resource_edges(
             &registration.resource_uses,
+            &registration.optional_resources,
             &registration.granted,
             &registration.enumerated,
         );
@@ -808,6 +827,7 @@ impl CommandBuilder {
         let registration = handler.into_dynamic_registration();
         self.apply_result_resource_edges(
             &registration.resource_uses,
+            &registration.optional_resources,
             &registration.granted,
             &registration.enumerated,
         );
@@ -818,12 +838,16 @@ impl CommandBuilder {
     fn apply_result_resource_edges(
         &mut self,
         uses: &[crate::resource::ResourceUse],
+        optional_resources: &[&'static str],
         granted: &[&'static str],
         enumerated: &[&'static str],
     ) {
         for resource_use in uses {
             if resource_use.released {
                 self.releases.push(resource_use.resource.to_string());
+            } else if optional_resources.contains(&resource_use.resource) {
+                self.optional_resources
+                    .push(resource_use.resource.to_string());
             } else {
                 self.requires_resources
                     .push(resource_use.resource.to_string());
@@ -835,6 +859,7 @@ impl CommandBuilder {
             .extend(enumerated.iter().map(|name| (*name).to_string()));
         for values in [
             &mut self.requires_resources,
+            &mut self.optional_resources,
             &mut self.releases,
             &mut self.grants,
             &mut self.enumerates,
@@ -991,6 +1016,7 @@ impl CommandBuilder {
             spec = spec.fallback(fallback.prefer, fallback.when);
         }
         spec.requires_resources = self.requires_resources;
+        spec.optional_resources = self.optional_resources;
         spec.grants = self.grants;
         spec.releases = self.releases;
         spec.enumerates = self.enumerates;

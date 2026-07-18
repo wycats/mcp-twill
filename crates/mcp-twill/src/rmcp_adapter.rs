@@ -694,14 +694,15 @@ impl CliMcpServer {
             Ok(identity) => identity,
             Err(error) => return native_framework_outcome(error, None),
         };
-        let plan = match self.registry.build_native_operation_plan(
+        let prepared = match self.registry.build_native_operation_plan(
             &operation_id,
             selected_arguments.clone(),
             &resolved,
             &invocation_context,
             identity,
+            surface,
         ) {
-            Ok(plan) => plan,
+            Ok(prepared) => prepared,
             Err(error) => {
                 if let Some(operation) = surface.snapshot().operation(&operation_id) {
                     return native_framework_outcome_for_operation(error, operation.spec());
@@ -709,10 +710,23 @@ impl CliMcpServer {
                 return native_framework_outcome(error, None);
             }
         };
+        let plan = prepared.plan().clone();
         if let Some(meta) = progress_meta {
             Self::notify_progress(meta, &client, 2.0, 5.0, "Invocation plan ready").await;
         }
         let plan_for_event = PlanFacts::from(&plan);
+
+        if let Some(availability) = self.registry.binding_availability(&prepared) {
+            return match availability {
+                Ok(crate::CommandExecutionOutcome::ApplicationError { plan, error }) => {
+                    native_application_error_outcome(surface, plan, error, plan_for_event)
+                }
+                Ok(crate::CommandExecutionOutcome::Success(response)) => {
+                    native_success_outcome(self, surface, &operation_id, response, plan_for_event)
+                }
+                Err(error) => native_framework_outcome(error, Some((plan, plan_for_event))),
+            };
+        }
 
         if let Err(error) = self.registry.check_plan_policy(&plan) {
             return native_framework_outcome(error, Some((plan, plan_for_event)));
@@ -808,7 +822,7 @@ impl CliMcpServer {
         }
         let outcome = match self
             .registry
-            .dispatch_operation_plan(selected_arguments, plan.clone(), &invocation_context)
+            .dispatch_prepared_operation(selected_arguments, prepared)
             .await
         {
             Ok(crate::CommandExecutionOutcome::Success(response)) => {
@@ -1313,6 +1327,7 @@ fn native_framework_outcome_for_operation(
             operation_id: operation.id.clone(),
             command_path: operation.path.clone(),
             effect: operation.effect.clone(),
+            resource_binding_facts: Vec::new(),
         }),
     }
 }

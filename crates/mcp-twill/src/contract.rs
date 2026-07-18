@@ -808,6 +808,7 @@ fn check_confirmation_projection_with_help(
                 permissions: command.permissions.clone(),
                 workspaces: Vec::new(),
                 workspace_roots: Vec::new(),
+                resource_binding_facts: Vec::new(),
                 idempotent: command.idempotent,
                 output: crate::OutputSpec::default(),
             };
@@ -1242,6 +1243,191 @@ pub fn check_resource_projection(registry: &CommandRegistry) -> Vec<ContractViol
         }
     }
     violations
+}
+
+/// A compiled native surface keeps its resource-binding declaration aligned
+/// with every exposed operation's schema and help projection.
+pub fn check_resource_binding_projection(
+    registry: &CommandRegistry,
+    surface: &crate::NativeToolSurface,
+) -> Vec<ContractViolation> {
+    check_resource_binding_projection_with_help(registry, surface, |tool| {
+        surface
+            .help(crate::HelpRequest {
+                command: Some(tool.to_string()),
+                topic: None,
+                detail: None,
+            })
+            .text
+    })
+}
+
+fn check_resource_binding_projection_with_help(
+    registry: &CommandRegistry,
+    surface: &crate::NativeToolSurface,
+    render_help: impl Fn(&str) -> String,
+) -> Vec<ContractViolation> {
+    let mut violations = Vec::new();
+    let declarations = &surface.declaration().resource_bindings;
+    if declarations
+        .windows(2)
+        .any(|pair| pair[0].resource >= pair[1].resource)
+    {
+        violations.push(violation(
+            None,
+            "resource bindings",
+            "compiled resource bindings are not unique and sorted by resource name",
+        ));
+    }
+
+    let bindings = declarations
+        .iter()
+        .map(|binding| (binding.resource.as_str(), &binding.mode))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for operation in surface.snapshot().operations() {
+        let spec = operation.spec();
+        let used = spec
+            .requires_resources
+            .iter()
+            .chain(&spec.optional_resources)
+            .chain(&spec.releases);
+        let tool_name = operation.call().tool();
+        let help = render_help(tool_name);
+        let tool = surface
+            .snapshot()
+            .tools()
+            .iter()
+            .find(|tool| tool.name.as_ref() == tool_name);
+        for resource in used {
+            let Some(mode) = bindings.get(resource.as_str()) else {
+                violations.push(violation(
+                    Some(&spec.id),
+                    "resource bindings",
+                    format!("native surface does not bind used resource `{resource}`"),
+                ));
+                continue;
+            };
+            let Some(declaration) = registry.resource_decl(resource) else {
+                violations.push(violation(
+                    Some(&spec.id),
+                    "resource bindings",
+                    format!("native surface binds undeclared resource `{resource}`"),
+                ));
+                continue;
+            };
+            let carrier = declaration.carrier_name();
+            let expected_help = match mode {
+                crate::ResourceBindingMode::Argument => {
+                    format!("`{resource}` supplied by argument `{carrier}`")
+                }
+                crate::ResourceBindingMode::Ambient {
+                    explicit: crate::ExplicitCarrierPolicy::Omitted,
+                    ..
+                } => format!("`{resource}` supplied by host"),
+                crate::ResourceBindingMode::Ambient {
+                    explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
+                    ..
+                } => {
+                    format!("`{resource}` supplied by host; explicit override `{carrier}` accepted")
+                }
+            };
+            if !help.contains(&expected_help) {
+                violations.push(violation(
+                    Some(&spec.id),
+                    "resource bindings",
+                    format!("native help omits `{resource}` binding mode"),
+                ));
+            }
+
+            let Some(tool) = tool else {
+                violations.push(violation(
+                    Some(&spec.id),
+                    "resource bindings",
+                    format!("native operation is missing tool `{tool_name}`"),
+                ));
+                continue;
+            };
+            let schema = serde_json::Value::Object((*tool.input_schema).clone());
+            let has_carrier = schema_has_property(&schema, &carrier);
+            let carrier_required = schema_requires_property(&schema, &carrier);
+            match mode {
+                crate::ResourceBindingMode::Argument => {
+                    if !has_carrier {
+                        violations.push(violation(
+                            Some(&spec.id),
+                            "resource bindings",
+                            format!("argument binding omits carrier `{carrier}` from input schema"),
+                        ));
+                    }
+                    let required = spec.requires_resources.contains(resource)
+                        || spec.releases.contains(resource);
+                    if required && !carrier_required {
+                        violations.push(violation(
+                            Some(&spec.id),
+                            "resource bindings",
+                            format!(
+                                "required argument binding leaves carrier `{carrier}` optional"
+                            ),
+                        ));
+                    }
+                }
+                crate::ResourceBindingMode::Ambient {
+                    explicit: crate::ExplicitCarrierPolicy::Omitted,
+                    ..
+                } if has_carrier => violations.push(violation(
+                    Some(&spec.id),
+                    "resource bindings",
+                    format!("ambient-only binding exposes carrier `{carrier}`"),
+                )),
+                crate::ResourceBindingMode::Ambient {
+                    explicit: crate::ExplicitCarrierPolicy::OptionalOverride,
+                    ..
+                } if !has_carrier || carrier_required => violations.push(violation(
+                    Some(&spec.id),
+                    "resource bindings",
+                    format!("ambient override carrier `{carrier}` is not optional"),
+                )),
+                _ => {}
+            }
+        }
+    }
+    violations
+}
+
+fn schema_has_property(schema: &serde_json::Value, property: &str) -> bool {
+    match schema {
+        serde_json::Value::Object(object) => {
+            object
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|properties| properties.contains_key(property))
+                || object
+                    .values()
+                    .any(|value| schema_has_property(value, property))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| schema_has_property(value, property)),
+        _ => false,
+    }
+}
+
+fn schema_requires_property(schema: &serde_json::Value, property: &str) -> bool {
+    match schema {
+        serde_json::Value::Object(object) => {
+            object
+                .get("required")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|required| required.iter().any(|name| name.as_str() == Some(property)))
+                || object
+                    .values()
+                    .any(|value| schema_requires_property(value, property))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| schema_requires_property(value, property)),
+        _ => false,
+    }
 }
 
 /// Capability declarations honor the registration promises (declared,
@@ -2001,6 +2187,79 @@ mod confirmation_projection_tests {
             violations.iter().any(|violation| violation
                 .message
                 .contains("omits confirmation presentation")),
+            "violations: {violations:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod resource_binding_projection_tests {
+    use super::*;
+    use crate::{
+        ApplicationResult, ApplicationSuccess, CommandContext, FrameworkHelpProjection,
+        InvocationPlan, McpProtocolTarget, NativeApplicationErrorDialect, NativeConfirmationRoute,
+        NativeToolSurface, Res, ResolveResource, Resource, ResourceDecl, ResourceRefusal,
+    };
+    use schemars::JsonSchema;
+    use serde::Serialize;
+
+    struct Lease;
+
+    impl Resource for Lease {
+        const NAME: &'static str = "lease";
+    }
+
+    struct LeaseResolver;
+
+    impl ResolveResource<Lease> for LeaseResolver {
+        async fn resolve(
+            &self,
+            _reference: &str,
+            _plan: &InvocationPlan,
+        ) -> std::result::Result<Lease, ResourceRefusal> {
+            Ok(Lease)
+        }
+    }
+
+    #[derive(Serialize, JsonSchema)]
+    struct Status {
+        ready: bool,
+    }
+
+    async fn status(_: Res<Lease>, _: CommandContext) -> ApplicationResult<Status> {
+        Ok(ApplicationSuccess::value(Status { ready: true }))
+    }
+
+    #[test]
+    fn missing_resource_binding_help_is_a_contract_violation() {
+        let registry = CommandRegistry::build("contract", "Contract", |server| {
+            server.resource(
+                ResourceDecl::new("lease", "A test lease")
+                    .uri("test://lease/{id}")
+                    .carrier("lease_id"),
+            );
+            server.resolver::<Lease>(LeaseResolver);
+            server.command("lease status", |command| {
+                command
+                    .summary("Status")
+                    .description("Read lease status")
+                    .handle_result(status);
+            });
+        })
+        .expect("registry");
+        let surface = NativeToolSurface::builder("lease-tools")
+            .framework_help(FrameworkHelpProjection::Omitted)
+            .application_errors(NativeApplicationErrorDialect::Canonical)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .direct("lease_status", "lease.status")
+            .build(&registry, McpProtocolTarget::V2025_11_25)
+            .expect("surface");
+        let violations =
+            check_resource_binding_projection_with_help(&registry, &surface, |_| String::new());
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.message.contains("help omits")),
             "violations: {violations:?}"
         );
     }

@@ -6,13 +6,45 @@
 //! RFC 0011 guidance slice, not the later complete application schema.
 
 use mcp_twill::{
-    ArgSpec, CommandExample, CommandOutput, CommandRegistry, CommandSpec, Field, TypeDecl, Variant,
+    AmbientContextSource, ArgSpec, CommandExample, CommandOutput, CommandRegistry, CommandSpec,
+    ExplicitCarrierPolicy, Field, Resource, ResourceBindingDecl, ResourceBindingMode, ResourceDecl,
+    TypeDecl, Variant,
 };
 use serde_json::Value;
 use serde_json::json;
 
 pub const PREAMBLE: &str =
     "Routine actions attach to the owned target and preserve the user's active application.";
+
+/// RFC 0016's test-only VBL session declaration. The released fixture is
+/// evidence; this declaration is authored Twill input for the later port.
+pub struct Session;
+
+impl Resource for Session {
+    const NAME: &'static str = "session";
+}
+
+pub fn ambient_session_adoption() -> (ResourceDecl, ResourceBindingDecl) {
+    let _marker = Session;
+    let resource = ResourceDecl::new("session", "The conversation-scoped browser session")
+        .uri("vbl://session/{id}")
+        .carrier("agent_session_id")
+        .reference_schema(json!({
+            "type": "string",
+            "minLength": 1,
+            "description": "Explicit fallback handle. Omit this field unless this conversation received session_required, called start_session, and is reusing the exact returned value. Never invent, request, or substitute a placeholder value."
+        }))
+        .expiry("idle sessions expire and release their owned targets");
+    let binding = ResourceBindingDecl {
+        resource: Session::NAME.to_string(),
+        mode: ResourceBindingMode::Ambient {
+            context: AmbientContextSource::ConversationIdentity,
+            explicit: ExplicitCarrierPolicy::OptionalOverride,
+            missing_error: Some("session_required".to_string()),
+        },
+    };
+    (resource, binding)
+}
 
 /// RFC 0014's authored ownership reconciliation for the released VBL error
 /// inventory. The fixture is evidence; these assignments are Twill design.
@@ -312,6 +344,10 @@ pub fn registry() -> CommandRegistry {
 /// owns their property-level authoring and the one catalog presence relation
 /// that v0.4.9 enforced outside its ungrouped schemas.
 pub fn argument_schema_registry(baseline: &Value) -> CommandRegistry {
+    // Compile the later RFC 0016 adoption declarations in every integration
+    // crate that reuses this shared fixture without changing this registry's
+    // RFC 0017 projection.
+    let _ambient_session = ambient_session_adoption();
     let paths = OPERATION_MAPPING
         .iter()
         .map(|(released, path, title)| (*released, (*path, *title)))
