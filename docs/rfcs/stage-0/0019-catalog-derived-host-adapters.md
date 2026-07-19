@@ -1223,7 +1223,12 @@ The final installed VS Code/Codex artifact smokes remain VBL-owned downstream ga
 2. Add versioned in-process dispatch plus the registered process router, generated launch identity, bounded envelope I/O, and typed context.
 3. Add fixed result projection and bounded host success/error rendering with fitting transport fallbacks.
 4. Add the VS Code manifest and TypeScript adapter generator with the exact one-shot registration lifecycle, context-provider interface, and presentation trigger.
-5. Replace VBL's manifest transformations, invocation/confirmation switches, result filter, envelope parser, and error formatter with generated artifacts and parity fixtures.
+5. Complete Twill's owner-local VBL profile and frozen v0.4.9 parity in `host_adapters.rs`.
+   The later VBL-owned port consumes released Twill crates to replace its manifest
+   transformations, invocation/confirmation switches, result filter, process wrapper,
+   envelope parser, and error formatter with generated artifacts.
+   That port owns VBL extension/integration TypeScript, exact-artifact, and
+   installed-host evidence and is not part of this RFC's owner-local implementation PR.
 
 ### Acceptance Tests
 
@@ -1333,7 +1338,12 @@ VBL provides the concrete VS Code manifest, process envelope, context provider, 
 
 ## Unresolved Questions
 
-No architectural questions remain for the initial generated-host boundary. The profile, builder, transport, and generated-hook names in this body are the current Stage-0 proposal; any review-driven rename must amend the managed RFC and generated-artifact vectors before Stage 1, and implementation may not publish an alternate compatibility surface. Such a revision must retain compiled snapshots, the version-1 process envelope, typed provider failure, fixed text-only projection, and the narrowly proven absent-context application rejection.
+No architectural questions remain for the initial generated-host boundary.
+The profile, builder, transport, and generated-hook names in this body are the proposed Stage-1 implementation contract.
+Promotion accepts these spellings, and implementation may not publish an alternate compatibility surface.
+
+Any later review-driven rename must return the RFC to design review and amend the managed body and generated-artifact vectors before implementation proceeds.
+Such a revision must retain compiled snapshots, the version-1 process envelope, typed provider failure, fixed text-only projection, and the narrowly proven absent-context application rejection.
 
 ## Future Possibilities
 
