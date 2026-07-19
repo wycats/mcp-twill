@@ -1227,8 +1227,8 @@ The final installed VS Code/Codex artifact smokes remain VBL-owned downstream ga
    The later VBL-owned port consumes released Twill crates to replace its manifest
    transformations, invocation/confirmation switches, result filter, process wrapper,
    envelope parser, and error formatter with generated artifacts.
-   That port owns TypeScript, exact-artifact, and installed-host evidence and is not
-   part of this RFC's owner-local implementation PR.
+   That port owns VBL extension/integration TypeScript, exact-artifact, and
+   installed-host evidence and is not part of this RFC's owner-local implementation PR.
 
 ### Acceptance Tests
 
