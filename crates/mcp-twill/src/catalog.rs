@@ -277,6 +277,9 @@ pub struct OperationSpec {
     /// the handler signature).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_resources: Vec<String>,
+    /// Resources the handler consumes only when a binding is available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_resources: Vec<String>,
     /// Resources this command grants references to (derived from the
     /// handler output type).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -337,6 +340,8 @@ struct OperationSpecWire {
     #[serde(default)]
     requires_resources: Vec<String>,
     #[serde(default)]
+    optional_resources: Vec<String>,
+    #[serde(default)]
     grants: Vec<String>,
     #[serde(default)]
     releases: Vec<String>,
@@ -377,6 +382,7 @@ impl From<OperationSpecWire> for OperationSpec {
             alternatives: wire.alternatives,
             fallback: wire.fallback,
             requires_resources: wire.requires_resources,
+            optional_resources: wire.optional_resources,
             grants: wire.grants,
             releases: wire.releases,
             enumerates: wire.enumerates,
@@ -427,6 +433,7 @@ impl OperationSpec {
             alternatives: spec.alternatives.clone(),
             fallback: spec.fallback.clone(),
             requires_resources: spec.requires_resources.clone(),
+            optional_resources: spec.optional_resources.clone(),
             grants: spec.grants.clone(),
             releases: spec.releases.clone(),
             enumerates: spec.enumerates.clone(),

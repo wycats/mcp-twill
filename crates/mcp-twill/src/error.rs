@@ -146,6 +146,28 @@ pub enum FrameworkError {
         /// types — the establishment path when nothing exists yet.
         establish: Box<[String]>,
     },
+    #[error("required resource `{resource}` has no available binding")]
+    ResourceBindingMissing {
+        /// The required resource for which neither an explicit nor ambient
+        /// source was selected.
+        resource: String,
+        /// Commands that establish the resource, derived from handler output
+        /// types.
+        establish: Box<[String]>,
+    },
+    #[error("ambient resource `{resource}` was refused")]
+    AmbientResourceRefused {
+        /// The declared resource whose private ambient reference did not
+        /// resolve. The reference and resolver detail are intentionally not
+        /// retained.
+        resource: String,
+        /// Commands that enumerate the resource, derived from handler output
+        /// types.
+        enumerate: Box<[String]>,
+        /// Commands that establish the resource, derived from handler output
+        /// types.
+        establish: Box<[String]>,
+    },
     #[error("invalid conversation identity request context at `{key}` ({reason})")]
     InvalidConversationIdentity {
         /// Stable source label (`canonical` or `codexThreadId`).

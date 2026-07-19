@@ -431,6 +431,28 @@ where
     }
 }
 
+impl<E, F> ProducedApplicationError<E, F>
+where
+    E: ApplicationError,
+    F: ApplicationErrorFootprint<E>,
+{
+    pub(crate) fn into_raw(self) -> crate::Result<RawApplicationError> {
+        let code = self._error.code();
+        if !F::codes().contains(&code) {
+            return Err(FrameworkError::ResultContractViolation {
+                boundary: ResultContractBoundary::ApplicationError,
+                reason: ResultContractReason::UndeclaredCode,
+            });
+        }
+        Ok(RawApplicationError {
+            code: code.to_string(),
+            message: self._error.runtime_message().map(Cow::into_owned),
+            details: self._error.details(),
+            recovery: self._error.recovery(),
+        })
+    }
+}
+
 pub struct ApplicationSuccess<T> {
     value: T,
     resources: ApplicationResourceComponents,
@@ -643,6 +665,7 @@ pub struct ResultHandlerRegistration {
     pub(crate) pending: PendingApplicationContract,
     pub(crate) argument_schema: Option<Value>,
     pub(crate) resource_uses: Vec<ResourceUse>,
+    pub(crate) optional_resources: Vec<&'static str>,
     pub(crate) granted: Vec<&'static str>,
     pub(crate) enumerated: Vec<&'static str>,
 }
@@ -651,6 +674,7 @@ pub struct ResultHandlerRegistration {
 pub struct DynamicHandlerRegistration {
     pub(crate) handler: Arc<dyn ErasedCommandHandler>,
     pub(crate) resource_uses: Vec<ResourceUse>,
+    pub(crate) optional_resources: Vec<&'static str>,
     pub(crate) granted: Vec<&'static str>,
     pub(crate) enumerated: Vec<&'static str>,
 }
@@ -678,6 +702,7 @@ struct DynamicResultHandler<M, H> {
 fn typed_registration<O, E, S>(
     handler: Arc<dyn ErasedCommandHandler>,
     resource_uses: Vec<ResourceUse>,
+    optional_resources: Vec<&'static str>,
     argument_schema: Option<Value>,
 ) -> ResultHandlerRegistration
 where
@@ -694,6 +719,7 @@ where
         },
         argument_schema,
         resource_uses,
+        optional_resources,
         granted: O::granted(),
         enumerated: O::enumerated(),
     }
@@ -702,10 +728,12 @@ where
 fn dynamic_registration<O: ApplicationOutput>(
     handler: Arc<dyn ErasedCommandHandler>,
     resource_uses: Vec<ResourceUse>,
+    optional_resources: Vec<&'static str>,
 ) -> DynamicHandlerRegistration {
     DynamicHandlerRegistration {
         handler,
         resource_uses,
+        optional_resources,
         granted: O::granted(),
         enumerated: O::enumerated(),
     }
@@ -799,6 +827,7 @@ where
                 _marker: PhantomData::<fn() -> ContextOnly<ApplicationOutputResult<O, E, S>>>,
             }),
             Vec::new(),
+            Vec::new(),
             None,
         )
     }
@@ -850,6 +879,7 @@ where
                 handler: self,
                 _marker: PhantomData::<fn() -> ContextAndArgs<A, ApplicationOutputResult<O, E, S>>>,
             }),
+            Vec::new(),
             Vec::new(),
             Some(crate::argument_schemas::derived_argument_schema::<A>()),
         )
@@ -909,6 +939,7 @@ where
                 _marker: PhantomData::<fn() -> WithResources<P, ApplicationOutputResult<O, E, S>>>,
             }),
             P::resource_uses(),
+            P::optional_resources(),
             None,
         )
     }
@@ -967,6 +998,7 @@ where
                 >,
             }),
             P::resource_uses(),
+            P::optional_resources(),
             Some(crate::argument_schemas::derived_argument_schema::<A>()),
         )
     }
@@ -1020,6 +1052,7 @@ where
                 _marker: PhantomData::<fn() -> ContextOnly<DynamicApplicationResult<O>>>,
             }),
             Vec::new(),
+            Vec::new(),
         )
     }
 }
@@ -1062,6 +1095,7 @@ where
                 handler: self,
                 _marker: PhantomData::<fn() -> ContextAndArgs<A, DynamicApplicationResult<O>>>,
             }),
+            Vec::new(),
             Vec::new(),
         )
     }
@@ -1109,6 +1143,7 @@ where
                 _marker: PhantomData::<fn() -> WithResources<P, DynamicApplicationResult<O>>>,
             }),
             P::resource_uses(),
+            P::optional_resources(),
         )
     }
 }
@@ -1160,6 +1195,7 @@ where
                 >,
             }),
             P::resource_uses(),
+            P::optional_resources(),
         )
     }
 }

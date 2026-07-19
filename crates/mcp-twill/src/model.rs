@@ -487,6 +487,24 @@ impl ResourceDecl {
         format!("{}-ref", self.name)
     }
 
+    pub(crate) fn reference_summary(&self) -> String {
+        self.reference_schema
+            .as_ref()
+            .and_then(|schema| match schema {
+                crate::ArgumentSchemaUse::Inline { schema } => schema
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                crate::ArgumentSchemaUse::Named { .. } => None,
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "The `{}` to operate on; accepts a bare id or its URI.",
+                    self.name
+                )
+            })
+    }
+
     /// The template split at its single `{id}` slot, or `None` when the
     /// template does not have exactly one slot.
     pub fn uri_parts(&self) -> Option<(&str, &str)> {
@@ -795,6 +813,10 @@ pub struct CommandSpec {
     /// the handler signature (`Res<T>`), never written by authors.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_resources: Vec<String>,
+    /// Resources this command may consume when a binding is available.
+    /// Derived from `Option<Res<T>>` in the handler signature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_resources: Vec<String>,
     /// Resources this command grants references to. Derived from the
     /// handler output type (`Granted<T>`), never written by authors.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -838,6 +860,7 @@ impl CommandSpec {
             alternatives: Vec::new(),
             fallback: None,
             requires_resources: Vec::new(),
+            optional_resources: Vec::new(),
             grants: Vec::new(),
             releases: Vec::new(),
             enumerates: Vec::new(),
@@ -1211,6 +1234,10 @@ pub struct InvocationPlan {
     /// The resolved roots for the workspaces this plan's path arguments use.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_roots: Vec<PlanWorkspaceRoot>,
+    /// Redacted resource-binding sources selected by the active native
+    /// surface. Bare-registry and effect-lane plans leave this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_binding_facts: Vec<crate::PlanResourceBindingFact>,
     /// Whether the command declared itself idempotent; retry policy reads
     /// this from the plan instead of trusting a supervisor's judgment.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

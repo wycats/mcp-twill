@@ -255,6 +255,7 @@ pub struct ConstrainedHandlerRegistration {
     pub(crate) handler: Arc<dyn CommandHandler>,
     pub(crate) argument_schema: Value,
     pub(crate) resource_uses: Vec<ResourceUse>,
+    pub(crate) optional_resources: Vec<&'static str>,
     pub(crate) granted: Vec<&'static str>,
     pub(crate) enumerated: Vec<&'static str>,
 }
@@ -316,6 +317,7 @@ where
             }),
             argument_schema: derived_argument_schema::<A>(),
             resource_uses: Vec::new(),
+            optional_resources: Vec::new(),
             granted: O::granted(),
             enumerated: O::enumerated(),
         }
@@ -365,6 +367,7 @@ where
             }),
             argument_schema: derived_argument_schema::<A>(),
             resource_uses: P::resource_uses(),
+            optional_resources: P::optional_resources(),
             granted: O::granted(),
             enumerated: O::enumerated(),
         }

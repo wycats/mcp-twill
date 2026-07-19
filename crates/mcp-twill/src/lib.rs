@@ -1,3 +1,4 @@
+pub mod ambient_resources;
 pub mod argument_schemas;
 pub mod builder;
 pub mod catalog;
@@ -18,12 +19,13 @@ pub mod runtime;
 pub mod template;
 pub mod types;
 
+pub use ambient_resources::*;
 pub use argument_schemas::*;
 pub use builder::*;
 pub use catalog::*;
 pub use contract::{
     ContractViolation, check_confirmation_projection, check_native_surface_projection,
-    verify_catalog_coverage,
+    check_resource_binding_projection, verify_catalog_coverage,
 };
 pub use conversation_identity::{
     CONVERSATION_IDENTITY_META_KEY, ConversationIdentity, InvocationContext,

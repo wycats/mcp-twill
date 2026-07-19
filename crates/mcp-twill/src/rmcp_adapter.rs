@@ -694,14 +694,15 @@ impl CliMcpServer {
             Ok(identity) => identity,
             Err(error) => return native_framework_outcome(error, None),
         };
-        let plan = match self.registry.build_native_operation_plan(
+        let prepared = match self.registry.build_native_operation_plan(
             &operation_id,
             selected_arguments.clone(),
             &resolved,
             &invocation_context,
             identity,
+            surface,
         ) {
-            Ok(plan) => plan,
+            Ok(prepared) => prepared,
             Err(error) => {
                 if let Some(operation) = surface.snapshot().operation(&operation_id) {
                     return native_framework_outcome_for_operation(error, operation.spec());
@@ -709,10 +710,23 @@ impl CliMcpServer {
                 return native_framework_outcome(error, None);
             }
         };
+        let plan = prepared.plan().clone();
         if let Some(meta) = progress_meta {
             Self::notify_progress(meta, &client, 2.0, 5.0, "Invocation plan ready").await;
         }
         let plan_for_event = PlanFacts::from(&plan);
+
+        if let Some(availability) = self.registry.binding_availability(&prepared) {
+            return match availability {
+                Ok(crate::CommandExecutionOutcome::ApplicationError { plan, error }) => {
+                    native_application_error_outcome(surface, plan, error, plan_for_event)
+                }
+                Ok(crate::CommandExecutionOutcome::Success(_)) => {
+                    unreachable!("binding_availability never returns a Success outcome")
+                }
+                Err(error) => native_framework_outcome(error, Some((plan, plan_for_event))),
+            };
+        }
 
         if let Err(error) = self.registry.check_plan_policy(&plan) {
             return native_framework_outcome(error, Some((plan, plan_for_event)));
@@ -808,7 +822,7 @@ impl CliMcpServer {
         }
         let outcome = match self
             .registry
-            .dispatch_operation_plan(selected_arguments, plan.clone(), &invocation_context)
+            .dispatch_prepared_operation(selected_arguments, prepared)
             .await
         {
             Ok(crate::CommandExecutionOutcome::Success(response)) => {
@@ -1313,6 +1327,7 @@ fn native_framework_outcome_for_operation(
             operation_id: operation.id.clone(),
             command_path: operation.path.clone(),
             effect: operation.effect.clone(),
+            resource_binding_facts: Vec::new(),
         }),
     }
 }
@@ -1322,25 +1337,26 @@ fn native_framework_error_value(error: Option<&crate::ErrorBody>) -> Value {
         return json!({ "code": "handler_failed", "message": "framework failure" });
     };
     let mut error = error.clone();
-    let recovery_field = match &error.code {
+    let recovery_fields: &[&str] = match &error.code {
         crate::ErrorCode::CapabilityMissing => {
             error.message = "Required capability proof is missing".to_string();
-            Some("providers")
+            &["providers"]
         }
         crate::ErrorCode::CapabilityDenied => {
             error.message = "Capability proof was denied".to_string();
-            Some("providers")
+            &["providers"]
         }
         crate::ErrorCode::ResourceRefused => {
             error.message = "Resource reference was refused".to_string();
-            Some("recover")
+            &["recover", "enumerate", "establish"]
         }
-        _ => None,
+        crate::ErrorCode::ResourceBindingMissing => &["establish"],
+        _ => &[],
     };
-    if let Some(details) = error.details.as_object_mut()
-        && let Some(field) = recovery_field
-    {
-        details.remove(field);
+    if let Some(details) = error.details.as_object_mut() {
+        for field in recovery_fields {
+            details.remove(*field);
+        }
     }
     serde_json::to_value(error)
         .unwrap_or_else(|_| json!({ "code": "handler_failed", "message": "framework failure" }))
@@ -2377,6 +2393,25 @@ mod tests {
                 }
             }),
         };
+        let missing_binding = crate::ErrorBody {
+            code: crate::ErrorCode::ResourceBindingMissing,
+            message: "missing binding".to_string(),
+            details: json!({
+                "resource": "session",
+                "binding": "absent",
+                "establish": ["session start"]
+            }),
+        };
+        let ambient_refusal = crate::ErrorBody {
+            code: crate::ErrorCode::ResourceRefused,
+            message: "ambient resource refused".to_string(),
+            details: json!({
+                "resource": "session",
+                "binding": "ambient",
+                "enumerate": ["session list"],
+                "establish": ["session start"]
+            }),
+        };
 
         let capability = native_framework_error_value(Some(&capability));
         assert_eq!(
@@ -2390,6 +2425,15 @@ mod tests {
         assert_eq!(resource["details"]["recover"], Value::Null);
         assert!(!resource.to_string().contains("tabs list"));
         assert!(!resource.to_string().contains("tabs new"));
+        let missing_binding = native_framework_error_value(Some(&missing_binding));
+        assert_eq!(missing_binding["details"]["establish"], Value::Null);
+        assert!(!missing_binding.to_string().contains("session start"));
+        let ambient_refusal = native_framework_error_value(Some(&ambient_refusal));
+        assert_eq!(ambient_refusal["message"], "Resource reference was refused");
+        assert_eq!(ambient_refusal["details"]["enumerate"], Value::Null);
+        assert_eq!(ambient_refusal["details"]["establish"], Value::Null);
+        assert!(!ambient_refusal.to_string().contains("session list"));
+        assert!(!ambient_refusal.to_string().contains("session start"));
     }
 
     #[test]

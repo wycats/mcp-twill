@@ -38,6 +38,8 @@ pub struct FrameworkEvent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<EffectSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_binding_facts: Vec<crate::PlanResourceBindingFact>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -105,6 +107,9 @@ impl FrameworkEvent {
             effects: plan
                 .map(|plan| vec![plan.effect.clone()])
                 .unwrap_or_default(),
+            resource_binding_facts: plan
+                .map(|plan| plan.resource_binding_facts.clone())
+                .unwrap_or_default(),
             diagnostics: event_diagnostics(envelope),
         }
     }
@@ -125,6 +130,7 @@ impl FrameworkEvent {
             argument_contract_argument: None,
             argument_contract_reason: None,
             effects: Vec::new(),
+            resource_binding_facts: Vec::new(),
             diagnostics: vec![Diagnostic {
                 code: crate::ErrorCode::InvalidArgumentType,
                 message: message.into(),
@@ -183,6 +189,7 @@ pub struct PlanFacts {
     pub operation_id: String,
     pub command_path: Vec<String>,
     pub effect: EffectSpec,
+    pub resource_binding_facts: Vec<crate::PlanResourceBindingFact>,
 }
 
 impl From<&InvocationPlan> for PlanFacts {
@@ -191,6 +198,7 @@ impl From<&InvocationPlan> for PlanFacts {
             operation_id: plan.operation_id.clone(),
             command_path: plan.command_path.clone(),
             effect: plan.effect.clone(),
+            resource_binding_facts: plan.resource_binding_facts.clone(),
         }
     }
 }

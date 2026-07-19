@@ -1901,6 +1901,9 @@ fn vbl_v049_compiles_the_63_operation_27_tool_mapping() -> anyhow::Result<()> {
     let baseline = vbl_fixture("baseline-tools.json");
     let observed = vbl_fixture("surface-catalog.json");
     assert_eq!(vbl::ERROR_OWNERS.len(), 22);
+    let (session_resource, ambient_binding) = vbl::ambient_session_adoption();
+    assert_eq!(session_resource.carrier_name(), "agent_session_id");
+    assert_eq!(ambient_binding.resource, "session");
     drop(vbl::registry());
     drop(vbl::argument_schema_registry(&baseline));
     let registry = vbl_native::registry(&baseline, &observed, vbl::PREAMBLE);
