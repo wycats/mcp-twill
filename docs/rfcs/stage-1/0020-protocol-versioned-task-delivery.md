@@ -2,7 +2,7 @@
 
 # RFC 0020: Protocol-Versioned Task Delivery
 
-- Status: Draft
+- Status: Accepted
 - Area: MCP adapter, deferred execution, task lifecycle, task storage, cancellation, authorization
 - Target milestone: v0.4
 - Depends on: RFC 0005 (effect-lane tool surface), RFC 0014 (application result contracts), RFC 0015 (catalog-derived native tool surfaces), RFC 0016 (ambient resource binding)
