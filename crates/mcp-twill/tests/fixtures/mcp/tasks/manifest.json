@@ -1,0 +1,134 @@
+{
+  "extensionId": "io.modelcontextprotocol/tasks",
+  "files": [
+    {
+      "derivation": "sourceCopy",
+      "path": "core-schema.json",
+      "sha256": "bd19a7a9e6ee3a7394aec816cd0660a0156864e828a348129baccdb83457d234",
+      "sourceId": "core-2026-07-28-rc",
+      "sourcePaths": [
+        "schema/draft/schema.json"
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "core-transports.mdx",
+      "sha256": "27dd863605075471c7aad76334646c7470aa6dd6b7671fdaf3d42847d2336d18",
+      "sourceId": "core-2026-07-28-rc",
+      "sourcePaths": [
+        "docs/specification/draft/basic/transports.mdx"
+      ]
+    },
+    {
+      "derivation": "reviewedVector",
+      "path": "core-wire-vectors.json",
+      "sha256": "16be967599374c9561abc0fa1631807c27060f51fcba8a72ddcfefb25bfb4dfd",
+      "sourceId": "core-2026-07-28-rc",
+      "sourcePaths": [
+        "docs/specification/draft/basic/transports.mdx",
+        "schema/draft/schema.json"
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "extension-schema.json",
+      "sha256": "b17cb4a2534379c214b17770bd5d3d54f69fde16a953bfb542c58235a61274bb",
+      "sourceId": "tasks-extension",
+      "sourcePaths": [
+        "schema/draft/schema.json"
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "extension-sep-2663.md",
+      "sha256": "36a3ff0ab2d56e625425a29cb269bbf7d96535e9c45a156b2691d6aa96fb82b7",
+      "sourceId": "tasks-extension",
+      "sourcePaths": [
+        "seps/2663-tasks-extension.md"
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "extension-tasks.md",
+      "sha256": "ae908a883d8489f1ebfee47496dd8818f182b467a4196c17df98b40a3d8b2b11",
+      "sourceId": "tasks-extension",
+      "sourcePaths": [
+        "specification/draft/tasks.md"
+      ]
+    },
+    {
+      "derivation": "reviewedVector",
+      "path": "extension-wire-vectors.json",
+      "sha256": "f3627cda036dc76f76ba1e530f35b6b21d79dad93382f7e1ba02ef03431aaef1",
+      "sourceId": "tasks-extension",
+      "sourcePaths": [
+        "schema/draft/schema.json",
+        "seps/2663-tasks-extension.md",
+        "specification/draft/tasks.md"
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "legacy-progress.mdx",
+      "sha256": "8de8c02945544dde615be30156638c2357125795640d5aef3041898032a0e431",
+      "sourceId": "legacy-2025-11-25",
+      "sourcePaths": [
+        "docs/specification/2025-11-25/basic/utilities/progress.mdx"
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "legacy-schema.json",
+      "sha256": "1ffe4c5577974012f5fa02af14ea88df4b7146679df1abaaad497c8d9230ca8a",
+      "sourceId": "legacy-2025-11-25",
+      "sourcePaths": [
+        "schema/2025-11-25/schema.json"
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "legacy-tasks.mdx",
+      "sha256": "6afbdf560a2f0740f6f168b40b3f36a9bee522c4d3c6037373fc48b54aa8e462",
+      "sourceId": "legacy-2025-11-25",
+      "sourcePaths": [
+        "docs/specification/2025-11-25/basic/utilities/tasks.mdx"
+      ]
+    },
+    {
+      "derivation": "reviewedVector",
+      "path": "legacy-wire-vectors.json",
+      "sha256": "2e5370d96187b0e2b317bd20cfe8abfd343fdee6364d14c560c4c9a650c4dd21",
+      "sourceId": "legacy-2025-11-25",
+      "sourcePaths": [
+        "docs/specification/2025-11-25/basic/utilities/tasks.mdx",
+        "schema/2025-11-25/schema.json"
+      ]
+    }
+  ],
+  "formatVersion": 1,
+  "importer": {
+    "command": "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> [--final-ref 2026-07-28]",
+    "version": 1
+  },
+  "protocolRevision": "2026-07-28",
+  "sources": [
+    {
+      "commit": "9d700ed62dcf86cb77475c9b81930611a9182f46",
+      "id": "core-2026-07-28-rc",
+      "repository": "https://github.com/modelcontextprotocol/modelcontextprotocol",
+      "revision": "2026-07-28-RC"
+    },
+    {
+      "commit": "38c84e9f93ad191d9eb26d92b945d17bd0efcaf3",
+      "id": "legacy-2025-11-25",
+      "repository": "https://github.com/modelcontextprotocol/modelcontextprotocol",
+      "revision": "2025-11-25"
+    },
+    {
+      "commit": "8966bea9c4f4e6d71060cc8284a539086e9e234f",
+      "id": "tasks-extension",
+      "repository": "https://github.com/modelcontextprotocol/experimental-ext-tasks",
+      "revision": "SEP-2663-final"
+    }
+  ]
+}

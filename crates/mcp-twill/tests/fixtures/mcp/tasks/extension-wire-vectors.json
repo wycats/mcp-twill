@@ -1,0 +1,187 @@
+{
+  "cases": [
+    {
+      "name": "server-directed-task",
+      "request": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "mcp-twill-fixture-client",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "arguments": {},
+          "name": "report_generate"
+        }
+      },
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "createdAt": "2025-11-25T10:30:00Z",
+          "lastUpdatedAt": "2025-11-25T10:30:00Z",
+          "pollIntervalMs": 1000,
+          "resultType": "task",
+          "status": "working",
+          "statusMessage": "Task is running",
+          "taskId": "task-example",
+          "ttlMs": 60000
+        }
+      }
+    },
+    {
+      "name": "completed-tool-error-is-completed",
+      "request": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "tasks/get",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "mcp-twill-fixture-client",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "taskId": "task-example"
+        }
+      },
+      "response": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "createdAt": "2025-11-25T10:30:00Z",
+          "lastUpdatedAt": "2025-11-25T10:30:01Z",
+          "pollIntervalMs": 1000,
+          "result": {
+            "content": [
+              {
+                "text": "application refusal",
+                "type": "text"
+              }
+            ],
+            "isError": true,
+            "resultType": "complete"
+          },
+          "resultType": "complete",
+          "status": "completed",
+          "statusMessage": "Task completed",
+          "taskId": "task-example",
+          "ttlMs": 60000
+        }
+      }
+    },
+    {
+      "name": "update-acknowledgement",
+      "request": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "tasks/update",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "mcp-twill-fixture-client",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "inputResponses": {},
+          "taskId": "task-example"
+        }
+      },
+      "response": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "resultType": "complete"
+        }
+      }
+    },
+    {
+      "name": "cooperative-cancel-acknowledgement",
+      "request": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "method": "tasks/cancel",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "mcp-twill-fixture-client",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "taskId": "task-example"
+        }
+      },
+      "response": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "result": {
+          "resultType": "complete"
+        }
+      }
+    },
+    {
+      "name": "missing-required-capability",
+      "request": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "method": "tasks/get",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {}
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "mcp-twill-fixture-client",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "taskId": "task-example"
+        }
+      },
+      "response": {
+        "error": {
+          "code": -32003,
+          "data": {
+            "requiredCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          },
+          "message": "Missing required client capability"
+        },
+        "id": 5,
+        "jsonrpc": "2.0"
+      }
+    }
+  ],
+  "extensionId": "io.modelcontextprotocol/tasks"
+}

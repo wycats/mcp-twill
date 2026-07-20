@@ -1,0 +1,2 @@
+crates/mcp-twill/tests/fixtures/mcp/tasks/core-schema.json whitespace=-blank-at-eof
+crates/mcp-twill/tests/fixtures/mcp/tasks/legacy-schema.json whitespace=-blank-at-eof
