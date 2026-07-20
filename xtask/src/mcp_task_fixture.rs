@@ -208,7 +208,7 @@ pub fn import(
         final_release,
         generated.path(),
     )?;
-    validate_bundle_structure(generated.path())?;
+    validate_bundle(generated.path())?;
 
     let destination = fixture_directory();
     if check {
