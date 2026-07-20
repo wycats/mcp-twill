@@ -1,0 +1,112 @@
+{
+  "cases": [
+    {
+      "name": "create-working-task",
+      "request": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "arguments": {},
+          "name": "report_generate",
+          "task": {
+            "ttl": 60000
+          }
+        }
+      },
+      "response": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "task": {
+            "createdAt": "2025-11-25T10:30:00Z",
+            "lastUpdatedAt": "2025-11-25T10:30:00Z",
+            "pollInterval": 1000,
+            "status": "working",
+            "statusMessage": "Task is running",
+            "taskId": "task-example",
+            "ttl": 60000
+          }
+        }
+      }
+    },
+    {
+      "name": "poll-completed-task",
+      "request": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "tasks/get",
+        "params": {
+          "taskId": "task-example"
+        }
+      },
+      "response": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "createdAt": "2025-11-25T10:30:00Z",
+          "lastUpdatedAt": "2025-11-25T10:30:01Z",
+          "pollInterval": 1000,
+          "status": "completed",
+          "statusMessage": "Task completed",
+          "taskId": "task-example",
+          "ttl": 60000
+        }
+      }
+    },
+    {
+      "name": "retrieve-tool-result",
+      "request": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "tasks/result",
+        "params": {
+          "taskId": "task-example"
+        }
+      },
+      "response": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "_meta": {
+            "io.modelcontextprotocol/related-task": {
+              "taskId": "task-example"
+            }
+          },
+          "content": [
+            {
+              "text": "done",
+              "type": "text"
+            }
+          ],
+          "isError": false
+        }
+      }
+    },
+    {
+      "name": "cancel-terminal-task",
+      "request": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "method": "tasks/cancel",
+        "params": {
+          "taskId": "task-example"
+        }
+      },
+      "response": {
+        "id": 4,
+        "jsonrpc": "2.0",
+        "result": {
+          "createdAt": "2025-11-25T10:30:00Z",
+          "lastUpdatedAt": "2025-11-25T10:30:01Z",
+          "pollInterval": 1000,
+          "status": "cancelled",
+          "statusMessage": "Task cancelled",
+          "taskId": "task-example",
+          "ttl": 60000
+        }
+      }
+    }
+  ],
+  "protocolRevision": "2025-11-25"
+}

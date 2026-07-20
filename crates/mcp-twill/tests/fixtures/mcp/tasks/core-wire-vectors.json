@@ -1,0 +1,68 @@
+{
+  "cases": [
+    {
+      "headers": {
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "report_generate"
+      },
+      "httpStatus": 200,
+      "name": "matching-tool-routing",
+      "request": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "arguments": {},
+          "name": "report_generate"
+        }
+      }
+    },
+    {
+      "httpStatus": 400,
+      "name": "header-mismatch",
+      "response": {
+        "error": {
+          "code": -32001,
+          "message": "Header mismatch"
+        },
+        "id": 1,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "httpStatus": 400,
+      "name": "unsupported-protocol-version",
+      "response": {
+        "error": {
+          "code": -32004,
+          "data": {
+            "requested": "2099-01-01",
+            "supported": [
+              "2026-07-28"
+            ]
+          },
+          "message": "Unsupported protocol version"
+        },
+        "id": 1,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "httpStatus": 404,
+      "name": "unsupported-method",
+      "response": {
+        "error": {
+          "code": -32601,
+          "message": "Method not found"
+        },
+        "id": 1,
+        "jsonrpc": "2.0"
+      }
+    }
+  ],
+  "protocolRevision": "2026-07-28"
+}
