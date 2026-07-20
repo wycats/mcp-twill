@@ -94,17 +94,12 @@
         }
       },
       "response": {
+        "error": {
+          "code": -32602,
+          "message": "Cannot cancel task: already in terminal status 'completed'"
+        },
         "id": 4,
-        "jsonrpc": "2.0",
-        "result": {
-          "createdAt": "2025-11-25T10:30:00Z",
-          "lastUpdatedAt": "2025-11-25T10:30:01Z",
-          "pollInterval": 1000,
-          "status": "cancelled",
-          "statusMessage": "Task cancelled",
-          "taskId": "task-example",
-          "ttl": 60000
-        }
+        "jsonrpc": "2.0"
       }
     }
   ],

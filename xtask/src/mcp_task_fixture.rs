@@ -24,7 +24,7 @@ pub const FINAL_RELEASE_TAG: &str = "2026-07-28";
 pub const IMPORT_COMMAND: &str = "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> [--final-ref 2026-07-28]";
 
 const EXPECTED_MANIFEST_SHA256: &str =
-    "f1f9bbd59c6f25828784a80720213fad9ce7ea9480a1952fb762dd1ae61a6913";
+    "77203bcaa93c33122d2fba0dc4ec86f06a851b30592f7dd4dc7709cf8301a8fb";
 
 const SOURCE_COPIES: [SourceCopy; 8] = [
     SourceCopy {
@@ -184,13 +184,7 @@ pub fn import(
             reference == FINAL_RELEASE_TAG,
             "the final release accepts only --final-ref {FINAL_RELEASE_TAG}"
         );
-        let peeled_commit = git_output(
-            core_repository,
-            &["rev-parse", &format!("{reference}^{{commit}}")],
-        )?
-        .trim()
-        .to_string();
-        validate_commit(&peeled_commit, "final release peeled commit")?;
+        let peeled_commit = resolve_final_release_commit(core_repository, reference)?;
         let final_core = archive(core_repository, &peeled_commit)?;
         verify_final_core_inputs(core.path(), final_core.path())?;
         Some(FinalRelease {
@@ -254,6 +248,17 @@ fn verify_commit(repository: &Path, commit: &str) -> Result<()> {
         resolved.trim()
     );
     Ok(())
+}
+
+fn resolve_final_release_commit(repository: &Path, reference: &str) -> Result<String> {
+    let peeled_commit = git_output(
+        repository,
+        &["rev-parse", &format!("refs/tags/{reference}^{{commit}}")],
+    )?
+    .trim()
+    .to_string();
+    validate_commit(&peeled_commit, "final release peeled commit")?;
+    Ok(peeled_commit)
 }
 
 fn archive(repository: &Path, commit: &str) -> Result<TempDir> {
@@ -390,10 +395,20 @@ fn expected_sources() -> Vec<SourceIdentity> {
 pub fn validate_bundle(directory: &Path) -> Result<()> {
     let manifest_bytes = fs::read(directory.join("manifest.json"))
         .with_context(|| format!("read fixture manifest in {}", directory.display()))?;
-    ensure!(
-        sha256(&manifest_bytes) == EXPECTED_MANIFEST_SHA256,
-        "manifest.json does not match the pinned MCP task bundle"
-    );
+    let manifest_hash = sha256(&manifest_bytes);
+    if manifest_hash != EXPECTED_MANIFEST_SHA256 {
+        let mut sealed: Manifest =
+            serde_json::from_slice(&manifest_bytes).context("parse sealed fixture manifest")?;
+        ensure!(
+            sealed.final_release.take().is_some(),
+            "manifest.json does not match the pinned MCP task bundle: found {manifest_hash}"
+        );
+        let unsealed = canonical_value(serde_json::to_value(sealed)?)?;
+        ensure!(
+            sha256(&unsealed) == EXPECTED_MANIFEST_SHA256,
+            "sealed manifest does not preserve the pinned MCP task bundle"
+        );
+    }
     validate_bundle_structure(directory)
 }
 
@@ -735,9 +750,25 @@ fn legacy_vectors() -> Value {
             {
                 "name": "cancel-terminal-task",
                 "request": {"jsonrpc":"2.0","id":4,"method":"tasks/cancel","params":{"taskId":"task-example"}},
-                "response": {"jsonrpc":"2.0","id":4,"result":{"taskId":"task-example","status":"cancelled","statusMessage":"Task cancelled","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttl":60000,"pollInterval":1000}}
+                "response": {"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Cannot cancel task: already in terminal status 'completed'"}}
             }
         ]
+    })
+}
+
+fn request_metadata(with_tasks_extension: bool) -> Value {
+    let extensions = if with_tasks_extension {
+        json!({EXTENSION_ID: {}})
+    } else {
+        json!({})
+    };
+    json!({
+        "io.modelcontextprotocol/clientCapabilities": {"extensions": extensions},
+        "io.modelcontextprotocol/clientInfo": {
+            "name": "mcp-twill-fixture-client",
+            "version": "1.0.0"
+        },
+        "io.modelcontextprotocol/protocolVersion": PROTOCOL_REVISION
     })
 }
 
@@ -749,7 +780,7 @@ fn core_vectors() -> Value {
                 "name": "matching-tool-routing",
                 "httpStatus": 200,
                 "headers": {"MCP-Protocol-Version":PROTOCOL_REVISION,"Mcp-Method":"tools/call","Mcp-Name":"report_generate"},
-                "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":PROTOCOL_REVISION},"name":"report_generate","arguments":{}}}
+                "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":request_metadata(false),"name":"report_generate","arguments":{}}}
             },
             {
                 "name": "header-mismatch",
@@ -776,26 +807,27 @@ fn extension_vectors() -> Value {
         "cases": [
             {
                 "name": "server-directed-task",
-                "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{"extensions":{EXTENSION_ID:{}}}},"name":"report_generate","arguments":{}}},
+                "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":request_metadata(true),"name":"report_generate","arguments":{}}},
                 "response": {"jsonrpc":"2.0","id":1,"result":{"resultType":"task","taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttlMs":60000,"pollIntervalMs":1000}}
             },
             {
                 "name": "completed-tool-error-is-completed",
-                "request": {"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"taskId":"task-example"}},
+                "request": {"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"_meta":request_metadata(true),"taskId":"task-example"}},
                 "response": {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttlMs":60000,"pollIntervalMs":1000,"result":{"content":[{"type":"text","text":"application refusal"}],"isError":true}}}
             },
             {
                 "name": "update-acknowledgement",
-                "request": {"jsonrpc":"2.0","id":3,"method":"tasks/update","params":{"taskId":"task-example","inputResponses":{}}},
+                "request": {"jsonrpc":"2.0","id":3,"method":"tasks/update","params":{"_meta":request_metadata(true),"taskId":"task-example","inputResponses":{}}},
                 "response": {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete"}}
             },
             {
                 "name": "cooperative-cancel-acknowledgement",
-                "request": {"jsonrpc":"2.0","id":4,"method":"tasks/cancel","params":{"taskId":"task-example"}},
+                "request": {"jsonrpc":"2.0","id":4,"method":"tasks/cancel","params":{"_meta":request_metadata(true),"taskId":"task-example"}},
                 "response": {"jsonrpc":"2.0","id":4,"result":{"resultType":"complete"}}
             },
             {
                 "name": "missing-required-capability",
+                "request": {"jsonrpc":"2.0","id":5,"method":"tasks/get","params":{"_meta":request_metadata(false),"taskId":"task-example"}},
                 "response": {"jsonrpc":"2.0","id":5,"error":{"code":-32003,"message":"Missing required client capability","data":{"requiredCapabilities":{"extensions":{EXTENSION_ID:{}}}}}}
             }
         ]
@@ -893,6 +925,35 @@ mod tests {
     }
 
     #[test]
+    fn final_seal_is_the_only_permitted_change_to_the_pinned_manifest() -> Result<()> {
+        let sealed = fixture_copy()?;
+        let mut manifest = read_manifest(sealed.path())?;
+        manifest.final_release = Some(FinalRelease {
+            tag: FINAL_RELEASE_TAG.to_string(),
+            peeled_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        });
+        write_manifest(sealed.path(), &manifest)?;
+        validate_bundle(sealed.path())?;
+
+        let changed = canonical_value(json!({"changed": true}))?;
+        fs::write(sealed.path().join("core-wire-vectors.json"), &changed)?;
+        manifest
+            .files
+            .iter_mut()
+            .find(|entry| entry.path == "core-wire-vectors.json")
+            .expect("core vector")
+            .sha256 = sha256(&changed);
+        write_manifest(sealed.path(), &manifest)?;
+        assert!(
+            validate_bundle(sealed.path())
+                .unwrap_err()
+                .to_string()
+                .contains("does not preserve the pinned MCP task bundle")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rc_bundle_fails_the_release_seal_gate() -> Result<()> {
         let manifest = read_manifest(&fixture_directory())?;
         assert!(manifest.final_release.is_none());
@@ -946,6 +1007,47 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("changes normative input")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn final_release_resolution_requires_the_exact_tag_ref() -> Result<()> {
+        let repository = TempDir::new()?;
+        let git = |arguments: &[&str]| -> Result<()> {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(arguments)
+                .status()?;
+            ensure!(status.success(), "test Git command failed");
+            Ok(())
+        };
+        git(&["init", "--quiet"])?;
+        fs::write(repository.path().join("evidence"), b"locked\n")?;
+        git(&["add", "evidence"])?;
+        git(&[
+            "-c",
+            "user.name=MCP Twill Tests",
+            "-c",
+            "user.email=mcp-twill@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ])?;
+        git(&["branch", FINAL_RELEASE_TAG])?;
+        assert!(resolve_final_release_commit(repository.path(), FINAL_RELEASE_TAG).is_err());
+
+        git(&[
+            "update-ref",
+            &format!("refs/tags/{FINAL_RELEASE_TAG}"),
+            "HEAD",
+        ])?;
+        let expected = git_output(repository.path(), &["rev-parse", "HEAD"])?;
+        assert_eq!(
+            resolve_final_release_commit(repository.path(), FINAL_RELEASE_TAG)?,
+            expected.trim()
         );
         Ok(())
     }

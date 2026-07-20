@@ -22,7 +22,7 @@
     {
       "derivation": "reviewedVector",
       "path": "core-wire-vectors.json",
-      "sha256": "a92ac10f3a3ab9068b0d1753e0d1e98bc043b7164d406ccab195fd5c4f8e5a25",
+      "sha256": "16be967599374c9561abc0fa1631807c27060f51fcba8a72ddcfefb25bfb4dfd",
       "sourceId": "core-2026-07-28-rc",
       "sourcePaths": [
         "docs/specification/draft/basic/transports.mdx",
@@ -59,7 +59,7 @@
     {
       "derivation": "reviewedVector",
       "path": "extension-wire-vectors.json",
-      "sha256": "9062a30cc2d4b37a05e4e74d94544a78a051225b1750702099e1ce5de48558c4",
+      "sha256": "971eae5f931728459b8f683249c4f336a973e615dde3e868725e381c713760d6",
       "sourceId": "tasks-extension",
       "sourcePaths": [
         "schema/draft/schema.json",
@@ -97,7 +97,7 @@
     {
       "derivation": "reviewedVector",
       "path": "legacy-wire-vectors.json",
-      "sha256": "a13c7e96b1c775d8ed6e3c81045346d85a2d4bd69537cfc20bb67eec471a20ec",
+      "sha256": "92a5c959f31265999a3d0aaab0a9d6d416fa168c90dae3dbed7c99454c09f685",
       "sourceId": "legacy-2025-11-25",
       "sourcePaths": [
         "docs/specification/2025-11-25/basic/utilities/tasks.mdx",

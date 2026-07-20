@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mcp/tasks/");
 
@@ -71,6 +71,60 @@ fn reviewed_vectors_keep_the_task_dialects_distinct() {
         case["request"]["method"] == "tasks/cancel"
             && case["response"]["result"]["resultType"] == "complete"
     }));
+    assert!(legacy_cases.iter().any(|case| {
+        case["request"]["method"] == "tasks/cancel" && case["response"]["error"]["code"] == -32602
+    }));
+}
+
+#[test]
+fn current_protocol_vectors_carry_complete_request_local_metadata() {
+    let core = fixture("core-wire-vectors.json");
+    let extension = fixture("extension-wire-vectors.json");
+    let requests = core["cases"]
+        .as_array()
+        .expect("core cases")
+        .iter()
+        .chain(extension["cases"].as_array().expect("extension cases"))
+        .filter_map(|case| case.get("request").map(|request| (case, request)));
+
+    for (case, request) in requests {
+        let metadata = &request["params"]["_meta"];
+        assert_eq!(
+            metadata["io.modelcontextprotocol/protocolVersion"], "2026-07-28",
+            "{} protocol version",
+            case["name"]
+        );
+        assert_eq!(
+            metadata["io.modelcontextprotocol/clientInfo"]["name"], "mcp-twill-fixture-client",
+            "{} client name",
+            case["name"]
+        );
+        assert_eq!(
+            metadata["io.modelcontextprotocol/clientInfo"]["version"], "1.0.0",
+            "{} client version",
+            case["name"]
+        );
+        assert!(
+            metadata
+                .get("io.modelcontextprotocol/clientCapabilities")
+                .is_some(),
+            "{} client capabilities",
+            case["name"]
+        );
+    }
+
+    for case in extension["cases"].as_array().expect("extension cases") {
+        let Some(request) = case.get("request") else {
+            continue;
+        };
+        let extensions =
+            &request["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"]["extensions"];
+        if case["name"] == "missing-required-capability" {
+            assert!(extensions.get("io.modelcontextprotocol/tasks").is_none());
+        } else {
+            assert_eq!(extensions["io.modelcontextprotocol/tasks"], json!({}));
+        }
+    }
 }
 
 #[test]
