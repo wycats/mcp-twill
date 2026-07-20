@@ -223,6 +223,9 @@ the final tag peel is a provenance-only update when its normative inputs are
 byte-identical, while any normative delta returns to design review. The offline
 release-input gate keeps crate publication closed until the manifest records
 that exact final tag, peeled commit, and byte-equality proof.
+Untagged draft changes after the locked commit—including routing-value encoding
+or error-code reassignment—are inputs to that final comparison rather than
+implementation authority.
 
 The same rule applies to error ownership. The released VBL error-vector bundle
 is complete observation evidence; the Twill support fixture assigns each
@@ -755,6 +758,7 @@ family and may apply only their declared bounded text projection.
 | RFC 0020 | Final `2026-07-28` release evidence is not sealed | Construction-only `ProtocolReleaseUnsealed`; no stateless transport, task sidecar, or application callback is created, and crate publication remains closed |
 | RFC 0020 | A required Streamable HTTP protocol/method/name header is missing, malformed, repeated, or unequal to its body field | HTTP 400 with JSON-RPC `-32001` / `HeaderMismatch`; no method route, task, or application instrumentation runs |
 | RFC 0020 | A well-formed request body names a protocol version outside the compiled stateless target, after any required HTTP header has matched it | JSON-RPC `-32004` / `UnsupportedProtocolVersionError` with exact `supported` and `requested` data; HTTP uses status 400, and no extension dispatch, task, or application instrumentation runs |
+| RFC 0020 | A Streamable HTTP request passes header and protocol validation but names an unsupported base or profile-disabled extension method | HTTP 404 with JSON-RPC `-32601` / `Method not found`; no task, access, storage, or application instrumentation runs |
 | RFC 0020 | An extension task operation omits or malforms its request-local capability | JSON-RPC `-32003` with exact required-capability data for omission, or invalid parameters for malformed capability; no task access or storage runs |
 | RFC 0020 | A Streamable HTTP task operation has missing, repeated, malformed, or unequal `Mcp-Name` routing | HTTP 400 with JSON-RPC `-32001` / `HeaderMismatch`; no capability parsing, access provider, task lookup, or store operation runs |
 | RFC 0020 | Task access or record creation, including fixed-capacity admission, fails before a record exists | JSON-RPC `-32603` with static `Task access scope unavailable` or `Task creation failed`; no task id, record, capacity, occupancy, scope, or source projects |
