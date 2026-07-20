@@ -200,7 +200,7 @@ pub struct StatelessMcpHttpService { /* private shared service */ }
 impl CliMcpServer {
     pub fn into_stateless_service(
         self,
-    ) -> Result<StatelessMcpService>;
+    ) -> mcp_twill::Result<StatelessMcpService>;
 }
 
 impl StatelessMcpService {
@@ -208,7 +208,7 @@ impl StatelessMcpService {
         self,
         reader: R,
         writer: W,
-    ) -> Result<()>
+    ) -> mcp_twill::Result<()>
     where
         R: tokio::io::AsyncRead + Unpin + Send + 'static,
         W: tokio::io::AsyncWrite + Unpin + Send + 'static;
@@ -562,7 +562,7 @@ Dropping an ordinary outer request future drops its prepared invocation. RFC 001
 
 Protocol-shape and capability failures use JSON-RPC errors before task creation. Once a task exists, application and framework outcomes retain their ordinary validated bodies and owning status. Task infrastructure and access failures use only the static messages defined here.
 
-Version 1 adds no task-lifecycle field to public `FrameworkEvent`. Deferred execution emits the same ordinary command event, when command processing reaches that owner, without a task id, task digest, delivery profile, transition, status prose, access scope, arguments, context, result body, store error, or execution capsule. Pre-command task protocol and infrastructure transitions emit no framework event. A later telemetry RFC may add explicitly named bounded correlation fields with its own migration and disclosure contract; this implementation does not reserve or synthesize them.
+Version 1 adds no task-lifecycle field to public `FrameworkEvent`. Deferred execution emits the same ordinary command event, when the deferred command is actually executed, without a task id, task digest, delivery profile, transition, status prose, access scope, arguments, context, result body, store error, or execution capsule. Pre-command task protocol and infrastructure transitions emit no framework event. A later telemetry RFC may add explicitly named bounded correlation fields with its own migration and disclosure contract; this implementation does not reserve or synthesize them.
 
 Plans, previews, invocation fingerprints, help, and catalog data contain `TaskSupportSpec` and compiled serving identity where already declared; they never contain a runtime task id or state. Task selection does not change the invocation fingerprint because the same approved operation and arguments retain one execution identity across immediate and deferred delivery. The active surface hash already binds the delivery profile and optional policy.
 
