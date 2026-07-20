@@ -18,6 +18,11 @@
         "id": 1,
         "jsonrpc": "2.0",
         "result": {
+          "_meta": {
+            "io.modelcontextprotocol/related-task": {
+              "taskId": "task-example"
+            }
+          },
           "task": {
             "createdAt": "2025-11-25T10:30:00Z",
             "lastUpdatedAt": "2025-11-25T10:30:00Z",
@@ -100,6 +105,59 @@
         },
         "id": 4,
         "jsonrpc": "2.0"
+      }
+    },
+    {
+      "name": "poll-application-error-task",
+      "request": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "method": "tasks/get",
+        "params": {
+          "taskId": "task-application-refusal"
+        }
+      },
+      "response": {
+        "id": 5,
+        "jsonrpc": "2.0",
+        "result": {
+          "createdAt": "2025-11-25T10:30:00Z",
+          "lastUpdatedAt": "2025-11-25T10:30:01Z",
+          "pollInterval": 1000,
+          "status": "failed",
+          "statusMessage": "Task failed",
+          "taskId": "task-application-refusal",
+          "ttl": 60000
+        }
+      }
+    },
+    {
+      "name": "retrieve-application-error-result",
+      "request": {
+        "id": 6,
+        "jsonrpc": "2.0",
+        "method": "tasks/result",
+        "params": {
+          "taskId": "task-application-refusal"
+        }
+      },
+      "response": {
+        "id": 6,
+        "jsonrpc": "2.0",
+        "result": {
+          "_meta": {
+            "io.modelcontextprotocol/related-task": {
+              "taskId": "task-application-refusal"
+            }
+          },
+          "content": [
+            {
+              "text": "application refusal",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
       }
     }
   ],

@@ -12,12 +12,21 @@ fn fixture(name: &str) -> Value {
 }
 
 #[test]
-fn manifest_pins_each_external_authority_without_claiming_final_release() {
+fn manifest_pins_each_external_authority_and_allows_only_a_canonical_release_seal() {
     let manifest = fixture("manifest.json");
     assert_eq!(manifest["formatVersion"], 1);
     assert_eq!(manifest["protocolRevision"], "2026-07-28");
     assert_eq!(manifest["extensionId"], "io.modelcontextprotocol/tasks");
-    assert!(manifest.get("finalRelease").is_none());
+    if let Some(release) = manifest.get("finalRelease") {
+        assert_eq!(release["tag"], "2026-07-28");
+        let commit = release["peeledCommit"].as_str().expect("release peel");
+        assert_eq!(commit.len(), 40);
+        assert!(
+            commit
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+    }
 
     let sources = manifest["sources"]
         .as_array()
@@ -62,10 +71,29 @@ fn reviewed_vectors_keep_the_task_dialects_distinct() {
                 .get("io.modelcontextprotocol/related-task")
                 .is_some()
     }));
+    assert!(legacy_cases.iter().any(|case| {
+        case["request"]["method"] == "tools/call"
+            && case["response"]["result"]["_meta"]["io.modelcontextprotocol/related-task"]["taskId"]
+                == "task-example"
+    }));
+    let failed_task = legacy_cases
+        .iter()
+        .find(|case| {
+            case["request"]["method"] == "tasks/get"
+                && case["response"]["result"]["status"] == "failed"
+        })
+        .expect("legacy failed task");
+    let failed_task_id = &failed_task["response"]["result"]["taskId"];
+    assert!(legacy_cases.iter().any(|case| {
+        case["request"]["method"] == "tasks/result"
+            && case["request"]["params"]["taskId"] == *failed_task_id
+            && case["response"]["result"]["isError"] == true
+    }));
     assert!(extension_cases.iter().any(|case| {
         case["request"]["method"] == "tasks/get"
             && case["response"]["result"]["status"] == "completed"
             && case["response"]["result"]["result"]["isError"] == true
+            && case["response"]["result"]["result"]["resultType"] == "complete"
     }));
     assert!(extension_cases.iter().any(|case| {
         case["request"]["method"] == "tasks/cancel"

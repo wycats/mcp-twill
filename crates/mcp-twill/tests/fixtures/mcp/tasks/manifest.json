@@ -59,7 +59,7 @@
     {
       "derivation": "reviewedVector",
       "path": "extension-wire-vectors.json",
-      "sha256": "971eae5f931728459b8f683249c4f336a973e615dde3e868725e381c713760d6",
+      "sha256": "f3627cda036dc76f76ba1e530f35b6b21d79dad93382f7e1ba02ef03431aaef1",
       "sourceId": "tasks-extension",
       "sourcePaths": [
         "schema/draft/schema.json",
@@ -97,7 +97,7 @@
     {
       "derivation": "reviewedVector",
       "path": "legacy-wire-vectors.json",
-      "sha256": "92a5c959f31265999a3d0aaab0a9d6d416fa168c90dae3dbed7c99454c09f685",
+      "sha256": "2e5370d96187b0e2b317bd20cfe8abfd343fdee6364d14c560c4c9a650c4dd21",
       "sourceId": "legacy-2025-11-25",
       "sourcePaths": [
         "docs/specification/2025-11-25/basic/utilities/tasks.mdx",

@@ -24,7 +24,8 @@ pub const FINAL_RELEASE_TAG: &str = "2026-07-28";
 pub const IMPORT_COMMAND: &str = "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> [--final-ref 2026-07-28]";
 
 const EXPECTED_MANIFEST_SHA256: &str =
-    "77203bcaa93c33122d2fba0dc4ec86f06a851b30592f7dd4dc7709cf8301a8fb";
+    "58e4d1665946dbf1d8630b06c6c0e9cdfe3be0df2f4b1b5df469ffb3b31e6b4c";
+const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = None;
 
 const SOURCE_COPIES: [SourceCopy; 8] = [
     SourceCopy {
@@ -561,11 +562,25 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
 }
 
 fn validate_release_manifest(manifest: &Manifest) -> Result<()> {
+    validate_release_manifest_against(manifest, EXPECTED_FINAL_RELEASE_COMMIT)
+}
+
+fn validate_release_manifest_against(
+    manifest: &Manifest,
+    expected_final_commit: Option<&str>,
+) -> Result<()> {
     let release = manifest
         .final_release
         .as_ref()
         .context("MCP 2026-07-28 final release evidence is not sealed")?;
-    validate_final_release(release)
+    validate_final_release(release)?;
+    let expected_final_commit =
+        expected_final_commit.context("MCP 2026-07-28 final release commit is not pinned")?;
+    ensure!(
+        release.peeled_commit == expected_final_commit,
+        "final release peeled commit does not match the pinned commit"
+    );
+    Ok(())
 }
 
 fn validate_final_release(release: &FinalRelease) -> Result<()> {
@@ -735,7 +750,7 @@ fn legacy_vectors() -> Value {
             {
                 "name": "create-working-task",
                 "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"report_generate","arguments":{},"task":{"ttl":60000}}},
-                "response": {"jsonrpc":"2.0","id":1,"result":{"task":{"taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttl":60000,"pollInterval":1000}}}
+                "response": {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/related-task":{"taskId":"task-example"}},"task":{"taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttl":60000,"pollInterval":1000}}}
             },
             {
                 "name": "poll-completed-task",
@@ -751,6 +766,16 @@ fn legacy_vectors() -> Value {
                 "name": "cancel-terminal-task",
                 "request": {"jsonrpc":"2.0","id":4,"method":"tasks/cancel","params":{"taskId":"task-example"}},
                 "response": {"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Cannot cancel task: already in terminal status 'completed'"}}
+            },
+            {
+                "name": "poll-application-error-task",
+                "request": {"jsonrpc":"2.0","id":5,"method":"tasks/get","params":{"taskId":"task-application-refusal"}},
+                "response": {"jsonrpc":"2.0","id":5,"result":{"taskId":"task-application-refusal","status":"failed","statusMessage":"Task failed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttl":60000,"pollInterval":1000}}
+            },
+            {
+                "name": "retrieve-application-error-result",
+                "request": {"jsonrpc":"2.0","id":6,"method":"tasks/result","params":{"taskId":"task-application-refusal"}},
+                "response": {"jsonrpc":"2.0","id":6,"result":{"content":[{"type":"text","text":"application refusal"}],"isError":true,"_meta":{"io.modelcontextprotocol/related-task":{"taskId":"task-application-refusal"}}}}
             }
         ]
     })
@@ -813,7 +838,7 @@ fn extension_vectors() -> Value {
             {
                 "name": "completed-tool-error-is-completed",
                 "request": {"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"_meta":request_metadata(true),"taskId":"task-example"}},
-                "response": {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttlMs":60000,"pollIntervalMs":1000,"result":{"content":[{"type":"text","text":"application refusal"}],"isError":true}}}
+                "response": {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttlMs":60000,"pollIntervalMs":1000,"result":{"resultType":"complete","content":[{"type":"text","text":"application refusal"}],"isError":true}}}
             },
             {
                 "name": "update-acknowledgement",
@@ -968,17 +993,33 @@ mod tests {
 
     #[test]
     fn release_seal_requires_the_exact_tag_and_canonical_peel() -> Result<()> {
+        const TEST_FINAL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
         let mut manifest = read_manifest(&fixture_directory())?;
         manifest.final_release = Some(FinalRelease {
             tag: FINAL_RELEASE_TAG.to_string(),
-            peeled_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            peeled_commit: TEST_FINAL_COMMIT.to_string(),
         });
-        validate_release_manifest(&manifest)?;
+        validate_release_manifest_against(&manifest, Some(TEST_FINAL_COMMIT))?;
+        assert!(
+            validate_release_manifest(&manifest)
+                .unwrap_err()
+                .to_string()
+                .contains("commit is not pinned")
+        );
+        assert!(
+            validate_release_manifest_against(
+                &manifest,
+                Some("89abcdef0123456789abcdef0123456789abcdef")
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("does not match the pinned commit")
+        );
         manifest.final_release.as_mut().unwrap().tag = "draft".to_string();
-        assert!(validate_release_manifest(&manifest).is_err());
+        assert!(validate_release_manifest_against(&manifest, Some(TEST_FINAL_COMMIT)).is_err());
         manifest.final_release.as_mut().unwrap().tag = FINAL_RELEASE_TAG.to_string();
         manifest.final_release.as_mut().unwrap().peeled_commit = "ABC".to_string();
-        assert!(validate_release_manifest(&manifest).is_err());
+        assert!(validate_release_manifest_against(&manifest, Some(TEST_FINAL_COMMIT)).is_err());
         Ok(())
     }
 
