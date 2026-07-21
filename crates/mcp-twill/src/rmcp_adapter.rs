@@ -3187,10 +3187,7 @@ fn map_task_error(error: rmcp::ErrorData) -> crate::stateless::StatelessDispatch
         ErrorCode::INTERNAL_ERROR => {
             crate::stateless::StatelessDispatchError::internal("Task storage failed")
         }
-        ErrorCode::INVALID_PARAMS => {
-            crate::stateless::StatelessDispatchError::invalid_params("Unknown task")
-        }
-        _ => crate::stateless::StatelessDispatchError::internal("Task operation failed"),
+        _ => crate::stateless::StatelessDispatchError::invalid_params("Unknown task"),
     }
 }
 
@@ -3549,6 +3546,14 @@ mod tests {
         let unknown = map_task_error(rmcp::ErrorData::invalid_params("Task storage failed", None));
         assert_eq!(unknown.code, ErrorCode::INVALID_PARAMS.0);
         assert_eq!(unknown.message, "Unknown task");
+
+        let unexpected = map_task_error(rmcp::ErrorData::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            "private detail",
+            None,
+        ));
+        assert_eq!(unexpected.code, ErrorCode::INVALID_PARAMS.0);
+        assert_eq!(unexpected.message, "Unknown task");
     }
 
     fn meta(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Meta {
