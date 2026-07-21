@@ -33,16 +33,16 @@ use tokio::sync::{Mutex, Notify, mpsc};
 use crate::{
     ApprovalInput, CommandRegistry, CompiledTaskDelivery, DefaultPermissionAuthorizer, EffectLane,
     EventSink, FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InMemoryTaskStore,
-    InvocationContext, InvocationPlan, McpToolSurface, NativeApplicationErrorBody,
-    NativeApplicationErrorDialect, NativeApplicationRecovery, NativeConfirmationBridge,
-    NativeConfirmationDecision, NativeConfirmationRequest, NativeConfirmationRoute,
-    NativeToolSurface, NoopEventSink, PermissionAuthorizer, PermissionDecision, PlanFacts,
-    ReplayRecord, ResponseEnvelope, ResponseProfile, RunMode, RunRequest, RunResponse,
-    RuntimeIdentity, SemanticTaskProfile, SemanticTaskRecord, SemanticTaskStatus,
-    ServingSurfaceIdentity, StoredTaskRecord, SurfacePresentationDefaults, TaskAccessContext,
-    TaskAccessPolicy, TaskAccessScope, TaskRuntime, TaskStore, TaskStoreCreate, TaskStoreMount,
-    TaskStoreScope, TaskStoreWrite, TaskSupportSpec, ToolLaneSpec, checked_task_expiration,
-    derive_task_storage_key, generate_task_id, scope_hex,
+    InvocationContext, InvocationPlan, McpProtocolTarget, McpToolSurface,
+    NativeApplicationErrorBody, NativeApplicationErrorDialect, NativeApplicationRecovery,
+    NativeConfirmationBridge, NativeConfirmationDecision, NativeConfirmationRequest,
+    NativeConfirmationRoute, NativeToolSurface, NoopEventSink, PermissionAuthorizer,
+    PermissionDecision, PlanFacts, ReplayRecord, ResponseEnvelope, ResponseProfile, RunMode,
+    RunRequest, RunResponse, RuntimeIdentity, SemanticTaskProfile, SemanticTaskRecord,
+    SemanticTaskStatus, ServingSurfaceIdentity, StoredTaskRecord, SurfacePresentationDefaults,
+    TaskAccessContext, TaskAccessPolicy, TaskAccessScope, TaskRuntime, TaskStore, TaskStoreCreate,
+    TaskStoreMount, TaskStoreScope, TaskStoreWrite, TaskSupportSpec, ToolLaneSpec,
+    checked_task_expiration, derive_task_storage_key, generate_task_id, scope_hex,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1977,7 +1977,8 @@ impl CliMcpServer {
         matches!(
             &self.surface,
             McpToolSurface::Native(surface)
-                if surface.snapshot().protocol_version() == "2026-07-28"
+                if surface.snapshot().protocol_version()
+                    == McpProtocolTarget::V2026_07_28.as_str()
         )
     }
 
@@ -2050,7 +2051,7 @@ impl CliMcpServer {
         };
         json!({
             "resultType": "complete",
-            "supportedVersions": ["2026-07-28"],
+            "supportedVersions": [McpProtocolTarget::V2026_07_28.as_str()],
             "capabilities": capabilities,
             "serverInfo": {
                 "name": self.registry.server_name(),
@@ -3182,7 +3183,7 @@ fn take_task_id(
 }
 
 fn map_task_error(error: rmcp::ErrorData) -> crate::stateless::StatelessDispatchError {
-    if error.message == "Task storage failed" {
+    if error.code == ErrorCode::INTERNAL_ERROR {
         crate::stateless::StatelessDispatchError::internal("Task storage failed")
     } else {
         crate::stateless::StatelessDispatchError::invalid_params("Unknown task")
