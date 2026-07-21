@@ -638,6 +638,8 @@ impl SemanticTaskRecord {
             || self
                 .expires_at
                 .is_some_and(|deadline| deadline < self.created_at)
+            || (self.profile == SemanticTaskProfile::TasksExtension && self.expires_at.is_none())
+            || self.revision == u64::MAX
             || (matches!(self.status, SemanticTaskStatus::Working) != self.outcome.is_none())
             || !valid_outcome(self.profile, self.status, self.outcome.as_ref())
         {
@@ -654,11 +656,12 @@ fn valid_outcome(
 ) -> bool {
     match (profile, status, outcome) {
         (_, SemanticTaskStatus::Working, None) => true,
-        (
-            SemanticTaskProfile::Legacy2025_11_25,
-            SemanticTaskStatus::Completed | SemanticTaskStatus::Failed,
-            Some(outcome),
-        ) => valid_tool_outcome(outcome, false) || valid_json_rpc_error(outcome),
+        (SemanticTaskProfile::Legacy2025_11_25, SemanticTaskStatus::Completed, Some(outcome)) => {
+            valid_legacy_tool_outcome(outcome, false)
+        }
+        (SemanticTaskProfile::Legacy2025_11_25, SemanticTaskStatus::Failed, Some(outcome)) => {
+            valid_legacy_tool_outcome(outcome, true) || valid_json_rpc_error(outcome)
+        }
         (SemanticTaskProfile::TasksExtension, SemanticTaskStatus::Completed, Some(outcome)) => {
             valid_tool_outcome(outcome, true)
         }
@@ -673,6 +676,15 @@ fn valid_outcome(
         }
         _ => false,
     }
+}
+
+fn valid_legacy_tool_outcome(outcome: &Value, expected_error: bool) -> bool {
+    valid_tool_outcome(outcome, false)
+        && outcome
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            == expected_error
 }
 
 fn valid_tool_outcome(outcome: &Value, require_result_type: bool) -> bool {
@@ -847,6 +859,80 @@ mod tests {
             StoredTaskRecord::from_storage_bytes(serde_json::to_vec(&unsupported).unwrap())
                 .is_err()
         );
+
+        let mut missing_expiration: Value = serde_json::from_slice(stored.storage_bytes()).unwrap();
+        missing_expiration["expiresAt"] = Value::Null;
+        assert!(
+            StoredTaskRecord::from_storage_bytes(serde_json::to_vec(&missing_expiration).unwrap())
+                .is_err()
+        );
+
+        let mut saturated_revision: Value = serde_json::from_slice(stored.storage_bytes()).unwrap();
+        saturated_revision["revision"] = json!(u64::MAX);
+        assert!(
+            StoredTaskRecord::from_storage_bytes(serde_json::to_vec(&saturated_revision).unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_terminal_outcomes_match_their_status() {
+        let working = SemanticTaskRecord::working(
+            "11".repeat(32),
+            "22".repeat(32),
+            0,
+            None,
+            SemanticTaskProfile::Legacy2025_11_25,
+            1_700_000_000_000,
+            None,
+        );
+        let success = json!({ "content": [], "isError": false });
+        let tool_error = json!({ "content": [], "isError": true });
+        let rpc_error = json!({
+            "jsonrpc": "2.0",
+            "error": { "code": -32603, "message": "Task failed" }
+        });
+
+        assert!(
+            StoredTaskRecord::encode(&working.successor(
+                SemanticTaskStatus::Completed,
+                Some(success.clone()),
+                1_700_000_000_001,
+            ))
+            .is_ok()
+        );
+        assert!(
+            StoredTaskRecord::encode(&working.successor(
+                SemanticTaskStatus::Failed,
+                Some(tool_error.clone()),
+                1_700_000_000_001,
+            ))
+            .is_ok()
+        );
+        assert!(
+            StoredTaskRecord::encode(&working.successor(
+                SemanticTaskStatus::Failed,
+                Some(rpc_error),
+                1_700_000_000_001,
+            ))
+            .is_ok()
+        );
+        assert!(
+            StoredTaskRecord::encode(&working.successor(
+                SemanticTaskStatus::Completed,
+                Some(tool_error),
+                1_700_000_000_001,
+            ))
+            .is_err()
+        );
+        assert!(
+            StoredTaskRecord::encode(&working.successor(
+                SemanticTaskStatus::Failed,
+                Some(success),
+                1_700_000_000_001,
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -895,7 +981,7 @@ mod tests {
                 None,
                 SemanticTaskProfile::TasksExtension,
                 1_700_000_000_000,
-                None,
+                Some(1_700_000_060_000),
             );
             let stored = StoredTaskRecord::encode(&record).unwrap();
             assert_eq!(
@@ -917,7 +1003,7 @@ mod tests {
             None,
             SemanticTaskProfile::TasksExtension,
             1_700_000_000_000,
-            None,
+            Some(1_700_000_060_000),
         ))
         .unwrap();
         assert_eq!(
