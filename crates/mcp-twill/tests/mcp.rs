@@ -407,6 +407,87 @@ async fn task_augmented_run_completes_when_negotiated() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn legacy_task_result_waits_for_a_working_task_to_finish() -> anyhow::Result<()> {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let registry = CommandRegistry::new("blocking-task", "Blocking task test").register(
+        CommandSpec::new(["issues", "wait"], "Wait", "Wait for release"),
+        {
+            let started = started.clone();
+            let release = release.clone();
+            move |_| {
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(CommandOutput::structured(json!({ "done": true })))
+                }
+            }
+        },
+    );
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(registry)?;
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient::new().serve(client_transport).await?;
+
+    let request = RunRequest {
+        command: "issues wait".to_string(),
+        args: BTreeMap::new(),
+        stdin: None,
+        output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
+        dry_run: false,
+    };
+    let created = client
+        .send_request(ClientRequest::CallToolRequest(Request::new(
+            CallToolRequestParams::new("run")
+                .with_arguments(json_object(request)?)
+                .with_task(serde_json::Map::new()),
+        )))
+        .await?;
+    let ServerResult::CreateTaskResult(created) = created else {
+        panic!("expected CreateTaskResult, got {created:?}");
+    };
+    started.notified().await;
+
+    let handle = client
+        .send_cancellable_request(
+            ClientRequest::GetTaskResultRequest(Request::new(GetTaskResultParams {
+                meta: None,
+                task_id: created.task.task_id,
+            })),
+            PeerRequestOptions::no_options(),
+        )
+        .await?;
+    let mut result = Box::pin(handle.await_response());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), result.as_mut())
+            .await
+            .is_err()
+    );
+
+    release.notify_one();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), result.as_mut()).await??;
+    let value = match result {
+        ServerResult::GetTaskPayloadResult(payload) => serde_json::to_value(payload)?,
+        ServerResult::CallToolResult(result) => serde_json::to_value(result)?,
+        other => panic!("expected task payload result, got {other:?}"),
+    };
+    assert_eq!(
+        value["structuredContent"]["output"]["structured"]["done"],
+        true
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_task_runtime_belongs_to_one_negotiated_session() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
     let server = CliMcpServer::new(registry())?;

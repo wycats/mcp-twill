@@ -2105,6 +2105,16 @@ impl CliMcpServer {
                 return Err(crate::stateless::StatelessDispatchError::method_not_found());
             }
         };
+        if matches!(
+            &surface.declaration().framework_help,
+            crate::FrameworkHelpProjection::Tool { name: help_name } if help_name == &name
+        ) {
+            let request =
+                serde_json::from_value::<HelpRequest>(Value::Object(arguments)).map_err(|_| {
+                    crate::stateless::StatelessDispatchError::invalid_params("Invalid params")
+                })?;
+            return complete_tool_result(help_result(surface.help(request)));
+        }
         let support = surface.task_support_for_tool(&name).ok_or_else(|| {
             crate::stateless::StatelessDispatchError::invalid_params("Unknown tool")
         })?;
@@ -2883,16 +2893,15 @@ impl ServerHandler for CliMcpServer {
     ) -> std::result::Result<GetTaskPayloadResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
         self.ensure_tasks_supported()?;
-        let record = self
-            .load_task(&request.task_id, &context.extensions)
-            .await?;
-        let Some(payload) = record.semantic.outcome() else {
-            return Err(rmcp::ErrorData::invalid_params(
-                "Task is not complete",
-                None,
-            ));
-        };
-        Ok(GetTaskPayloadResult::new(payload.clone()))
+        loop {
+            let record = self
+                .load_task(&request.task_id, &context.extensions)
+                .await?;
+            if let Some(payload) = record.semantic.outcome() {
+                return Ok(GetTaskPayloadResult::new(payload.clone()));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     async fn cancel_task(

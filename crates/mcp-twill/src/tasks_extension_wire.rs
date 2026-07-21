@@ -14,12 +14,21 @@ struct CallToolParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TaskParams {
+struct TaskIdParams {
     #[serde(rename = "_meta")]
     meta: Value,
     task_id: String,
-    #[serde(default)]
-    input_responses: Option<Map<String, Value>>,
+    #[serde(flatten)]
+    unknown: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskUpdateParams {
+    #[serde(rename = "_meta")]
+    meta: Value,
+    task_id: String,
+    input_responses: Map<String, Value>,
     #[serde(flatten)]
     unknown: Map<String, Value>,
 }
@@ -30,8 +39,12 @@ pub(crate) fn validate(method: &str, params: &str) -> serde_json::Result<()> {
             let parsed: CallToolParams = serde_json::from_str(params)?;
             let _ = (parsed.meta, parsed.name, parsed.arguments, parsed.unknown);
         }
-        "tasks/get" | "tasks/update" | "tasks/cancel" => {
-            let parsed: TaskParams = serde_json::from_str(params)?;
+        "tasks/get" | "tasks/cancel" => {
+            let parsed: TaskIdParams = serde_json::from_str(params)?;
+            let _ = (parsed.meta, parsed.task_id, parsed.unknown);
+        }
+        "tasks/update" => {
+            let parsed: TaskUpdateParams = serde_json::from_str(params)?;
             let _ = (
                 parsed.meta,
                 parsed.task_id,

@@ -54,12 +54,7 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
     let raw = serde_json::from_slice::<Value>(bytes).map_err(|_| WireError::Parse)?;
     let object = raw.as_object().ok_or(WireError::InvalidRequest)?;
     let has_id = object.contains_key("id");
-    if has_id
-        && !matches!(
-            object.get("id"),
-            Some(Value::Null | Value::String(_) | Value::Number(_))
-        )
-    {
+    if has_id && !object.get("id").is_some_and(valid_request_id) {
         return Err(WireError::InvalidRequest);
     }
     let request: RawRequest =
@@ -88,6 +83,14 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
         method: request.method,
         params,
     })
+}
+
+fn valid_request_id(id: &Value) -> bool {
+    match id {
+        Value::Null | Value::String(_) => true,
+        Value::Number(number) => number.is_i64() || number.is_u64(),
+        _ => false,
+    }
 }
 
 fn validate_base_params(method: &str, params: &str) -> serde_json::Result<()> {
@@ -146,5 +149,16 @@ mod tests {
             "params":{"_meta":{}}
         }"#;
         assert!(matches!(parse(body, true), Err(WireError::InvalidRequest)));
+
+        let fractional = br#"{
+            "jsonrpc":"2.0",
+            "id":1.5,
+            "method":"tools/list",
+            "params":{"_meta":{}}
+        }"#;
+        assert!(matches!(
+            parse(fractional, true),
+            Err(WireError::InvalidRequest)
+        ));
     }
 }

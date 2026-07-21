@@ -240,6 +240,14 @@ impl Service<Request<Bytes>> for StatelessMcpHttpService {
                 .cloned()
                 .unwrap_or_else(|| std::sync::Arc::new(Extensions::new()));
             match preflight(&server, Some(&parts.method), Some(&parts.headers), &body) {
+                Ok(request) if !request.has_id => {
+                    tokio::spawn(async move {
+                        let _ = dispatch_request(&server, request, &extensions, None).await;
+                    });
+                    let mut response = Response::new(StatelessMcpHttpBody::empty());
+                    *response.status_mut() = StatusCode::ACCEPTED;
+                    Ok(response)
+                }
                 Ok(request) if request.method == "tools/call" => {
                     let (sender, receiver) = mpsc::channel(8);
                     let (progress_sender, mut progress_receiver) = mpsc::channel(8);
@@ -354,6 +362,14 @@ impl Service<Request<Bytes>> for StatelessMcpHttpService {
 }
 
 impl StatelessMcpHttpBody {
+    fn empty() -> Self {
+        Self {
+            frames: VecDeque::new(),
+            streaming: None,
+            abort: None,
+        }
+    }
+
     fn immediate(bytes: Bytes) -> Self {
         Self {
             frames: VecDeque::from([bytes]),
@@ -483,10 +499,7 @@ fn preflight(
     }
     let request = crate::stateless_wire::parse(body, server.stateless_tasks_extension_enabled())
         .map_err(|error| {
-            let id = serde_json::from_slice::<Value>(body)
-                .ok()
-                .and_then(|value| value.get("id").cloned())
-                .unwrap_or(Value::Null);
+            let id = validated_response_id(body);
             match error {
                 crate::stateless_wire::WireError::Parse => {
                     response(StatusCode::BAD_REQUEST, id, -32700, "Parse error", None)
@@ -500,16 +513,24 @@ fn preflight(
             }
         })?;
     let id = request.id.clone();
-    let observed_version = request
-        .params
-        .get("_meta")
-        .and_then(Value::as_object)
-        .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
-        .and_then(Value::as_str);
+    let observed_version = validate_request_meta(&request.params).map_err(|_| {
+        response(
+            StatusCode::BAD_REQUEST,
+            id.clone(),
+            -32602,
+            "Invalid params",
+            None,
+        )
+    })?;
 
     if let Some(headers) = headers
-        && validate_http_headers(headers, &request.method, &request.params, observed_version)
-            .is_err()
+        && validate_http_headers(
+            headers,
+            &request.method,
+            &request.params,
+            Some(observed_version),
+        )
+        .is_err()
     {
         return Err(response(
             StatusCode::BAD_REQUEST,
@@ -519,15 +540,6 @@ fn preflight(
             None,
         ));
     }
-    let Some(observed_version) = observed_version else {
-        return Err(response(
-            StatusCode::BAD_REQUEST,
-            id,
-            -32602,
-            "Invalid params",
-            None,
-        ));
-    };
     if observed_version != PROTOCOL_VERSION {
         return Err(response(
             StatusCode::BAD_REQUEST,
@@ -541,6 +553,37 @@ fn preflight(
         ));
     }
     Ok(request)
+}
+
+fn validated_response_id(body: &[u8]) -> Value {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| value.get("id").cloned())
+        .filter(|id| match id {
+            Value::Null | Value::String(_) => true,
+            Value::Number(number) => number.is_i64() || number.is_u64(),
+            _ => false,
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<&str, ()> {
+    let meta = params.get("_meta").and_then(Value::as_object).ok_or(())?;
+    meta.get("io.modelcontextprotocol/clientCapabilities")
+        .and_then(Value::as_object)
+        .ok_or(())?;
+    let client_info = meta
+        .get("io.modelcontextprotocol/clientInfo")
+        .and_then(Value::as_object)
+        .ok_or(())?;
+    client_info.get("name").and_then(Value::as_str).ok_or(())?;
+    client_info
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or(())?;
+    meta.get("io.modelcontextprotocol/protocolVersion")
+        .and_then(Value::as_str)
+        .ok_or(())
 }
 
 fn accepts_json_and_sse(headers: &HeaderMap) -> bool {
@@ -877,7 +920,7 @@ mod tests {
             .unwrap()
     }
 
-    async fn response_value(response: Response<StatelessMcpHttpBody>) -> (StatusCode, Value) {
+    async fn response_bytes(response: Response<StatelessMcpHttpBody>) -> (StatusCode, Vec<u8>) {
         let status = response.status();
         let mut body = Box::pin(response.into_body());
         let mut bytes = Vec::new();
@@ -887,6 +930,11 @@ mod tests {
                 bytes.extend_from_slice(&data);
             }
         }
+        (status, bytes)
+    }
+
+    async fn response_value(response: Response<StatelessMcpHttpBody>) -> (StatusCode, Value) {
+        let (status, bytes) = response_bytes(response).await;
         let bytes = bytes
             .strip_prefix(b"event: message\ndata: ")
             .and_then(|bytes| bytes.strip_suffix(b"\n\n"))
@@ -989,6 +1037,159 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(value["error"]["code"], -32601);
+    }
+
+    #[tokio::test]
+    async fn stateless_http_notifications_are_accepted_without_a_response_body() {
+        let mut service = service(TaskSupportSpec::Optional);
+        let request = Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+            .header("Mcp-Method", "tools/list")
+            .body(Bytes::from(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": { "_meta": meta(false) }
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = service.call(request).await.unwrap();
+        assert!(response.headers().get(CONTENT_TYPE).is_none());
+        let (status, bytes) = response_bytes(response).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_request_ids_are_replaced_with_null_in_errors() {
+        for invalid_id in [
+            json!(true),
+            json!({ "private": "value" }),
+            json!([1]),
+            json!(1.5),
+        ] {
+            let mut service = service(TaskSupportSpec::Optional);
+            let request = Request::builder()
+                .method(Method::POST)
+                .header(CONTENT_TYPE, "application/json")
+                .header("Accept", "application/json, text/event-stream")
+                .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+                .header("Mcp-Method", "tools/list")
+                .body(Bytes::from(
+                    serde_json::to_vec(&json!({
+                        "jsonrpc": "2.0",
+                        "id": invalid_id,
+                        "method": "tools/list",
+                        "params": { "_meta": meta(false) }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap();
+            let (status, value) = response_value(service.call(request).await.unwrap()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(value["id"], Value::Null);
+            assert_eq!(value["error"]["code"], -32600);
+        }
+    }
+
+    #[tokio::test]
+    async fn every_stateless_request_requires_complete_client_metadata() {
+        let invalid = [
+            json!({
+                "io.modelcontextprotocol/clientInfo": { "name": "test", "version": "1" },
+                "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION
+            }),
+            json!({
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION
+            }),
+            json!({
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": { "version": "1" },
+                "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION
+            }),
+            json!({
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": { "name": "test", "version": "1" }
+            }),
+        ];
+        for meta in invalid {
+            let mut service = service(TaskSupportSpec::Optional);
+            let (status, value) = response_value(
+                service
+                    .call(request(1, "tools/list", None, json!({ "_meta": meta })))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(value["error"]["code"], -32602);
+            assert_eq!(value["error"]["message"], "Invalid params");
+        }
+    }
+
+    #[tokio::test]
+    async fn tasks_update_requires_input_responses_before_task_access() {
+        let mut service = service(TaskSupportSpec::Required);
+        let (status, value) = response_value(
+            service
+                .call(request(
+                    1,
+                    "tasks/update",
+                    Some("private-task"),
+                    json!({
+                        "_meta": meta(true),
+                        "taskId": "private-task"
+                    }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn stateless_framework_help_tool_routes_to_surface_help() {
+        let registry = registry(TaskSupportSpec::Optional);
+        let surface = NativeToolSurface::builder("tasks")
+            .framework_help(FrameworkHelpProjection::Tool {
+                name: "surface_help".to_string(),
+            })
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        let mut service = CliMcpServer::with_surface(registry, surface)
+            .unwrap()
+            .into_stateless_service_with_evidence(true)
+            .unwrap()
+            .into_http_service();
+        let (status, value) = response_value(
+            service
+                .call(request(
+                    1,
+                    "tools/call",
+                    Some("surface_help"),
+                    json!({
+                        "_meta": meta(false),
+                        "name": "surface_help",
+                        "arguments": {}
+                    }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["result"]["resultType"], "complete");
+        assert_eq!(value["result"]["isError"], false);
+        assert_eq!(value["result"]["structuredContent"]["title"], "tasks");
     }
 
     #[tokio::test]
