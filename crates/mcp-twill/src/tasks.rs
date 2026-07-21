@@ -468,6 +468,7 @@ pub trait TaskAccessScopeProvider: Send + Sync + 'static {
 pub(crate) struct TaskRuntime {
     pub(crate) store: Arc<dyn TaskStore>,
     pub(crate) access: TaskAccessPolicy,
+    pub(crate) storage_namespace: Option<[u8; 32]>,
     pub(crate) _mount: Option<Arc<TaskStoreMount>>,
 }
 
@@ -720,11 +721,28 @@ pub(crate) fn generate_task_id() -> String {
     encode_hex(&bytes)
 }
 
+pub(crate) fn generate_task_namespace() -> [u8; 32] {
+    let mut bytes = [0_u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+#[cfg(test)]
 pub(crate) fn derive_task_storage_key(
     surface_hash: &str,
     access: &TaskAccessPolicy,
     task_id: &str,
     scope: Option<&TaskAccessScope>,
+) -> Option<TaskStorageKey> {
+    derive_task_storage_key_with_namespace(surface_hash, access, task_id, scope, None)
+}
+
+pub(crate) fn derive_task_storage_key_with_namespace(
+    surface_hash: &str,
+    access: &TaskAccessPolicy,
+    task_id: &str,
+    scope: Option<&TaskAccessScope>,
+    storage_namespace: Option<&[u8; 32]>,
 ) -> Option<TaskStorageKey> {
     let surface_hash = decode_hex::<32>(surface_hash)?;
     let task_id = decode_hex::<32>(task_id)?;
@@ -736,6 +754,11 @@ pub(crate) fn derive_task_storage_key(
     let mut digest = Sha256::new();
     digest.update(b"io.github.wycats.mcp-twill/task-storage-key");
     digest.update([0]);
+    if let Some(storage_namespace) = storage_namespace {
+        digest.update(b"legacy-session");
+        digest.update([0]);
+        digest.update(storage_namespace);
+    }
     digest.update(surface_hash);
     digest.update([access_tag]);
     digest.update(task_id);

@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, value::RawValue};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawRequest {
     jsonrpc: String,
     #[serde(default)]
@@ -42,6 +43,7 @@ pub(crate) struct Request {
     pub(crate) has_id: bool,
     pub(crate) method: String,
     pub(crate) params: Map<String, Value>,
+    pub(crate) known_method: bool,
 }
 
 pub(crate) enum WireError {
@@ -61,6 +63,16 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
         serde_json::from_slice(bytes).map_err(|_| WireError::InvalidRequest)?;
     if request.jsonrpc != "2.0" {
         return Err(WireError::InvalidRequest);
+    }
+    let known_method = known_method(&request.method, tasks_extension_enabled);
+    if !known_method {
+        return Ok(Request {
+            id: request.id,
+            has_id,
+            method: request.method,
+            params: Map::new(),
+            known_method,
+        });
     }
     let params = request.params.as_deref().map(RawValue::get).unwrap_or("{}");
     if request.method == "tools/call"
@@ -82,15 +94,38 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
         has_id,
         method: request.method,
         params,
+        known_method,
     })
 }
 
-fn valid_request_id(id: &Value) -> bool {
+pub(crate) fn valid_request_id(id: &Value) -> bool {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
     match id {
         Value::String(_) => true,
-        Value::Number(number) => number.is_i64() || number.is_u64(),
+        Value::Number(number) => {
+            number
+                .as_i64()
+                .is_some_and(|value| value.unsigned_abs() <= MAX_SAFE_INTEGER)
+                || number
+                    .as_u64()
+                    .is_some_and(|value| value <= MAX_SAFE_INTEGER)
+        }
         _ => false,
     }
+}
+
+fn known_method(method: &str, tasks_extension_enabled: bool) -> bool {
+    matches!(
+        method,
+        "server/discover"
+            | "tools/list"
+            | "resources/list"
+            | "prompts/list"
+            | "tools/call"
+            | "resources/read"
+            | "prompts/get"
+    ) || (tasks_extension_enabled
+        && matches!(method, "tasks/get" | "tasks/update" | "tasks/cancel"))
 }
 
 fn validate_base_params(method: &str, params: &str) -> serde_json::Result<()> {
@@ -168,5 +203,39 @@ mod tests {
             "params":{"_meta":{}}
         }"#;
         assert!(matches!(parse(null, true), Err(WireError::InvalidRequest)));
+
+        for id in ["9007199254740992", "-9007199254740992"] {
+            let body = format!(
+                r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/list","params":{{"_meta":{{}}}}}}"#
+            );
+            assert!(matches!(
+                parse(body.as_bytes(), true),
+                Err(WireError::InvalidRequest)
+            ));
+        }
+    }
+
+    #[test]
+    fn request_envelopes_are_closed_but_unknown_methods_route_before_params() {
+        let extra = br#"{
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"tools/list",
+            "params":{"_meta":{}},
+            "extra":true
+        }"#;
+        assert!(matches!(parse(extra, true), Err(WireError::InvalidRequest)));
+
+        let unknown = br#"{
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"unknown/method",
+            "params":false
+        }"#;
+        let Ok(parsed) = parse(unknown, true) else {
+            panic!("unknown methods route without validating their params");
+        };
+        assert!(!parsed.known_method);
+        assert!(parsed.params.is_empty());
     }
 }

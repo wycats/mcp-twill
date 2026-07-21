@@ -131,10 +131,10 @@ impl StatelessMcpService {
             let task = tokio::spawn(async move {
                 let _ = ready.await;
                 let dispatched = dispatch_bytes(&server, None, bytes, &Extensions::new()).await;
+                let _ = write_stdio_response(&writer, dispatched.body).await;
                 if let Some(request_id) = &request_id_for_task {
                     in_flight_for_task.lock().await.remove(request_id);
                 }
-                let _ = write_stdio_response(&writer, dispatched.body).await;
             });
             if let Some(request_id) = request_id {
                 in_flight
@@ -183,14 +183,7 @@ fn cancellation_request_id(bytes: &[u8]) -> Option<Value> {
         return None;
     }
     let request_id = params.get("requestId")?;
-    matches!(request_id, Value::String(_))
-        .then(|| request_id.clone())
-        .or_else(|| {
-            request_id
-                .as_number()
-                .filter(|number| number.is_i64() || number.is_u64())
-                .map(|_| request_id.clone())
-        })
+    crate::stateless_wire::valid_request_id(request_id).then(|| request_id.clone())
 }
 
 fn canonical_request_id(id: &Value) -> String {
@@ -508,6 +501,21 @@ fn preflight(
             }
         })?;
     let id = request.id.clone();
+    if !request.known_method {
+        if let Some(headers) = headers
+            && (exact_header(headers, "mcp-protocol-version", PROTOCOL_VERSION).is_err()
+                || exact_header(headers, "mcp-method", &request.method).is_err())
+        {
+            return Err(response(
+                StatusCode::BAD_REQUEST,
+                id,
+                -32001,
+                "Header mismatch",
+                None,
+            ));
+        }
+        return Ok(request);
+    }
     let observed_version = validate_request_meta(&request.params).map_err(|_| {
         response(
             StatusCode::BAD_REQUEST,
@@ -554,11 +562,7 @@ fn validated_response_id(body: &[u8]) -> Value {
     serde_json::from_slice::<Value>(body)
         .ok()
         .and_then(|value| value.get("id").cloned())
-        .filter(|id| match id {
-            Value::Null | Value::String(_) => true,
-            Value::Number(number) => number.is_i64() || number.is_u64(),
-            _ => false,
-        })
+        .filter(crate::stateless_wire::valid_request_id)
         .unwrap_or(Value::Null)
 }
 
@@ -589,11 +593,39 @@ fn accepts_json_and_sse(headers: &HeaderMap) -> bool {
             return false;
         };
         for value in value.split(',').map(str::trim) {
-            json |= value == "application/json";
-            sse |= value == "text/event-stream";
+            json |= accepts_media_range(value, "application/json");
+            sse |= accepts_media_range(value, "text/event-stream");
         }
     }
     json && sse
+}
+
+fn accepts_media_range(value: &str, expected: &str) -> bool {
+    let mut segments = value.split(';');
+    if !segments
+        .next()
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case(expected))
+    {
+        return false;
+    }
+    for parameter in segments {
+        let Some((name, value)) = parameter.trim().split_once('=') else {
+            return false;
+        };
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() || value.is_empty() {
+            return false;
+        }
+        if name.eq_ignore_ascii_case("q")
+            && !value
+                .parse::<f32>()
+                .is_ok_and(|quality| quality > 0.0 && quality <= 1.0)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn json_content_type(headers: &HeaderMap) -> std::result::Result<(), ()> {
@@ -987,6 +1019,19 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(value["result"]["tools"].is_array());
 
+        let mut with_accept_parameters =
+            request(13, "tools/list", None, json!({ "_meta": meta(false) }));
+        with_accept_parameters.headers_mut().insert(
+            "Accept",
+            "Application/JSON;q=1, Text/Event-Stream;q=0.9"
+                .parse()
+                .unwrap(),
+        );
+        let (status, value) =
+            response_value(service.call(with_accept_parameters).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["result"]["tools"].is_array());
+
         let (status, value) = response_value(
             service
                 .call(request(
@@ -1062,6 +1107,21 @@ mod tests {
                 .unwrap(),
         )
         .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], -32601);
+
+        let unknown_without_params = Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+            .header("Mcp-Method", "unknown/method")
+            .body(Bytes::from_static(
+                br#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#,
+            ))
+            .unwrap();
+        let (status, value) =
+            response_value(service.call(unknown_without_params).await.unwrap()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(value["error"]["code"], -32601);
     }
@@ -1627,6 +1687,55 @@ mod tests {
                 .await
                 .is_err()
         );
+        drop(request_writer);
+        serving.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stdio_request_ids_remain_live_until_the_response_is_written() {
+        let service = stateless_service_from_registry(registry(TaskSupportSpec::Optional));
+        let (mut request_writer, request_reader) = tokio::io::duplex(16 * 1024);
+        let (response_writer, response_reader) = tokio::io::duplex(1);
+        let serving = tokio::spawn(service.serve_stdio(request_reader, response_writer));
+        let mut responses = BufReader::new(response_reader).lines();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "_meta": meta(false) }
+        });
+
+        request_writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        request_writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let first: Value = serde_json::from_str(
+            &tokio::time::timeout(std::time::Duration::from_secs(1), responses.next_line())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        let second: Value = serde_json::from_str(
+            &tokio::time::timeout(std::time::Duration::from_secs(1), responses.next_line())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(first["result"]["tools"].is_array());
+        assert_eq!(second["error"]["code"], -32600);
+
         drop(request_writer);
         serving.await.unwrap().unwrap();
     }

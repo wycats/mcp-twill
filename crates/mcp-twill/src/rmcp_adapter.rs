@@ -42,7 +42,8 @@ use crate::{
     SemanticTaskStatus, ServingSurfaceIdentity, StoredTaskRecord, SurfacePresentationDefaults,
     TaskAccessContext, TaskAccessPolicy, TaskAccessScope, TaskRuntime, TaskStore, TaskStoreCreate,
     TaskStoreMount, TaskStoreScope, TaskStoreWrite, TaskSupportSpec, ToolLaneSpec,
-    checked_task_expiration, derive_task_storage_key, generate_task_id, scope_hex,
+    checked_task_expiration, derive_task_storage_key_with_namespace, generate_task_id,
+    generate_task_namespace, scope_hex,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -495,6 +496,7 @@ impl CliMcpServerBuilder {
             self.task_runtime = Some(TaskRuntime {
                 store,
                 access,
+                storage_namespace: None,
                 _mount: None,
             });
         }
@@ -528,6 +530,7 @@ fn finalize_task_runtime(
             let mut runtime = authored.unwrap_or_else(|| TaskRuntime {
                 store: InMemoryTaskStore::connection(),
                 access: TaskAccessPolicy::CapabilityId,
+                storage_namespace: None,
                 _mount: None,
             });
             if runtime.store.scope() != TaskStoreScope::Connection {
@@ -540,6 +543,7 @@ fn finalize_task_runtime(
                     "legacy task store is already mounted by a live server".to_string(),
                 )
             })?);
+            runtime.storage_namespace = Some(generate_task_namespace());
             Ok(Some(runtime))
         }
         Some(CompiledTaskDelivery::TasksExtension(_)) => {
@@ -553,6 +557,7 @@ fn finalize_task_runtime(
                     "Tasks Extension delivery requires a server-instance task store".to_string(),
                 ));
             }
+            runtime.storage_namespace = None;
             runtime._mount = Some(TaskStoreMount::acquire(&runtime.store).map_err(|()| {
                 FrameworkError::Build(
                     "Tasks Extension task store is already mounted by a live server".to_string(),
@@ -1955,11 +1960,12 @@ impl CliMcpServer {
     ) -> std::result::Result<LoadedTask, rmcp::ErrorData> {
         let runtime = self.task_runtime()?;
         let scope = Self::task_access_scope(runtime, extensions).map_err(|_| unknown_task())?;
-        let key = derive_task_storage_key(
+        let key = derive_task_storage_key_with_namespace(
             self.task_surface_hash(),
             &runtime.access,
             task_id,
             scope.as_ref(),
+            runtime.storage_namespace.as_ref(),
         )
         .ok_or_else(unknown_task)?;
         let expected_scope = scope.as_ref().map(scope_hex);
@@ -2242,11 +2248,16 @@ impl CliMcpServer {
         let mut created = None;
         for _ in 0..8 {
             let task_id = generate_task_id();
-            let key =
-                derive_task_storage_key(&surface_hash, &runtime.access, &task_id, scope.as_ref())
-                    .ok_or_else(|| {
-                    crate::stateless::StatelessDispatchError::internal("Task creation failed")
-                })?;
+            let key = derive_task_storage_key_with_namespace(
+                &surface_hash,
+                &runtime.access,
+                &task_id,
+                scope.as_ref(),
+                runtime.storage_namespace.as_ref(),
+            )
+            .ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::internal("Task creation failed")
+            })?;
             let semantic = SemanticTaskRecord::working(
                 task_id.clone(),
                 surface_hash.clone(),
@@ -2841,11 +2852,12 @@ impl ServerHandler for CliMcpServer {
             let mut created = None;
             for _ in 0..8 {
                 let task_id = generate_task_id();
-                let key = derive_task_storage_key(
+                let key = derive_task_storage_key_with_namespace(
                     &surface_hash,
                     &runtime.access,
                     &task_id,
                     scope.as_ref(),
+                    runtime.storage_namespace.as_ref(),
                 )
                 .ok_or_else(task_creation_failed)?;
                 let semantic = SemanticTaskRecord::working(
@@ -3788,6 +3800,7 @@ impl NoAnnotation for RawResource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::derive_task_storage_key;
 
     struct RetryRemovalStore {
         attempts: std::sync::atomic::AtomicUsize,
@@ -3941,6 +3954,51 @@ mod tests {
         drop(replacement);
     }
 
+    #[test]
+    fn sequential_legacy_servers_namespace_a_reused_connection_store() {
+        let store: Arc<dyn TaskStore> = InMemoryTaskStore::connection();
+        let first = CliMcpServer::builder(CommandRegistry::new("tasks", "Task tests"))
+            .task_runtime(store.clone(), TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let first_namespace = first
+            .task_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.storage_namespace)
+            .unwrap();
+        let surface_hash = first.task_surface_hash().to_string();
+        drop(first);
+
+        let second = CliMcpServer::builder(CommandRegistry::new("tasks", "Task tests"))
+            .task_runtime(store, TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let second_namespace = second
+            .task_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.storage_namespace)
+            .unwrap();
+        let task_id = "11".repeat(32);
+
+        assert_ne!(first_namespace, second_namespace);
+        assert_ne!(
+            derive_task_storage_key_with_namespace(
+                &surface_hash,
+                &TaskAccessPolicy::CapabilityId,
+                &task_id,
+                None,
+                Some(&first_namespace),
+            ),
+            derive_task_storage_key_with_namespace(
+                &surface_hash,
+                &TaskAccessPolicy::CapabilityId,
+                &task_id,
+                None,
+                Some(&second_namespace),
+            )
+        );
+    }
+
     #[tokio::test]
     async fn dropped_creation_gate_removes_the_unpublished_task() {
         let store = InMemoryTaskStore::server_instance();
@@ -4024,6 +4082,7 @@ mod tests {
             let runtime = TaskRuntime {
                 store: store.clone(),
                 access: TaskAccessPolicy::CapabilityId,
+                storage_namespace: None,
                 _mount: None,
             };
 
