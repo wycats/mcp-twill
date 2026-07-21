@@ -3,11 +3,11 @@ use std::{
     fmt,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use mcp_workspace_resolver::{CodexSandboxObservation, McpRootsObservation, ResolvedWorkspaceSet};
 use rand::{RngCore, rngs::OsRng};
 use rmcp::{
@@ -15,29 +15,35 @@ use rmcp::{
     handler::server::tool::schema_for_type,
     model::{
         CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, Content,
-        CreateTaskResult, GetPromptRequestParams, GetPromptResult, GetTaskInfoParams,
-        GetTaskPayloadResult, GetTaskResult, GetTaskResultParams, Implementation,
-        ListPromptsResult, ListResourcesResult, ListTasksResult, ListToolsResult, Meta,
-        PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, RawResource,
-        ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
-        ServerInfo, Task, TaskStatus, TaskSupport, TasksCapability, Tool, ToolAnnotations,
-        ToolExecution,
+        CreateTaskResult, CustomResult, ErrorCode, Extensions, GetPromptRequestParams,
+        GetPromptResult, GetTaskInfoParams, GetTaskPayloadResult, GetTaskResult,
+        GetTaskResultParams, Implementation, JsonRpcMessage, ListPromptsResult,
+        ListResourcesResult, ListTasksResult, ListToolsResult, Meta, PaginatedRequestParams,
+        ProgressNotificationParam, ProtocolVersion, RawResource, ReadResourceRequestParams,
+        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, ServerResult, Task,
+        TaskStatus, TaskSupport, Tool, ToolAnnotations, ToolExecution,
     },
-    service::RequestContext,
+    service::{RequestContext, RunningService, ServerInitializeError, TxJsonRpcMessage},
+    transport::{IntoTransport, Transport},
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, mpsc};
 
 use crate::{
-    ApprovalInput, CommandRegistry, DefaultPermissionAuthorizer, EffectLane, EventSink,
-    FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InvocationContext, InvocationPlan,
-    McpToolSurface, NativeApplicationErrorBody, NativeApplicationErrorDialect,
-    NativeApplicationRecovery, NativeConfirmationBridge, NativeConfirmationDecision,
-    NativeConfirmationRequest, NativeConfirmationRoute, NativeToolSurface, NoopEventSink,
-    PermissionAuthorizer, PermissionDecision, PlanFacts, ReplayRecord, ResponseEnvelope,
-    ResponseProfile, RunMode, RunRequest, RunResponse, RuntimeIdentity, ServingSurfaceIdentity,
-    SurfacePresentationDefaults, TaskSupportSpec, ToolLaneSpec,
+    ApprovalInput, CommandRegistry, CompiledTaskDelivery, DefaultPermissionAuthorizer, EffectLane,
+    EventSink, FrameworkError, FrameworkEvent, HelpRequest, HelpResult, InMemoryTaskStore,
+    InvocationContext, InvocationPlan, McpProtocolTarget, McpToolSurface,
+    NativeApplicationErrorBody, NativeApplicationErrorDialect, NativeApplicationRecovery,
+    NativeConfirmationBridge, NativeConfirmationDecision, NativeConfirmationRequest,
+    NativeConfirmationRoute, NativeToolSurface, NoopEventSink, PermissionAuthorizer,
+    PermissionDecision, PlanFacts, ReplayRecord, ResponseEnvelope, ResponseProfile, RunMode,
+    RunRequest, RunResponse, RuntimeIdentity, SemanticTaskProfile, SemanticTaskRecord,
+    SemanticTaskStatus, ServingSurfaceIdentity, StoredTaskRecord, SurfacePresentationDefaults,
+    TaskAccessContext, TaskAccessPolicy, TaskAccessScope, TaskRuntime, TaskStore, TaskStoreCreate,
+    TaskStoreMount, TaskStoreScope, TaskStoreWrite, TaskSupportSpec, ToolLaneSpec,
+    checked_task_expiration, derive_task_storage_key_with_namespace, generate_task_id,
+    generate_task_namespace, scope_hex,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -199,12 +205,221 @@ pub struct CliMcpServer {
     config: CliMcpServerConfig,
     surface: McpToolSurface,
     native_confirmation_bridge: Option<Arc<dyn NativeConfirmationBridge>>,
-    tasks: Arc<Mutex<BTreeMap<String, TaskRecord>>>,
-    task_counter: Arc<AtomicU64>,
+    task_runtime: Option<TaskRuntime>,
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
     replay: Arc<Mutex<BTreeMap<String, ReplayRecord>>>,
     authorizer: Arc<dyn PermissionAuthorizer>,
     events: Arc<dyn EventSink>,
     identity: Arc<RuntimeIdentity>,
+    legacy_session: Arc<LegacySessionState>,
+}
+
+#[derive(Default)]
+struct LegacySessionState {
+    started: AtomicBool,
+    closed: AtomicBool,
+}
+
+struct LegacyCompatibilityTransport<T> {
+    inner: T,
+    cleanup: Option<LegacySessionCleanup>,
+}
+
+struct LegacySessionCleanup {
+    state: Arc<LegacySessionState>,
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+}
+
+impl LegacySessionCleanup {
+    async fn run(self) {
+        if self.state.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let tasks = std::mem::take(&mut *self.live_tasks.lock().await);
+        for task in tasks.into_values() {
+            task.cancel();
+        }
+    }
+
+    fn run_after_drop(self) {
+        if self.state.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Ok(mut tasks) = self.live_tasks.try_lock() {
+            let tasks = std::mem::take(&mut *tasks);
+            for task in tasks.into_values() {
+                task.cancel();
+            }
+            return;
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let live_tasks = self.live_tasks;
+            runtime.spawn(async move {
+                let tasks = std::mem::take(&mut *live_tasks.lock().await);
+                for task in tasks.into_values() {
+                    task.cancel();
+                }
+            });
+        }
+    }
+}
+
+impl<T> Drop for LegacyCompatibilityTransport<T> {
+    fn drop(&mut self) {
+        if let Some(cleanup) = self.cleanup.take() {
+            cleanup.run_after_drop();
+        }
+    }
+}
+
+impl<T> Transport<RoleServer> for LegacyCompatibilityTransport<T>
+where
+    T: Transport<RoleServer>,
+{
+    type Error = T::Error;
+
+    fn send(
+        &mut self,
+        message: TxJsonRpcMessage<RoleServer>,
+    ) -> impl std::future::Future<Output = std::result::Result<(), Self::Error>> + Send + 'static
+    {
+        self.inner.send(with_legacy_related_task_meta(message))
+    }
+
+    fn receive(
+        &mut self,
+    ) -> impl std::future::Future<Output = Option<rmcp::service::RxJsonRpcMessage<RoleServer>>> + Send
+    {
+        self.inner.receive()
+    }
+
+    fn close(
+        &mut self,
+    ) -> impl std::future::Future<Output = std::result::Result<(), Self::Error>> + Send {
+        let cleanup = self.cleanup.take();
+        async move {
+            let result = self.inner.close().await;
+            if let Some(cleanup) = cleanup {
+                cleanup.run().await;
+            }
+            result
+        }
+    }
+}
+
+fn with_legacy_related_task_meta(
+    mut message: TxJsonRpcMessage<RoleServer>,
+) -> TxJsonRpcMessage<RoleServer> {
+    if let JsonRpcMessage::Response(response) = &mut message
+        && let ServerResult::CreateTaskResult(created) = &response.result
+        && let Ok(Value::Object(mut value)) = serde_json::to_value(created)
+    {
+        value.insert(
+            "_meta".to_string(),
+            json!({
+                "io.modelcontextprotocol/related-task": {
+                    "taskId": created.task.task_id,
+                }
+            }),
+        );
+        response.result = ServerResult::CustomResult(CustomResult::new(Value::Object(value)));
+    }
+    message
+}
+
+#[derive(Clone)]
+enum LiveTaskControl {
+    Legacy(tokio::task::AbortHandle),
+    Extension(TaskCancellation),
+}
+
+impl LiveTaskControl {
+    fn cancel(self) {
+        match self {
+            Self::Legacy(handle) => handle.abort(),
+            Self::Extension(cancellation) => cancellation.cancel(),
+        }
+    }
+}
+
+struct LiveTaskReservation {
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    store: Arc<dyn TaskStore>,
+    task_id: String,
+    key: crate::TaskStorageKey,
+    armed: bool,
+}
+
+impl LiveTaskReservation {
+    fn new(
+        live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+        store: Arc<dyn TaskStore>,
+        task_id: String,
+        key: crate::TaskStorageKey,
+    ) -> Self {
+        Self {
+            live_tasks,
+            store,
+            task_id,
+            key,
+            armed: true,
+        }
+    }
+
+    async fn release(&mut self) {
+        if self.armed {
+            self.live_tasks.lock().await.remove(&self.task_id);
+            self.armed = false;
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for LiveTaskReservation {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        schedule_task_expiration(
+            self.store.clone(),
+            self.live_tasks.clone(),
+            self.task_id.clone(),
+            self.key,
+            Some(unix_millis()),
+        );
+    }
+}
+
+#[derive(Clone, Default)]
+struct TaskCancellation {
+    inner: Arc<TaskCancellationInner>,
+}
+
+#[derive(Default)]
+struct TaskCancellationInner {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
+impl TaskCancellation {
+    fn cancel(&self) {
+        if !self.inner.cancelled.swap(true, Ordering::AcqRel) {
+            self.inner.notify.notify_waiters();
+        }
+    }
+
+    async fn cancelled(&self) {
+        loop {
+            let notified = self.inner.notify.notified();
+            if self.inner.cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 pub struct CliMcpServerBuilder {
@@ -214,6 +429,7 @@ pub struct CliMcpServerBuilder {
     surface: Option<McpToolSurface>,
     authorizer: Option<Arc<dyn PermissionAuthorizer>>,
     native_confirmation_bridge: Option<Arc<dyn NativeConfirmationBridge>>,
+    task_runtime: Option<TaskRuntime>,
     errors: Vec<FrameworkError>,
 }
 
@@ -226,6 +442,7 @@ impl CliMcpServerBuilder {
             surface: None,
             authorizer: None,
             native_confirmation_bridge: None,
+            task_runtime: None,
             errors: Vec::new(),
         }
     }
@@ -275,15 +492,85 @@ impl CliMcpServerBuilder {
         self
     }
 
+    pub fn task_runtime(mut self, store: Arc<dyn TaskStore>, access: TaskAccessPolicy) -> Self {
+        if self.task_runtime.is_some() {
+            self.errors.push(FrameworkError::Build(
+                "MCP server assigns `task_runtime` more than once".to_string(),
+            ));
+        } else {
+            self.task_runtime = Some(TaskRuntime {
+                store,
+                access,
+                storage_namespace: None,
+                _mount: None,
+            });
+        }
+        self
+    }
+
     pub fn build(self) -> crate::Result<CliMcpServer> {
         CliMcpServer::finish(self)
     }
 }
 
-#[derive(Clone)]
-struct TaskRecord {
-    task: Task,
-    payload: Option<Value>,
+fn finalize_task_runtime(
+    surface: &McpToolSurface,
+    authored: Option<TaskRuntime>,
+) -> crate::Result<Option<TaskRuntime>> {
+    let delivery = match surface {
+        McpToolSurface::EffectLanes(_) => None,
+        McpToolSurface::Native(surface) => Some(surface.snapshot().task_delivery()),
+    };
+    match delivery {
+        Some(CompiledTaskDelivery::Disabled) => {
+            if authored.is_some() {
+                Err(FrameworkError::Build(
+                    "disabled task delivery rejects a task runtime".to_string(),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        None | Some(CompiledTaskDelivery::Legacy2025_11_25(_)) => {
+            let mut runtime = authored.unwrap_or_else(|| TaskRuntime {
+                store: InMemoryTaskStore::connection(),
+                access: TaskAccessPolicy::CapabilityId,
+                storage_namespace: None,
+                _mount: None,
+            });
+            if runtime.store.scope() != TaskStoreScope::Connection {
+                return Err(FrameworkError::Build(
+                    "legacy task delivery requires a connection-scoped task store".to_string(),
+                ));
+            }
+            runtime._mount = Some(TaskStoreMount::acquire(&runtime.store).map_err(|()| {
+                FrameworkError::Build(
+                    "legacy task store is already mounted by a live server".to_string(),
+                )
+            })?);
+            runtime.storage_namespace = Some(generate_task_namespace());
+            Ok(Some(runtime))
+        }
+        Some(CompiledTaskDelivery::TasksExtension(_)) => {
+            let mut runtime = authored.ok_or_else(|| {
+                FrameworkError::Build(
+                    "Tasks Extension delivery requires an explicit task runtime".to_string(),
+                )
+            })?;
+            if runtime.store.scope() != TaskStoreScope::ServerInstance {
+                return Err(FrameworkError::Build(
+                    "Tasks Extension delivery requires a server-instance task store".to_string(),
+                ));
+            }
+            runtime.storage_namespace = None;
+            runtime._mount = Some(TaskStoreMount::acquire(&runtime.store).map_err(|()| {
+                FrameworkError::Build(
+                    "Tasks Extension task store is already mounted by a live server".to_string(),
+                )
+            })?);
+            Ok(Some(runtime))
+        }
+    }
 }
 
 /// How one run-tool call ended: the envelope to return, the plan facts (when
@@ -299,6 +586,17 @@ struct NativeRunOutcome {
     result: CallToolResult,
     envelope: ResponseEnvelope,
     plan: Option<PlanFacts>,
+}
+
+struct LoadedTask {
+    key: crate::TaskStorageKey,
+    stored: StoredTaskRecord,
+    semantic: SemanticTaskRecord,
+}
+
+enum LegacyTaskInvocation {
+    EffectLane(RunRequest),
+    Native(rmcp::model::JsonObject),
 }
 
 impl RunOutcome {
@@ -343,11 +641,12 @@ impl CliMcpServer {
     }
 
     fn ensure_tasks_supported(&self) -> std::result::Result<(), rmcp::ErrorData> {
-        if matches!(self.surface, McpToolSurface::EffectLanes(_)) {
+        if self.task_profile() == Some(SemanticTaskProfile::Legacy2025_11_25) {
             Ok(())
         } else {
-            Err(rmcp::ErrorData::invalid_params(
-                "Task requests are unavailable on native tool surfaces",
+            Err(rmcp::ErrorData::new(
+                ErrorCode::METHOD_NOT_FOUND,
+                "Method not found",
                 None,
             ))
         }
@@ -355,6 +654,55 @@ impl CliMcpServer {
 
     pub fn builder(registry: CommandRegistry) -> CliMcpServerBuilder {
         CliMcpServerBuilder::new(registry)
+    }
+
+    /// Serves the negotiated MCP 2025-11-25 compatibility path.
+    ///
+    /// Twill keeps this dot-call source-compatible with rmcp's `ServiceExt`
+    /// while correcting legacy task creation metadata at the private
+    /// transport boundary.
+    pub async fn serve<T, E, A>(
+        self,
+        transport: T,
+    ) -> std::result::Result<RunningService<RoleServer, Self>, ServerInitializeError>
+    where
+        T: IntoTransport<RoleServer, E, A>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        if self.stateless_compatible() {
+            return Err(ServerInitializeError::InitializeFailed(
+                rmcp::ErrorData::internal_error(
+                    "stateless MCP surfaces require `into_stateless_service`",
+                    None,
+                ),
+            ));
+        }
+        let cleanup = if self.task_profile() == Some(SemanticTaskProfile::Legacy2025_11_25) {
+            if self
+                .legacy_session
+                .started
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return Err(ServerInitializeError::InitializeFailed(
+                    rmcp::ErrorData::internal_error(
+                        "legacy task runtime already belongs to an MCP session",
+                        None,
+                    ),
+                ));
+            }
+            Some(LegacySessionCleanup {
+                state: self.legacy_session.clone(),
+                live_tasks: self.live_tasks.clone(),
+            })
+        } else {
+            None
+        };
+        let transport = LegacyCompatibilityTransport {
+            inner: transport.into_transport(),
+            cleanup,
+        };
+        rmcp::serve_server(self, transport).await
     }
 
     pub fn new(registry: CommandRegistry) -> crate::Result<Self> {
@@ -424,16 +772,6 @@ impl CliMcpServer {
                     "native surface was compiled for a different command catalog".to_string(),
                 ));
             }
-            if native
-                .snapshot()
-                .operations()
-                .iter()
-                .any(|operation| matches!(operation.spec().task_support, TaskSupportSpec::Required))
-            {
-                return Err(FrameworkError::Build(
-                    "native ordinary delivery cannot serve required task support".to_string(),
-                ));
-            }
             match (
                 native.confirmation_route(),
                 builder.native_confirmation_bridge.is_some(),
@@ -456,6 +794,8 @@ impl CliMcpServer {
             ));
         }
 
+        let task_runtime = finalize_task_runtime(&surface, builder.task_runtime.take())?;
+
         let surface_identity = surface_identity(&surface)?;
         let identity = registry
             .runtime_identity()
@@ -466,14 +806,15 @@ impl CliMcpServer {
             config,
             surface,
             native_confirmation_bridge: builder.native_confirmation_bridge,
-            tasks: Arc::new(Mutex::new(BTreeMap::new())),
-            task_counter: Arc::new(AtomicU64::new(1)),
+            task_runtime,
+            live_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             replay: Arc::new(Mutex::new(BTreeMap::new())),
             authorizer: builder
                 .authorizer
                 .unwrap_or_else(|| Arc::new(DefaultPermissionAuthorizer)),
             events: Arc::new(NoopEventSink),
             identity: Arc::new(identity),
+            legacy_session: Arc::new(LegacySessionState::default()),
         })
     }
 
@@ -527,6 +868,40 @@ impl CliMcpServer {
                     total: Some(total),
                     message: Some(message.into()),
                 })
+                .await;
+        }
+    }
+
+    async fn notify_native_progress(
+        meta: Option<&Meta>,
+        client: Option<&Peer<RoleServer>>,
+        stateless: Option<&mpsc::Sender<Value>>,
+        progress: f64,
+        total: f64,
+        message: &'static str,
+    ) {
+        let Some(meta) = meta else {
+            return;
+        };
+        if let Some(client) = client {
+            Self::notify_progress(meta, client, progress, total, message).await;
+            return;
+        }
+        let Some(sender) = stateless else {
+            return;
+        };
+        if let Some(progress_token) = meta.get_progress_token() {
+            let _ = sender
+                .send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/progress",
+                    "params": {
+                        "progressToken": progress_token,
+                        "progress": progress,
+                        "total": total,
+                        "message": message,
+                    }
+                }))
                 .await;
         }
     }
@@ -636,7 +1011,40 @@ impl CliMcpServer {
         arguments: rmcp::model::JsonObject,
     ) -> CallToolResult {
         let outcome = self
-            .run_native_tool_flow(tool_name, request_meta, context_meta, client, arguments)
+            .run_native_tool_flow(
+                tool_name,
+                request_meta,
+                context_meta,
+                Some(client),
+                None,
+                arguments,
+            )
+            .await;
+        if self.events.enabled() {
+            self.events.record(
+                FrameworkEvent::from_envelope(&outcome.envelope, outcome.plan.as_ref())
+                    .with_runtime((*self.identity).clone()),
+            );
+        }
+        outcome.result
+    }
+
+    async fn execute_native_tool_stateless(
+        self,
+        tool_name: String,
+        request_meta: Option<Meta>,
+        arguments: rmcp::model::JsonObject,
+        progress: Option<mpsc::Sender<Value>>,
+    ) -> CallToolResult {
+        let outcome = self
+            .run_native_tool_flow(
+                tool_name,
+                request_meta,
+                Meta::default(),
+                None,
+                progress,
+                arguments,
+            )
             .await;
         if self.events.enabled() {
             self.events.record(
@@ -652,7 +1060,8 @@ impl CliMcpServer {
         tool_name: String,
         request_meta: Option<Meta>,
         context_meta: Meta,
-        client: Peer<RoleServer>,
+        client: Option<Peer<RoleServer>>,
+        stateless_progress: Option<mpsc::Sender<Value>>,
         arguments: rmcp::model::JsonObject,
     ) -> NativeRunOutcome {
         let surface = match &self.surface {
@@ -682,10 +1091,24 @@ impl CliMcpServer {
             Ok(observation) => observation,
             Err(error) => return native_framework_outcome(error, None),
         };
-        let resolved = Self::resolve_workspaces_for_call(&self.registry, codex, &client).await;
-        if let Some(meta) = progress_meta {
-            Self::notify_progress(meta, &client, 1.0, 5.0, "Planning native invocation").await;
-        }
+        let resolved = if let Some(client) = &client {
+            Self::resolve_workspaces_for_call(&self.registry, codex, client).await
+        } else {
+            let mut observations = self.registry.declared_observations();
+            if let Some(codex) = codex {
+                observations = observations.with_codex_sandbox(codex);
+            }
+            self.registry.resolve_workspaces(&observations)
+        };
+        Self::notify_native_progress(
+            progress_meta,
+            client.as_ref(),
+            stateless_progress.as_ref(),
+            1.0,
+            5.0,
+            "Planning native invocation",
+        )
+        .await;
         let (operation_id, selected_arguments) = match surface.resolve_call(&tool_name, arguments) {
             Ok(call) => call,
             Err(error) => return native_framework_outcome(error, None),
@@ -711,9 +1134,15 @@ impl CliMcpServer {
             }
         };
         let plan = prepared.plan().clone();
-        if let Some(meta) = progress_meta {
-            Self::notify_progress(meta, &client, 2.0, 5.0, "Invocation plan ready").await;
-        }
+        Self::notify_native_progress(
+            progress_meta,
+            client.as_ref(),
+            stateless_progress.as_ref(),
+            2.0,
+            5.0,
+            "Invocation plan ready",
+        )
+        .await;
         let plan_for_event = PlanFacts::from(&plan);
 
         if let Some(availability) = self.registry.binding_availability(&prepared) {
@@ -783,9 +1212,15 @@ impl CliMcpServer {
                     .native_confirmation_bridge
                     .as_ref()
                     .expect("bridge route was validated at server construction");
-                if let Some(meta) = progress_meta {
-                    Self::notify_progress(meta, &client, 3.0, 5.0, "Confirmation required").await;
-                }
+                Self::notify_native_progress(
+                    progress_meta,
+                    client.as_ref(),
+                    stateless_progress.as_ref(),
+                    3.0,
+                    5.0,
+                    "Confirmation required",
+                )
+                .await;
                 match bridge.confirm(bridge_request).await {
                     Ok(NativeConfirmationDecision::Allow) => {}
                     Ok(NativeConfirmationDecision::Deny) => {
@@ -817,9 +1252,15 @@ impl CliMcpServer {
             }
         }
 
-        if let Some(meta) = progress_meta {
-            Self::notify_progress(meta, &client, 4.0, 5.0, "Dispatching command handler").await;
-        }
+        Self::notify_native_progress(
+            progress_meta,
+            client.as_ref(),
+            stateless_progress.as_ref(),
+            4.0,
+            5.0,
+            "Dispatching command handler",
+        )
+        .await;
         let outcome = match self
             .registry
             .dispatch_prepared_operation(selected_arguments, prepared)
@@ -833,9 +1274,15 @@ impl CliMcpServer {
             }
             Err(error) => native_framework_outcome(error, Some((plan, plan_for_event))),
         };
-        if let Some(meta) = progress_meta {
-            Self::notify_progress(meta, &client, 5.0, 5.0, "Command complete").await;
-        }
+        Self::notify_native_progress(
+            progress_meta,
+            client.as_ref(),
+            stateless_progress.as_ref(),
+            5.0,
+            5.0,
+            "Command complete",
+        )
+        .await;
         outcome
     }
 
@@ -1470,14 +1917,604 @@ fn native_application_error_outcome(
     }
 }
 
+impl CliMcpServer {
+    fn task_profile(&self) -> Option<SemanticTaskProfile> {
+        match &self.surface {
+            McpToolSurface::EffectLanes(_) => Some(SemanticTaskProfile::Legacy2025_11_25),
+            McpToolSurface::Native(surface) => match surface.snapshot().task_delivery() {
+                CompiledTaskDelivery::Disabled => None,
+                CompiledTaskDelivery::Legacy2025_11_25(_) => {
+                    Some(SemanticTaskProfile::Legacy2025_11_25)
+                }
+                CompiledTaskDelivery::TasksExtension(_) => {
+                    Some(SemanticTaskProfile::TasksExtension)
+                }
+            },
+        }
+    }
+
+    fn task_surface_hash(&self) -> &str {
+        match &self.surface {
+            McpToolSurface::EffectLanes(surface) => &surface.identity().hash,
+            McpToolSurface::Native(surface) => surface.snapshot().surface_hash(),
+        }
+    }
+
+    fn task_runtime(&self) -> std::result::Result<&TaskRuntime, rmcp::ErrorData> {
+        self.task_runtime.as_ref().ok_or_else(|| {
+            rmcp::ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None)
+        })
+    }
+
+    fn task_access_scope(
+        runtime: &TaskRuntime,
+        extensions: &Extensions,
+    ) -> std::result::Result<Option<TaskAccessScope>, crate::TaskAccessScopeError> {
+        match &runtime.access {
+            TaskAccessPolicy::CapabilityId => Ok(None),
+            TaskAccessPolicy::Scoped(provider) => {
+                provider.scope(TaskAccessContext::new(extensions)).map(Some)
+            }
+        }
+    }
+
+    async fn load_task(
+        &self,
+        task_id: &str,
+        extensions: &Extensions,
+    ) -> std::result::Result<LoadedTask, rmcp::ErrorData> {
+        let runtime = self.task_runtime()?;
+        let scope = Self::task_access_scope(runtime, extensions).map_err(|_| unknown_task())?;
+        let key = derive_task_storage_key_with_namespace(
+            self.task_surface_hash(),
+            &runtime.access,
+            task_id,
+            scope.as_ref(),
+            runtime.storage_namespace.as_ref(),
+        )
+        .ok_or_else(unknown_task)?;
+        let expected_scope = scope.as_ref().map(scope_hex);
+        let expected_access_tag = u8::from(matches!(runtime.access, TaskAccessPolicy::Scoped(_)));
+        loop {
+            let Some(stored) = runtime
+                .store
+                .get(key)
+                .await
+                .map_err(|_| task_storage_failed())?
+            else {
+                return Err(unknown_task());
+            };
+            let semantic = stored.decode().map_err(|_| task_storage_failed())?;
+            if semantic.task_id() != task_id
+                || semantic.surface_hash() != self.task_surface_hash()
+                || semantic.access_tag() != expected_access_tag
+                || semantic.scope() != expected_scope.as_deref()
+                || self.task_profile() != Some(semantic.profile())
+            {
+                return Err(task_storage_failed());
+            }
+            if semantic
+                .expires_at()
+                .is_some_and(|deadline| deadline <= unix_millis())
+            {
+                if runtime.store.remove(key).await.is_ok() {
+                    if let Some(control) = self.live_tasks.lock().await.remove(task_id) {
+                        control.cancel();
+                    }
+                } else {
+                    schedule_task_expiration(
+                        runtime.store.clone(),
+                        self.live_tasks.clone(),
+                        task_id.to_string(),
+                        key,
+                        Some(unix_millis()),
+                    );
+                }
+                return Err(unknown_task());
+            }
+            if semantic.status() == SemanticTaskStatus::Working
+                && !self.live_tasks.lock().await.contains_key(task_id)
+            {
+                let orphan = semantic.successor(
+                    SemanticTaskStatus::Failed,
+                    Some(task_execution_failed_outcome()),
+                    unix_millis(),
+                );
+                let encoded =
+                    StoredTaskRecord::encode(&orphan).map_err(|_| task_storage_failed())?;
+                match runtime
+                    .store
+                    .compare_and_set(key, stored.revision(), encoded.clone())
+                    .await
+                    .map_err(|_| task_storage_failed())?
+                {
+                    TaskStoreWrite::Written => {
+                        return Ok(LoadedTask {
+                            key,
+                            stored: encoded,
+                            semantic: orphan,
+                        });
+                    }
+                    TaskStoreWrite::Conflict => continue,
+                    TaskStoreWrite::Missing => return Err(unknown_task()),
+                }
+            }
+            return Ok(LoadedTask {
+                key,
+                stored,
+                semantic,
+            });
+        }
+    }
+
+    pub(crate) fn stateless_compatible(&self) -> bool {
+        matches!(
+            &self.surface,
+            McpToolSurface::Native(surface)
+                if surface.snapshot().protocol_version()
+                    == McpProtocolTarget::V2026_07_28.as_str()
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn hold_live_tasks_for_test(
+        &self,
+        acquired: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let _guard = self.live_tasks.lock().await;
+        let _ = acquired.send(());
+        let _ = release.await;
+    }
+
+    pub(crate) fn stateless_tasks_extension_enabled(&self) -> bool {
+        self.task_profile() == Some(SemanticTaskProfile::TasksExtension)
+    }
+
+    pub(crate) async fn dispatch_stateless(
+        &self,
+        method: &str,
+        params: serde_json::Map<String, Value>,
+        extensions: &Extensions,
+        progress: Option<mpsc::Sender<Value>>,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        if matches!(method, "tasks/get" | "tasks/update" | "tasks/cancel")
+            && !self.stateless_tasks_extension_enabled()
+        {
+            return Err(crate::stateless::StatelessDispatchError::method_not_found());
+        }
+        match method {
+            "server/discover" => Ok(self.stateless_discover()),
+            "tools/list" => serde_json::to_value(ListToolsResult::with_all_items(self.tools()))
+                .map_err(|_| {
+                    crate::stateless::StatelessDispatchError::internal("Serialization failed")
+                }),
+            "resources/list" => serde_json::to_value(ListResourcesResult::with_all_items(
+                self.resources()
+                    .into_iter()
+                    .map(|resource| resource.no_annotation())
+                    .collect(),
+            ))
+            .map_err(|_| {
+                crate::stateless::StatelessDispatchError::internal("Serialization failed")
+            }),
+            "prompts/list" => serde_json::to_value(ListPromptsResult::with_all_items(vec![
+                rmcp::model::Prompt::new("getting_started", Some("How to use MCP Twill"), None),
+            ]))
+            .map_err(|_| {
+                crate::stateless::StatelessDispatchError::internal("Serialization failed")
+            }),
+            "tools/call" => self.stateless_call_tool(params, extensions, progress).await,
+            "resources/read" => self.stateless_read_resource(params).await,
+            "prompts/get" => self.stateless_get_prompt(params),
+            "tasks/get" => self.stateless_get_task(params, extensions).await,
+            "tasks/update" => self.stateless_update_task(params, extensions).await,
+            "tasks/cancel" => self.stateless_cancel_task(params, extensions).await,
+            _ => Err(crate::stateless::StatelessDispatchError::method_not_found()),
+        }
+    }
+
+    fn stateless_discover(&self) -> Value {
+        let mut capabilities = serde_json::Map::from_iter([
+            ("tools".to_string(), json!({})),
+            ("resources".to_string(), json!({})),
+            ("prompts".to_string(), json!({})),
+        ]);
+        if matches!(
+            &self.surface,
+            McpToolSurface::Native(surface)
+                if matches!(surface.snapshot().task_delivery(), CompiledTaskDelivery::TasksExtension(_))
+        ) {
+            capabilities.insert(
+                "extensions".to_string(),
+                json!({ "io.modelcontextprotocol/tasks": {} }),
+            );
+        }
+        let instructions = match &self.surface {
+            McpToolSurface::Native(surface) => surface.snapshot().server_instructions(),
+            McpToolSurface::EffectLanes(surface) => surface.instructions(),
+        };
+        json!({
+            "resultType": "complete",
+            "supportedVersions": [McpProtocolTarget::V2026_07_28.as_str()],
+            "capabilities": capabilities,
+            "serverInfo": {
+                "name": self.registry.server_name(),
+                "title": "MCP Twill",
+                "version": env!("CARGO_PKG_VERSION"),
+                "description": self.registry.server_description(),
+            },
+            "instructions": instructions,
+        })
+    }
+
+    async fn stateless_call_tool(
+        &self,
+        mut params: serde_json::Map<String, Value>,
+        extensions: &Extensions,
+        progress: Option<mpsc::Sender<Value>>,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        let meta_value = params.remove("_meta").unwrap_or_else(|| json!({}));
+        let capability = extension_capability(&meta_value)?;
+        let meta = serde_json::from_value::<Meta>(meta_value).map_err(|_| {
+            crate::stateless::StatelessDispatchError::invalid_params("Invalid params")
+        })?;
+        let name = params
+            .remove("name")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::invalid_params("Invalid params")
+            })?;
+        let arguments = params
+            .remove("arguments")
+            .unwrap_or_else(|| json!({}))
+            .as_object()
+            .cloned()
+            .ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::invalid_params("Invalid params")
+            })?;
+        let surface = match &self.surface {
+            McpToolSurface::Native(surface) => surface,
+            McpToolSurface::EffectLanes(_) => {
+                return Err(crate::stateless::StatelessDispatchError::method_not_found());
+            }
+        };
+        if matches!(
+            &surface.declaration().framework_help,
+            crate::FrameworkHelpProjection::Tool { name: help_name } if help_name == &name
+        ) {
+            let request =
+                serde_json::from_value::<HelpRequest>(Value::Object(arguments)).map_err(|_| {
+                    crate::stateless::StatelessDispatchError::invalid_params("Invalid params")
+                })?;
+            return complete_tool_result(help_result(surface.help(request)));
+        }
+        let support = surface.task_support_for_tool(&name).ok_or_else(|| {
+            crate::stateless::StatelessDispatchError::invalid_params("Unknown tool")
+        })?;
+        let delivery = surface.snapshot().task_delivery();
+        let defer = match (delivery, support) {
+            (_, TaskSupportSpec::Forbidden) => false,
+            (CompiledTaskDelivery::Disabled, TaskSupportSpec::Optional) => false,
+            (CompiledTaskDelivery::Disabled, TaskSupportSpec::Required) => {
+                return Err(crate::stateless::StatelessDispatchError::missing_capability());
+            }
+            (CompiledTaskDelivery::TasksExtension(delivery), TaskSupportSpec::Optional) => {
+                capability
+                    && matches!(
+                        delivery.optional_policy(),
+                        crate::ExtensionOptionalPolicy::DeferredWhenAvailable
+                    )
+            }
+            (CompiledTaskDelivery::TasksExtension(_), TaskSupportSpec::Required) => {
+                if !capability {
+                    return Err(crate::stateless::StatelessDispatchError::missing_capability());
+                }
+                true
+            }
+            (CompiledTaskDelivery::Legacy2025_11_25(_), _) => {
+                return Err(crate::stateless::StatelessDispatchError::method_not_found());
+            }
+        };
+        if !defer {
+            let result = self
+                .clone()
+                .execute_native_tool_stateless(name, Some(meta), arguments, progress)
+                .await;
+            return complete_tool_result(result);
+        }
+        let retention_ms = match delivery {
+            CompiledTaskDelivery::TasksExtension(delivery) => delivery.retention_ms(),
+            _ => unreachable!("deferred extension calls require extension delivery"),
+        };
+        self.create_extension_task(name, arguments, meta, extensions, retention_ms, progress)
+            .await
+    }
+
+    async fn create_extension_task(
+        &self,
+        name: String,
+        arguments: rmcp::model::JsonObject,
+        meta: Meta,
+        extensions: &Extensions,
+        retention_ms: u64,
+        progress: Option<mpsc::Sender<Value>>,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        let runtime = self.task_runtime.as_ref().ok_or_else(|| {
+            crate::stateless::StatelessDispatchError::internal("Task creation failed")
+        })?;
+        let scope = Self::task_access_scope(runtime, extensions).map_err(|_| {
+            crate::stateless::StatelessDispatchError::internal("Task access scope unavailable")
+        })?;
+        let access_tag = u8::from(matches!(runtime.access, TaskAccessPolicy::Scoped(_)));
+        let scope_value = scope.as_ref().map(scope_hex);
+        let now = unix_millis();
+        let surface_hash = self.task_surface_hash().to_string();
+        let mut created = None;
+        for _ in 0..8 {
+            let task_id = generate_task_id();
+            let key = derive_task_storage_key_with_namespace(
+                &surface_hash,
+                &runtime.access,
+                &task_id,
+                scope.as_ref(),
+                runtime.storage_namespace.as_ref(),
+            )
+            .ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::internal("Task creation failed")
+            })?;
+            let semantic = SemanticTaskRecord::working(
+                task_id.clone(),
+                surface_hash.clone(),
+                access_tag,
+                scope_value.clone(),
+                SemanticTaskProfile::TasksExtension,
+                now,
+                Some(checked_task_expiration(now, retention_ms).ok_or_else(|| {
+                    crate::stateless::StatelessDispatchError::internal("Task creation failed")
+                })?),
+            );
+            let stored = StoredTaskRecord::encode(&semantic).map_err(|_| {
+                crate::stateless::StatelessDispatchError::internal("Task creation failed")
+            })?;
+            let cancellation = TaskCancellation::default();
+            {
+                let mut live_tasks = self.live_tasks.lock().await;
+                if live_tasks.contains_key(&task_id) {
+                    continue;
+                }
+                live_tasks.insert(
+                    task_id.clone(),
+                    LiveTaskControl::Extension(cancellation.clone()),
+                );
+            }
+            let mut reservation = LiveTaskReservation::new(
+                self.live_tasks.clone(),
+                runtime.store.clone(),
+                task_id.clone(),
+                key,
+            );
+            let create = runtime.store.create(key, stored.clone()).await;
+            match create {
+                Ok(TaskStoreCreate::Created) => {
+                    reservation.disarm();
+                    created = Some((task_id, key, semantic, stored, cancellation));
+                    break;
+                }
+                Ok(TaskStoreCreate::Occupied) => {
+                    reservation.release().await;
+                    continue;
+                }
+                Ok(TaskStoreCreate::CapacityExceeded) => {
+                    reservation.release().await;
+                    return Err(crate::stateless::StatelessDispatchError::internal(
+                        "Task creation failed",
+                    ));
+                }
+                Err(_) => {
+                    reservation.release().await;
+                    return Err(crate::stateless::StatelessDispatchError::internal(
+                        "Task creation failed",
+                    ));
+                }
+            }
+        }
+        let (task_id, key, semantic, stored, cancellation) = created.ok_or_else(|| {
+            crate::stateless::StatelessDispatchError::internal("Task creation failed")
+        })?;
+        let creation = extension_task_handle(&semantic);
+        let runtime = runtime.clone();
+        let server = self.clone();
+        let task_id_for_runner = task_id.clone();
+        let runner_cancellation = cancellation.clone();
+        let (start, ready) = tokio::sync::oneshot::channel();
+        let runner_runtime = runtime.clone();
+        let runner_stored = stored.clone();
+        let runner_semantic = semantic.clone();
+        let runner_live_tasks = self.live_tasks.clone();
+        let completion_runtime = runtime.clone();
+        let completion_stored = stored.clone();
+        let completion_semantic = semantic.clone();
+        let completion_live_tasks = self.live_tasks.clone();
+        let completion_task_id = task_id.clone();
+        let handle = tokio::spawn(async move {
+            if !await_task_start(
+                ready,
+                runner_runtime.store.clone(),
+                runner_live_tasks,
+                task_id_for_runner,
+                key,
+            )
+            .await
+            {
+                return;
+            }
+            let (status, value) = tokio::select! {
+                result = server.execute_native_tool_stateless(name, Some(meta), arguments, progress) => {
+                    match serde_json::to_value(result) {
+                        Ok(mut value) => {
+                            if let Some(value) = value.as_object_mut() {
+                                value.insert(
+                                    "resultType".to_string(),
+                                    Value::String("complete".to_string()),
+                                );
+                            }
+                            (SemanticTaskStatus::Completed, value)
+                        }
+                        Err(_) => (SemanticTaskStatus::Failed, task_execution_failed_outcome()),
+                    }
+                }
+                () = runner_cancellation.cancelled() => {
+                    (SemanticTaskStatus::Cancelled, task_cancelled_outcome())
+                }
+            };
+            commit_task_outcome(
+                &runner_runtime,
+                key,
+                runner_stored,
+                runner_semantic,
+                status,
+                value,
+            )
+            .await;
+        });
+        monitor_task_runner(
+            handle,
+            completion_runtime,
+            key,
+            completion_stored,
+            completion_semantic,
+            completion_live_tasks,
+            completion_task_id,
+        );
+        schedule_task_expiration(
+            runtime.store.clone(),
+            self.live_tasks.clone(),
+            task_id,
+            key,
+            semantic.expires_at(),
+        );
+        let _ = start.send(());
+        Ok(creation)
+    }
+
+    async fn stateless_get_task(
+        &self,
+        mut params: serde_json::Map<String, Value>,
+        extensions: &Extensions,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        require_extension_capability(params.get("_meta"))?;
+        let task_id = take_task_id(&mut params)?;
+        let loaded = self
+            .load_task(&task_id, extensions)
+            .await
+            .map_err(map_task_error)?;
+        Ok(extension_task_result(&loaded.semantic))
+    }
+
+    async fn stateless_update_task(
+        &self,
+        mut params: serde_json::Map<String, Value>,
+        extensions: &Extensions,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        require_extension_capability(params.get("_meta"))?;
+        let task_id = take_task_id(&mut params)?;
+        self.load_task(&task_id, extensions)
+            .await
+            .map_err(map_task_error)?;
+        Ok(json!({ "resultType": "complete" }))
+    }
+
+    async fn stateless_cancel_task(
+        &self,
+        mut params: serde_json::Map<String, Value>,
+        extensions: &Extensions,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        require_extension_capability(params.get("_meta"))?;
+        let task_id = take_task_id(&mut params)?;
+        self.load_task(&task_id, extensions)
+            .await
+            .map_err(map_task_error)?;
+        if let Some(LiveTaskControl::Extension(cancellation)) =
+            self.live_tasks.lock().await.get(&task_id).cloned()
+        {
+            cancellation.cancel();
+        }
+        Ok(json!({ "resultType": "complete" }))
+    }
+
+    async fn stateless_read_resource(
+        &self,
+        mut params: serde_json::Map<String, Value>,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        let uri = params
+            .remove("uri")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::invalid_params("Invalid params")
+            })?;
+        if let Some((decl, id)) = self.registry.match_resource_uri(&uri) {
+            let reader = self.registry.resource_reader(&decl.name).ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::invalid_params("Resource is not readable")
+            })?;
+            let value = reader.read_erased(&id).await.map_err(|_| {
+                crate::stateless::StatelessDispatchError::invalid_params("Resource was refused")
+            })?;
+            return serde_json::to_value(ReadResourceResult::new(vec![
+                ResourceContents::text(value.to_string(), uri).with_mime_type("application/json"),
+            ]))
+            .map_err(|_| {
+                crate::stateless::StatelessDispatchError::internal("Serialization failed")
+            });
+        }
+        let text = if uri == "cli://catalog" {
+            self.catalog_resource_text()
+        } else {
+            self.registry.resource_text(&uri)
+        }
+        .ok_or_else(|| {
+            crate::stateless::StatelessDispatchError::invalid_params("Unknown resource")
+        })?;
+        serde_json::to_value(ReadResourceResult::new(vec![
+            ResourceContents::text(text, uri).with_mime_type("text/markdown"),
+        ]))
+        .map_err(|_| crate::stateless::StatelessDispatchError::internal("Serialization failed"))
+    }
+
+    fn stateless_get_prompt(
+        &self,
+        mut params: serde_json::Map<String, Value>,
+    ) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+        let name = params
+            .remove("name")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::invalid_params("Invalid params")
+            })?;
+        if name != "getting_started" {
+            return Err(crate::stateless::StatelessDispatchError::invalid_params(
+                "Unknown prompt",
+            ));
+        }
+        let text = match &self.surface {
+            McpToolSurface::Native(surface) => surface.snapshot().server_instructions().to_string(),
+            McpToolSurface::EffectLanes(_) => String::new(),
+        };
+        serde_json::to_value(GetPromptResult::new(vec![
+            rmcp::model::PromptMessage::new_text(rmcp::model::PromptMessageRole::User, text),
+        ]))
+        .map_err(|_| crate::stateless::StatelessDispatchError::internal("Serialization failed"))
+    }
+}
+
 impl ServerHandler for CliMcpServer {
     fn get_info(&self) -> ServerInfo {
-        let capabilities = if matches!(self.surface, McpToolSurface::EffectLanes(_)) {
+        let capabilities = if self.task_profile() == Some(SemanticTaskProfile::Legacy2025_11_25) {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .enable_prompts()
-                .enable_tasks_with(TasksCapability::server_default())
+                .enable_tasks_with(crate::native_surfaces::legacy_tasks_capability())
                 .build()
         } else {
             ServerCapabilities::builder()
@@ -1564,12 +2601,7 @@ impl ServerHandler for CliMcpServer {
                     .map_err(|_| {
                         rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
                     })?;
-                if matches!(task_support, TaskSupportSpec::Required) {
-                    return Err(rmcp::ErrorData::invalid_params(
-                        format!("Tool {tool_name} requires task-augmented execution"),
-                        None,
-                    ));
-                }
+                ensure_ordinary_task_support(&tool_name, task_support)?;
                 let request_meta = request.meta.clone();
                 let run_request = self.parse_run_request(request.arguments)?;
                 Ok(self
@@ -1594,6 +2626,9 @@ impl ServerHandler for CliMcpServer {
                         format!("Unknown tool {tool_name}"),
                         None,
                     ));
+                }
+                if let Some(task_support) = surface.task_support_for_tool(&tool_name) {
+                    ensure_ordinary_task_support(&tool_name, task_support)?;
                 }
                 Ok(self
                     .clone()
@@ -1768,75 +2803,193 @@ impl ServerHandler for CliMcpServer {
         self.validate_protocol(request.meta.as_ref(), &context)?;
         self.ensure_tasks_supported()?;
         let tool_name = request.name.to_string();
-        let Some(lane) = self
-            .registry
-            .tool_lane(&self.config.execution_tool_name, &tool_name)
-        else {
-            return Err(rmcp::ErrorData::invalid_params(
-                format!("Only execution tools support task-augmented execution: {tool_name}"),
-                None,
-            ));
+        let task_support = match &self.surface {
+            McpToolSurface::EffectLanes(_) => {
+                let Some(lane) = self
+                    .registry
+                    .tool_lane(&self.config.execution_tool_name, &tool_name)
+                else {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        format!(
+                            "Only execution tools support task-augmented execution: {tool_name}"
+                        ),
+                        None,
+                    ));
+                };
+                self.registry
+                    .lane_task_support(lane, &self.config.execution_tool_name)
+                    .map_err(|_| {
+                        rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
+                    })?
+            }
+            McpToolSurface::Native(surface) => surface
+                .task_support_for_tool(&tool_name)
+                .ok_or_else(|| rmcp::ErrorData::invalid_params("Unknown tool", None))?,
         };
-        let task_support = self
-            .registry
-            .lane_task_support(lane, &self.config.execution_tool_name)
-            .map_err(|_| {
-                rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
-            })?;
         if matches!(task_support, TaskSupportSpec::Forbidden) {
             return Err(rmcp::ErrorData::invalid_params(
                 format!("Tool {tool_name} does not support task-augmented execution"),
                 None,
             ));
         }
+        let ttl = legacy_task_ttl(request.task.as_ref())?;
         let request_meta = request.meta.clone();
-        let run_request = self.parse_run_request(request.arguments)?;
+        let invocation = match &self.surface {
+            McpToolSurface::EffectLanes(_) => {
+                LegacyTaskInvocation::EffectLane(self.parse_run_request(request.arguments)?)
+            }
+            McpToolSurface::Native(_) => {
+                LegacyTaskInvocation::Native(request.arguments.unwrap_or_default())
+            }
+        };
+        let runtime = self.task_runtime()?.clone();
+        let scope = Self::task_access_scope(&runtime, &context.extensions)
+            .map_err(|_| task_access_scope_unavailable())?;
+        let access_tag = u8::from(matches!(runtime.access, TaskAccessPolicy::Scoped(_)));
+        let scope_value = scope.as_ref().map(scope_hex);
+        let now = unix_millis();
+        let expires_at = ttl
+            .map(|ttl| {
+                checked_task_expiration(now, ttl).ok_or_else(|| {
+                    rmcp::ErrorData::invalid_params("Task ttl is outside the timestamp range", None)
+                })
+            })
+            .transpose()?;
+        let surface_hash = self.task_surface_hash().to_string();
 
-        let task_id = format!(
-            "{}-{}",
-            tool_name.replace('-', "_"),
-            self.task_counter.fetch_add(1, Ordering::SeqCst)
-        );
-        let now = Utc::now().to_rfc3339();
-        let task = Task::new(
-            task_id.clone(),
-            TaskStatus::Working,
-            now.clone(),
-            now.clone(),
-        )
-        .with_status_message("Queued run command")
-        .with_poll_interval(100);
+        let (task_id, key, semantic, stored) = {
+            let mut created = None;
+            for _ in 0..8 {
+                let task_id = generate_task_id();
+                let key = derive_task_storage_key_with_namespace(
+                    &surface_hash,
+                    &runtime.access,
+                    &task_id,
+                    scope.as_ref(),
+                    runtime.storage_namespace.as_ref(),
+                )
+                .ok_or_else(task_creation_failed)?;
+                let semantic = SemanticTaskRecord::working(
+                    task_id.clone(),
+                    surface_hash.clone(),
+                    access_tag,
+                    scope_value.clone(),
+                    SemanticTaskProfile::Legacy2025_11_25,
+                    now,
+                    expires_at,
+                );
+                let stored =
+                    StoredTaskRecord::encode(&semantic).map_err(|_| task_creation_failed())?;
+                match runtime
+                    .store
+                    .create(key, stored.clone())
+                    .await
+                    .map_err(|_| task_creation_failed())?
+                {
+                    TaskStoreCreate::Created => {
+                        created = Some((task_id, key, semantic, stored));
+                        break;
+                    }
+                    TaskStoreCreate::Occupied => continue,
+                    TaskStoreCreate::CapacityExceeded => return Err(task_creation_failed()),
+                }
+            }
+            created.ok_or_else(task_creation_failed)?
+        };
 
-        self.tasks.lock().await.insert(
-            task_id.clone(),
-            TaskRecord {
-                task: task.clone(),
-                payload: None,
-            },
-        );
-
-        let tasks = self.tasks.clone();
+        let task = legacy_task(&semantic);
         let server = self.clone();
+        let live_tasks = self.live_tasks.clone();
+        let task_id_for_runner = task_id.clone();
         let context_meta = context.meta.clone();
         let client = context.peer.clone();
-        tokio::spawn(async move {
-            let result = server
-                .execute_run_tool(tool_name, request_meta, context_meta, client, run_request)
-                .await;
-            let completion_message = task_completion_message(&result);
-            let mut tasks = tasks.lock().await;
-            if let Some(record) = tasks.get_mut(&task_id) {
-                record.task.status = TaskStatus::Completed;
-                record.task.status_message = Some(completion_message.to_string());
-                record.task.last_updated_at = Utc::now().to_rfc3339();
-                record.payload = Some(serde_json::to_value(result).unwrap_or_else(|error| {
-                    json!({
-                        "content": [{ "type": "text", "text": error.to_string() }],
-                        "isError": true
-                    })
-                }));
+        let (start, ready) = tokio::sync::oneshot::channel();
+        let runner_runtime = runtime.clone();
+        let runner_stored = stored.clone();
+        let runner_semantic = semantic.clone();
+        let completion_runtime = runtime.clone();
+        let completion_stored = stored.clone();
+        let completion_semantic = semantic.clone();
+        let completion_live_tasks = self.live_tasks.clone();
+        let completion_task_id = task_id.clone();
+        let handle = tokio::spawn(async move {
+            if !await_task_start(
+                ready,
+                runner_runtime.store.clone(),
+                live_tasks.clone(),
+                task_id_for_runner.clone(),
+                key,
+            )
+            .await
+            {
+                return;
             }
+            let mut result = match invocation {
+                LegacyTaskInvocation::EffectLane(request) => {
+                    server
+                        .execute_run_tool(tool_name, request_meta, context_meta, client, request)
+                        .await
+                }
+                LegacyTaskInvocation::Native(arguments) => {
+                    server
+                        .execute_native_tool(
+                            tool_name,
+                            request_meta,
+                            context_meta,
+                            client,
+                            arguments,
+                        )
+                        .await
+                }
+            };
+            let meta = result.meta.get_or_insert_with(Meta::default);
+            meta.0.insert(
+                "io.modelcontextprotocol/related-task".to_string(),
+                json!({ "taskId": &task_id_for_runner }),
+            );
+            let (status, value) = match serde_json::to_value(&result) {
+                Ok(value) => {
+                    let status = if result.is_error.unwrap_or(false) {
+                        SemanticTaskStatus::Failed
+                    } else {
+                        SemanticTaskStatus::Completed
+                    };
+                    (status, value)
+                }
+                Err(_) => (SemanticTaskStatus::Failed, task_execution_failed_outcome()),
+            };
+            commit_task_outcome(
+                &runner_runtime,
+                key,
+                runner_stored,
+                runner_semantic,
+                status,
+                value,
+            )
+            .await;
         });
+        let abort_handle = handle.abort_handle();
+        self.live_tasks
+            .lock()
+            .await
+            .insert(task_id.clone(), LiveTaskControl::Legacy(abort_handle));
+        monitor_task_runner(
+            handle,
+            completion_runtime,
+            key,
+            completion_stored,
+            completion_semantic,
+            completion_live_tasks,
+            completion_task_id,
+        );
+        schedule_task_expiration(
+            runtime.store.clone(),
+            self.live_tasks.clone(),
+            task_id,
+            key,
+            semantic.expires_at(),
+        );
+        let _ = start.send(());
 
         Ok(CreateTaskResult::new(task))
     }
@@ -1850,10 +3003,10 @@ impl ServerHandler for CliMcpServer {
             request.as_ref().and_then(|request| request.meta.as_ref()),
             &context,
         )?;
-        self.ensure_tasks_supported()?;
-        let tasks = self.tasks.lock().await;
-        Ok(ListTasksResult::new(
-            tasks.values().map(|record| record.task.clone()).collect(),
+        Err(rmcp::ErrorData::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            "Method not found",
+            None,
         ))
     }
 
@@ -1864,13 +3017,12 @@ impl ServerHandler for CliMcpServer {
     ) -> std::result::Result<GetTaskResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
         self.ensure_tasks_supported()?;
-        let tasks = self.tasks.lock().await;
-        let record = tasks.get(&request.task_id).ok_or_else(|| {
-            rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
-        })?;
+        let record = self
+            .load_task(&request.task_id, &context.extensions)
+            .await?;
         Ok(GetTaskResult {
             meta: None,
-            task: record.task.clone(),
+            task: legacy_task(&record.semantic),
         })
     }
 
@@ -1881,17 +3033,15 @@ impl ServerHandler for CliMcpServer {
     ) -> std::result::Result<GetTaskPayloadResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
         self.ensure_tasks_supported()?;
-        let tasks = self.tasks.lock().await;
-        let record = tasks.get(&request.task_id).ok_or_else(|| {
-            rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
-        })?;
-        let Some(payload) = &record.payload else {
-            return Err(rmcp::ErrorData::invalid_params(
-                format!("Task {} is not complete", request.task_id),
-                None,
-            ));
-        };
-        Ok(GetTaskPayloadResult::new(payload.clone()))
+        loop {
+            let record = self
+                .load_task(&request.task_id, &context.extensions)
+                .await?;
+            if let Some(payload) = record.semantic.outcome() {
+                return legacy_task_payload(payload);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     async fn cancel_task(
@@ -1901,36 +3051,416 @@ impl ServerHandler for CliMcpServer {
     ) -> std::result::Result<CancelTaskResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
         self.ensure_tasks_supported()?;
-        let mut tasks = self.tasks.lock().await;
-        let record = tasks.get_mut(&request.task_id).ok_or_else(|| {
-            rmcp::ErrorData::invalid_params(format!("Unknown task {}", request.task_id), None)
-        })?;
-        if record.task.status == TaskStatus::Working {
-            record.task.status = TaskStatus::Cancelled;
-            record.task.status_message = Some("Task cancelled".to_string());
-            record.task.last_updated_at = Utc::now().to_rfc3339();
+        let runtime = self.task_runtime()?.clone();
+        loop {
+            let loaded = self
+                .load_task(&request.task_id, &context.extensions)
+                .await?;
+            if loaded.semantic.status() != SemanticTaskStatus::Working {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "Task is not cancellable",
+                    None,
+                ));
+            }
+            let next = loaded.semantic.successor(
+                SemanticTaskStatus::Cancelled,
+                Some(task_cancelled_outcome()),
+                unix_millis(),
+            );
+            let stored = StoredTaskRecord::encode(&next).map_err(|_| task_storage_failed())?;
+            match runtime
+                .store
+                .compare_and_set(loaded.key, loaded.stored.revision(), stored)
+                .await
+                .map_err(|_| task_storage_failed())?
+            {
+                TaskStoreWrite::Written => {
+                    if let Some(control) = self.live_tasks.lock().await.remove(&request.task_id) {
+                        control.cancel();
+                    }
+                    return Ok(CancelTaskResult {
+                        meta: None,
+                        task: legacy_task(&next),
+                    });
+                }
+                TaskStoreWrite::Conflict => continue,
+                TaskStoreWrite::Missing => return Err(unknown_task()),
+            }
         }
-        Ok(CancelTaskResult {
-            meta: None,
-            task: record.task.clone(),
-        })
     }
 }
 
-fn task_completion_message(result: &CallToolResult) -> &'static str {
-    if result
-        .structured_content
-        .as_ref()
-        .and_then(|value| value.get("error"))
-        .and_then(|error| error.get("code"))
-        .and_then(Value::as_str)
-        == Some("application_error")
-    {
-        "Run command completed with an application error"
-    } else if result.is_error.unwrap_or(false) {
-        "Run command completed with a framework error"
+fn legacy_task_ttl(
+    task: Option<&rmcp::model::JsonObject>,
+) -> std::result::Result<Option<u64>, rmcp::ErrorData> {
+    let Some(value) = task.and_then(|task| task.get("ttl")) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let ttl = value.as_number().and_then(|number| {
+        crate::JsonInteger::try_from_number(number.clone())
+            .ok()?
+            .as_u64()
+    });
+    ttl.map(Some).ok_or_else(|| {
+        rmcp::ErrorData::invalid_params("Task ttl must be a non-negative integer or null", None)
+    })
+}
+
+fn unix_millis() -> u64 {
+    u64::try_from(Utc::now().timestamp_millis()).unwrap_or(0)
+}
+
+fn timestamp(value: u64) -> String {
+    i64::try_from(value)
+        .ok()
+        .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+        .unwrap_or(chrono::DateTime::<Utc>::UNIX_EPOCH)
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn legacy_task(record: &SemanticTaskRecord) -> Task {
+    let status = match record.status() {
+        SemanticTaskStatus::Working => TaskStatus::Working,
+        SemanticTaskStatus::Completed => TaskStatus::Completed,
+        SemanticTaskStatus::Failed => TaskStatus::Failed,
+        SemanticTaskStatus::Cancelled => TaskStatus::Cancelled,
+    };
+    let message = match record.status() {
+        SemanticTaskStatus::Working => "Task is running",
+        SemanticTaskStatus::Completed => "Task completed",
+        SemanticTaskStatus::Failed => "Task failed",
+        SemanticTaskStatus::Cancelled => "Task cancelled",
+    };
+    let mut task = Task::new(
+        record.task_id().to_string(),
+        status,
+        timestamp(record.created_at()),
+        timestamp(record.updated_at()),
+    )
+    .with_status_message(message)
+    .with_poll_interval(100);
+    if let Some(expiration) = record.expires_at() {
+        task.ttl = Some(expiration.saturating_sub(record.created_at()));
+    }
+    task
+}
+
+async fn commit_task_outcome(
+    runtime: &TaskRuntime,
+    key: crate::TaskStorageKey,
+    mut stored: StoredTaskRecord,
+    mut current: SemanticTaskRecord,
+    status: SemanticTaskStatus,
+    outcome: Value,
+) {
+    loop {
+        if current.status() != SemanticTaskStatus::Working {
+            return;
+        }
+        let mut next = current.successor(status, Some(outcome.clone()), unix_millis());
+        let mut encoded = StoredTaskRecord::encode(&next);
+        if encoded.is_err() {
+            next = current.successor(
+                SemanticTaskStatus::Failed,
+                Some(task_execution_failed_outcome()),
+                unix_millis(),
+            );
+            encoded = StoredTaskRecord::encode(&next);
+        }
+        let Ok(encoded) = encoded else {
+            return;
+        };
+        match runtime
+            .store
+            .compare_and_set(key, stored.revision(), encoded)
+            .await
+        {
+            Ok(TaskStoreWrite::Written | TaskStoreWrite::Missing) => return,
+            Ok(TaskStoreWrite::Conflict) => match runtime.store.get(key).await {
+                Ok(Some(reloaded)) => match reloaded.decode() {
+                    Ok(record) => {
+                        stored = reloaded;
+                        current = record;
+                    }
+                    Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+                },
+                Ok(None) => return,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            },
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+        }
+    }
+}
+
+async fn await_task_start(
+    ready: tokio::sync::oneshot::Receiver<()>,
+    store: Arc<dyn TaskStore>,
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    task_id: String,
+    key: crate::TaskStorageKey,
+) -> bool {
+    if ready.await.is_ok() {
+        return true;
+    }
+    if store.remove(key).await.is_ok() {
+        if let Some(control) = live_tasks.lock().await.remove(&task_id) {
+            control.cancel();
+        }
     } else {
-        "Run command completed"
+        schedule_task_expiration(store, live_tasks, task_id, key, Some(unix_millis()));
+    }
+    false
+}
+
+fn monitor_task_runner(
+    handle: tokio::task::JoinHandle<()>,
+    runtime: TaskRuntime,
+    key: crate::TaskStorageKey,
+    stored: StoredTaskRecord,
+    semantic: SemanticTaskRecord,
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    task_id: String,
+) {
+    tokio::spawn(async move {
+        if handle.await.is_err_and(|error| error.is_panic()) {
+            commit_task_outcome(
+                &runtime,
+                key,
+                stored,
+                semantic,
+                SemanticTaskStatus::Failed,
+                task_execution_failed_outcome(),
+            )
+            .await;
+        }
+        live_tasks.lock().await.remove(&task_id);
+    });
+}
+
+fn schedule_task_expiration(
+    store: Arc<dyn TaskStore>,
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    task_id: String,
+    key: crate::TaskStorageKey,
+    deadline: Option<u64>,
+) {
+    let Some(deadline) = deadline else {
+        return;
+    };
+    tokio::spawn(async move {
+        let delay = deadline.saturating_sub(unix_millis());
+        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+        loop {
+            match store.remove(key).await {
+                Ok(_) => {
+                    if let Some(control) = live_tasks.lock().await.remove(&task_id) {
+                        control.cancel();
+                    }
+                    return;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            }
+        }
+    });
+}
+
+fn task_execution_failed_outcome() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "error": { "code": -32603, "message": "Task execution failed" }
+    })
+}
+
+fn task_cancelled_outcome() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "error": { "code": -32000, "message": "Task cancelled" }
+    })
+}
+
+fn unknown_task() -> rmcp::ErrorData {
+    rmcp::ErrorData::invalid_params("Unknown task", None)
+}
+
+fn task_creation_failed() -> rmcp::ErrorData {
+    rmcp::ErrorData::internal_error("Task creation failed", None)
+}
+
+fn task_access_scope_unavailable() -> rmcp::ErrorData {
+    rmcp::ErrorData::internal_error("Task access scope unavailable", None)
+}
+
+fn task_storage_failed() -> rmcp::ErrorData {
+    rmcp::ErrorData::internal_error("Task storage failed", None)
+}
+
+fn legacy_task_payload(
+    outcome: &Value,
+) -> std::result::Result<GetTaskPayloadResult, rmcp::ErrorData> {
+    let Some(error) = outcome.get("error").and_then(Value::as_object) else {
+        return Ok(GetTaskPayloadResult::new(outcome.clone()));
+    };
+    let code = error
+        .get("code")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok())
+        .ok_or_else(task_storage_failed)?;
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .ok_or_else(task_storage_failed)?;
+    Err(rmcp::ErrorData::new(
+        ErrorCode(code),
+        message.to_string(),
+        error.get("data").cloned(),
+    ))
+}
+
+fn complete_tool_result(
+    result: CallToolResult,
+) -> std::result::Result<Value, crate::stateless::StatelessDispatchError> {
+    let mut value = serde_json::to_value(result)
+        .map_err(|_| crate::stateless::StatelessDispatchError::internal("Serialization failed"))?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        crate::stateless::StatelessDispatchError::internal("Serialization failed")
+    })?;
+    object.insert(
+        "resultType".to_string(),
+        Value::String("complete".to_string()),
+    );
+    Ok(value)
+}
+
+fn extension_task_handle(record: &SemanticTaskRecord) -> Value {
+    extension_task(record, "task")
+}
+
+fn extension_task_result(record: &SemanticTaskRecord) -> Value {
+    extension_task(record, "complete")
+}
+
+fn extension_task(record: &SemanticTaskRecord, result_type: &'static str) -> Value {
+    let status = match record.status() {
+        SemanticTaskStatus::Working => "working",
+        SemanticTaskStatus::Completed => "completed",
+        SemanticTaskStatus::Failed => "failed",
+        SemanticTaskStatus::Cancelled => "cancelled",
+    };
+    let message = match record.status() {
+        SemanticTaskStatus::Working => "Task is running",
+        SemanticTaskStatus::Completed => "Task completed",
+        SemanticTaskStatus::Failed => "Task failed",
+        SemanticTaskStatus::Cancelled => "Task cancelled",
+    };
+    let mut value = json!({
+        "resultType": result_type,
+        "taskId": record.task_id(),
+        "status": status,
+        "statusMessage": message,
+        "createdAt": timestamp(record.created_at()),
+        "lastUpdatedAt": timestamp(record.updated_at()),
+        "ttlMs": record.expires_at().map(|expiration| expiration.saturating_sub(record.created_at())),
+        "pollIntervalMs": 100,
+    });
+    if let Some(outcome) = record.outcome() {
+        let projection = match record.status() {
+            SemanticTaskStatus::Completed => Some(("result", outcome.clone())),
+            SemanticTaskStatus::Failed => Some((
+                "error",
+                outcome
+                    .get("error")
+                    .cloned()
+                    .expect("validated extension failure has an error object"),
+            )),
+            SemanticTaskStatus::Working | SemanticTaskStatus::Cancelled => None,
+        };
+        if let Some((field, outcome)) = projection {
+            value
+                .as_object_mut()
+                .expect("extension task projection is an object")
+                .insert(field.to_string(), outcome);
+        }
+    }
+    value
+}
+
+fn extension_capability(
+    meta: &Value,
+) -> std::result::Result<bool, crate::stateless::StatelessDispatchError> {
+    let Some(capabilities) = meta
+        .as_object()
+        .and_then(|meta| meta.get("io.modelcontextprotocol/clientCapabilities"))
+    else {
+        return Ok(false);
+    };
+    let capabilities = capabilities.as_object().ok_or_else(|| {
+        crate::stateless::StatelessDispatchError::invalid_params(
+            "Invalid Tasks Extension capability",
+        )
+    })?;
+    let Some(extensions) = capabilities.get("extensions") else {
+        return Ok(false);
+    };
+    let extensions = extensions.as_object().ok_or_else(|| {
+        crate::stateless::StatelessDispatchError::invalid_params(
+            "Invalid Tasks Extension capability",
+        )
+    })?;
+    let capability = extensions.get("io.modelcontextprotocol/tasks");
+    let Some(capability) = capability else {
+        return Ok(false);
+    };
+    match capability.as_object() {
+        Some(capability) if capability.is_empty() => Ok(true),
+        _ => Err(crate::stateless::StatelessDispatchError::invalid_params(
+            "Invalid Tasks Extension capability",
+        )),
+    }
+}
+
+fn require_extension_capability(
+    meta: Option<&Value>,
+) -> std::result::Result<(), crate::stateless::StatelessDispatchError> {
+    if extension_capability(meta.unwrap_or(&Value::Null))? {
+        Ok(())
+    } else {
+        Err(crate::stateless::StatelessDispatchError::missing_capability())
+    }
+}
+
+fn take_task_id(
+    params: &mut serde_json::Map<String, Value>,
+) -> std::result::Result<String, crate::stateless::StatelessDispatchError> {
+    params
+        .remove("taskId")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .ok_or_else(|| crate::stateless::StatelessDispatchError::invalid_params("Invalid params"))
+}
+
+fn map_task_error(error: rmcp::ErrorData) -> crate::stateless::StatelessDispatchError {
+    match error.code {
+        ErrorCode::INTERNAL_ERROR => {
+            crate::stateless::StatelessDispatchError::internal("Task storage failed")
+        }
+        _ => crate::stateless::StatelessDispatchError::invalid_params("Unknown task"),
+    }
+}
+
+fn ensure_ordinary_task_support(
+    _tool_name: &str,
+    task_support: TaskSupportSpec,
+) -> std::result::Result<(), rmcp::ErrorData> {
+    if matches!(task_support, TaskSupportSpec::Required) {
+        Err(rmcp::ErrorData::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            "Method not found",
+            None,
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -2279,6 +3809,623 @@ impl NoAnnotation for RawResource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::derive_task_storage_key;
+
+    struct RetryRemovalStore {
+        attempts: std::sync::atomic::AtomicUsize,
+    }
+
+    struct BlockingCreateStore {
+        attempts: std::sync::atomic::AtomicUsize,
+        entered: Notify,
+        release: Notify,
+    }
+
+    struct CommittedPendingCreateStore {
+        inner: Arc<InMemoryTaskStore>,
+        committed: Notify,
+    }
+
+    impl TaskStore for CommittedPendingCreateStore {
+        fn scope(&self) -> TaskStoreScope {
+            TaskStoreScope::ServerInstance
+        }
+
+        fn create(
+            &self,
+            key: crate::TaskStorageKey,
+            record: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreCreate, crate::TaskStoreError>>
+        {
+            Box::pin(async move {
+                let result = self.inner.create(key, record).await;
+                self.committed.notify_one();
+                std::future::pending::<()>().await;
+                result
+            })
+        }
+
+        fn get(
+            &self,
+            key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<Option<StoredTaskRecord>, crate::TaskStoreError>,
+        > {
+            self.inner.get(key)
+        }
+
+        fn compare_and_set(
+            &self,
+            key: crate::TaskStorageKey,
+            expected: crate::TaskRevision,
+            next: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreWrite, crate::TaskStoreError>>
+        {
+            self.inner.compare_and_set(key, expected, next)
+        }
+
+        fn remove(
+            &self,
+            key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<crate::TaskStoreRemoval, crate::TaskStoreError>,
+        > {
+            self.inner.remove(key)
+        }
+    }
+
+    impl TaskStore for BlockingCreateStore {
+        fn scope(&self) -> TaskStoreScope {
+            TaskStoreScope::ServerInstance
+        }
+
+        fn create(
+            &self,
+            _key: crate::TaskStorageKey,
+            _record: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreCreate, crate::TaskStoreError>>
+        {
+            Box::pin(async move {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                self.entered.notify_one();
+                self.release.notified().await;
+                Err(crate::TaskStoreError::new(std::io::Error::other(
+                    "create stopped for test",
+                )))
+            })
+        }
+
+        fn get(
+            &self,
+            _key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<Option<StoredTaskRecord>, crate::TaskStoreError>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn compare_and_set(
+            &self,
+            _key: crate::TaskStorageKey,
+            _expected: crate::TaskRevision,
+            _next: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreWrite, crate::TaskStoreError>>
+        {
+            Box::pin(async { Ok(TaskStoreWrite::Missing) })
+        }
+
+        fn remove(
+            &self,
+            _key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<crate::TaskStoreRemoval, crate::TaskStoreError>,
+        > {
+            Box::pin(async { Ok(crate::TaskStoreRemoval::Missing) })
+        }
+    }
+
+    impl TaskStore for RetryRemovalStore {
+        fn scope(&self) -> TaskStoreScope {
+            TaskStoreScope::ServerInstance
+        }
+
+        fn create(
+            &self,
+            _key: crate::TaskStorageKey,
+            _record: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreCreate, crate::TaskStoreError>>
+        {
+            Box::pin(async { Ok(TaskStoreCreate::Created) })
+        }
+
+        fn get(
+            &self,
+            _key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<Option<StoredTaskRecord>, crate::TaskStoreError>,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn compare_and_set(
+            &self,
+            _key: crate::TaskStorageKey,
+            _expected: crate::TaskRevision,
+            _next: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreWrite, crate::TaskStoreError>>
+        {
+            Box::pin(async { Ok(TaskStoreWrite::Missing) })
+        }
+
+        fn remove(
+            &self,
+            _key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<crate::TaskStoreRemoval, crate::TaskStoreError>,
+        > {
+            Box::pin(async move {
+                if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(crate::TaskStoreError::new(std::io::Error::other(
+                        "transient removal failure",
+                    )))
+                } else {
+                    Ok(crate::TaskStoreRemoval::Removed)
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn expiration_retries_removal_without_retaining_the_server_mount() {
+        let concrete = Arc::new(RetryRemovalStore {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let store: Arc<dyn TaskStore> = concrete.clone();
+        let mount = TaskStoreMount::acquire(&store).unwrap();
+        let task_id = "11".repeat(32);
+        let key = derive_task_storage_key(
+            &"22".repeat(32),
+            &TaskAccessPolicy::CapabilityId,
+            &task_id,
+            None,
+        )
+        .unwrap();
+
+        schedule_task_expiration(
+            store.clone(),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            task_id,
+            key,
+            Some(unix_millis()),
+        );
+        drop(mount);
+        let replacement = TaskStoreMount::acquire(&store)
+            .expect("expiration cleanup must not retain the server-instance mount");
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while concrete.attempts.load(Ordering::SeqCst) < 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("expiration cleanup retries transient removal failures");
+        drop(replacement);
+    }
+
+    #[test]
+    fn sequential_legacy_servers_namespace_a_reused_connection_store() {
+        let store: Arc<dyn TaskStore> = InMemoryTaskStore::connection();
+        let first = CliMcpServer::builder(CommandRegistry::new("tasks", "Task tests"))
+            .task_runtime(store.clone(), TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let first_namespace = first
+            .task_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.storage_namespace)
+            .unwrap();
+        let surface_hash = first.task_surface_hash().to_string();
+        drop(first);
+
+        let second = CliMcpServer::builder(CommandRegistry::new("tasks", "Task tests"))
+            .task_runtime(store, TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let second_namespace = second
+            .task_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.storage_namespace)
+            .unwrap();
+        let task_id = "11".repeat(32);
+
+        assert_ne!(first_namespace, second_namespace);
+        assert_ne!(
+            derive_task_storage_key_with_namespace(
+                &surface_hash,
+                &TaskAccessPolicy::CapabilityId,
+                &task_id,
+                None,
+                Some(&first_namespace),
+            ),
+            derive_task_storage_key_with_namespace(
+                &surface_hash,
+                &TaskAccessPolicy::CapabilityId,
+                &task_id,
+                None,
+                Some(&second_namespace),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn dropped_creation_gate_removes_the_unpublished_task() {
+        let store = InMemoryTaskStore::server_instance();
+        let task_id = "11".repeat(32);
+        let key = derive_task_storage_key(
+            &"22".repeat(32),
+            &TaskAccessPolicy::CapabilityId,
+            &task_id,
+            None,
+        )
+        .unwrap();
+        let record = SemanticTaskRecord::working(
+            task_id.clone(),
+            "22".repeat(32),
+            0,
+            None,
+            SemanticTaskProfile::TasksExtension,
+            1_700_000_000_000,
+            Some(1_700_000_060_000),
+        );
+        store
+            .create(key, StoredTaskRecord::encode(&record).unwrap())
+            .await
+            .unwrap();
+        let cancellation = TaskCancellation::default();
+        let live_tasks = Arc::new(Mutex::new(BTreeMap::from([(
+            task_id.clone(),
+            LiveTaskControl::Extension(cancellation.clone()),
+        )])));
+        let (start, ready) = tokio::sync::oneshot::channel();
+        drop(start);
+
+        assert!(!await_task_start(ready, store.clone(), live_tasks.clone(), task_id, key,).await);
+        assert!(store.get(key).await.unwrap().is_none());
+        assert!(live_tasks.lock().await.is_empty());
+        tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            cancellation.cancelled(),
+        )
+        .await
+        .expect("cleanup cancels the unpublished live-task reservation");
+    }
+
+    #[tokio::test]
+    async fn panicked_task_runners_record_failure_and_release_the_live_slot() {
+        for (task_byte, profile, expires_at) in [
+            ("11", SemanticTaskProfile::Legacy2025_11_25, None),
+            (
+                "33",
+                SemanticTaskProfile::TasksExtension,
+                Some(1_700_000_060_000),
+            ),
+        ] {
+            let store = match profile {
+                SemanticTaskProfile::Legacy2025_11_25 => InMemoryTaskStore::connection(),
+                SemanticTaskProfile::TasksExtension => InMemoryTaskStore::server_instance(),
+            };
+            let task_id = task_byte.repeat(32);
+            let key = derive_task_storage_key(
+                &"22".repeat(32),
+                &TaskAccessPolicy::CapabilityId,
+                &task_id,
+                None,
+            )
+            .unwrap();
+            let semantic = SemanticTaskRecord::working(
+                task_id.clone(),
+                "22".repeat(32),
+                0,
+                None,
+                profile,
+                1_700_000_000_000,
+                expires_at,
+            );
+            let stored = StoredTaskRecord::encode(&semantic).unwrap();
+            store.create(key, stored.clone()).await.unwrap();
+            let live_tasks = Arc::new(Mutex::new(BTreeMap::from([(
+                task_id.clone(),
+                LiveTaskControl::Extension(TaskCancellation::default()),
+            )])));
+            let runtime = TaskRuntime {
+                store: store.clone(),
+                access: TaskAccessPolicy::CapabilityId,
+                storage_namespace: None,
+                _mount: None,
+            };
+
+            monitor_task_runner(
+                tokio::spawn(async { panic!("runner test panic") }),
+                runtime,
+                key,
+                stored,
+                semantic,
+                live_tasks.clone(),
+                task_id,
+            );
+
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    let failed = store
+                        .get(key)
+                        .await
+                        .unwrap()
+                        .and_then(|stored| stored.decode().ok())
+                        .is_some_and(|record| record.status() == SemanticTaskStatus::Failed);
+                    if failed && live_tasks.lock().await.is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("runner monitor records a static failure and releases the live slot");
+        }
+    }
+
+    #[tokio::test]
+    async fn extension_creation_does_not_hold_the_live_task_lock_during_store_io() {
+        let spec = crate::CommandSpec::new(["work"], "Work", "Perform work")
+            .task_support(TaskSupportSpec::Optional)
+            .with_output(crate::OutputContract {
+                application: Some(crate::ApplicationResultContract::new(json!({
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                }))),
+                ..crate::OutputContract::default()
+            });
+        let registry =
+            CommandRegistry::new("tasks", "Task tests").register_dynamic(spec, |_| async {
+                Ok::<_, crate::DynamicCommandFailure>(crate::ApplicationSuccess::value(
+                    json!({ "ok": true }),
+                ))
+            });
+        let surface = NativeToolSurface::builder("task-tools")
+            .framework_help(crate::FrameworkHelpProjection::Omitted)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .task_delivery(crate::TaskDeliveryDecl::tasks_extension(
+                crate::ExtensionOptionalPolicy::DeferredWhenAvailable,
+                60_000,
+            ))
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        let store = Arc::new(BlockingCreateStore {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            entered: Notify::new(),
+            release: Notify::new(),
+        });
+        let server = CliMcpServer::builder(registry)
+            .surface(surface)
+            .task_runtime(store.clone(), TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let call_server = server.clone();
+        let call = tokio::spawn(async move {
+            call_server
+                .create_extension_task(
+                    "work".to_string(),
+                    rmcp::model::JsonObject::default(),
+                    Meta::default(),
+                    &Extensions::default(),
+                    60_000,
+                    None,
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), store.entered.notified())
+            .await
+            .expect("store creation reaches the external store");
+
+        let live_task_guard =
+            tokio::time::timeout(std::time::Duration::from_secs(1), server.live_tasks.lock())
+                .await
+                .expect("store creation must not retain the unrelated live-task lock");
+        drop(live_task_guard);
+        store.release.notify_one();
+
+        let result = call.await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(store.attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_creation_cleans_up_a_record_committed_before_store_yield() {
+        let spec = crate::CommandSpec::new(["work"], "Work", "Perform work")
+            .task_support(TaskSupportSpec::Required)
+            .with_output(crate::OutputContract {
+                application: Some(crate::ApplicationResultContract::new(json!({
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                }))),
+                ..crate::OutputContract::default()
+            });
+        let registry =
+            CommandRegistry::new("tasks", "Task tests").register_dynamic(spec, |_| async {
+                Ok::<_, crate::DynamicCommandFailure>(crate::ApplicationSuccess::value(
+                    json!({ "ok": true }),
+                ))
+            });
+        let surface = NativeToolSurface::builder("task-tools")
+            .framework_help(crate::FrameworkHelpProjection::Omitted)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .task_delivery(crate::TaskDeliveryDecl::tasks_extension(
+                crate::ExtensionOptionalPolicy::DeferredWhenAvailable,
+                60_000,
+            ))
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        let inner = InMemoryTaskStore::server_instance();
+        let store = Arc::new(CommittedPendingCreateStore {
+            inner: inner.clone(),
+            committed: Notify::new(),
+        });
+        let server = CliMcpServer::builder(registry)
+            .surface(surface)
+            .task_runtime(store.clone(), TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let call_server = server.clone();
+        let call = tokio::spawn(async move {
+            call_server
+                .create_extension_task(
+                    "work".to_string(),
+                    rmcp::model::JsonObject::default(),
+                    Meta::default(),
+                    &Extensions::default(),
+                    60_000,
+                    None,
+                )
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            store.committed.notified(),
+        )
+        .await
+        .expect("external store commits before yielding");
+        assert_eq!(inner.record_count_for_test().await, 1);
+
+        call.abort();
+        match call.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("cancelled creation unexpectedly completed"),
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while inner.record_count_for_test().await != 0
+                || !server.live_tasks.lock().await.is_empty()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled creation removes the committed record and live reservation");
+    }
+
+    #[test]
+    fn stateless_task_errors_map_by_json_rpc_code() {
+        let storage = map_task_error(rmcp::ErrorData::internal_error("renamed detail", None));
+        assert_eq!(storage.code, ErrorCode::INTERNAL_ERROR.0);
+        assert_eq!(storage.message, "Task storage failed");
+
+        let unknown = map_task_error(rmcp::ErrorData::invalid_params("Task storage failed", None));
+        assert_eq!(unknown.code, ErrorCode::INVALID_PARAMS.0);
+        assert_eq!(unknown.message, "Unknown task");
+
+        let unexpected = map_task_error(rmcp::ErrorData::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            "private detail",
+            None,
+        ));
+        assert_eq!(unexpected.code, ErrorCode::INVALID_PARAMS.0);
+        assert_eq!(unexpected.message, "Unknown task");
+    }
+
+    #[test]
+    fn extension_task_projection_separates_handles_results_and_errors() {
+        let working = SemanticTaskRecord::working(
+            "11".repeat(32),
+            "22".repeat(32),
+            0,
+            None,
+            SemanticTaskProfile::TasksExtension,
+            1,
+            Some(1_001),
+        );
+        assert_eq!(extension_task_handle(&working)["resultType"], "task");
+        assert_eq!(extension_task_result(&working)["resultType"], "complete");
+
+        let failed = working.successor(
+            SemanticTaskStatus::Failed,
+            Some(task_execution_failed_outcome()),
+            2,
+        );
+        let failed = extension_task_result(&failed);
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["error"]["code"], -32603);
+        assert_eq!(failed["error"]["message"], "Task execution failed");
+        assert!(failed["error"].get("error").is_none());
+
+        let cancelled = working.successor(
+            SemanticTaskStatus::Cancelled,
+            Some(task_cancelled_outcome()),
+            2,
+        );
+        let cancelled = extension_task_result(&cancelled);
+        assert_eq!(cancelled["status"], "cancelled");
+        assert!(cancelled.get("error").is_none());
+        assert!(cancelled.get("result").is_none());
+    }
+
+    #[test]
+    fn legacy_task_payload_preserves_the_terminal_json_rpc_error_channel() {
+        let error = legacy_task_payload(&task_cancelled_outcome()).unwrap_err();
+        assert_eq!(error.code, ErrorCode(-32000));
+        assert_eq!(error.message, "Task cancelled");
+        assert!(error.data.is_none());
+
+        let result = json!({ "content": [], "isError": false });
+        assert_eq!(
+            serde_json::to_value(legacy_task_payload(&result).unwrap()).unwrap(),
+            result
+        );
+    }
+
+    #[test]
+    fn required_task_support_rejects_ordinary_native_dispatch() {
+        let error = ensure_ordinary_task_support("work", TaskSupportSpec::Required).unwrap_err();
+        assert_eq!(error.code, ErrorCode::METHOD_NOT_FOUND);
+        assert_eq!(error.message, "Method not found");
+        assert!(ensure_ordinary_task_support("work", TaskSupportSpec::Optional).is_ok());
+        assert!(ensure_ordinary_task_support("work", TaskSupportSpec::Forbidden).is_ok());
+    }
+
+    #[test]
+    fn malformed_extension_containers_are_invalid_params() {
+        for meta in [
+            json!({
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "extensions": []
+                }
+            }),
+            json!({
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "extensions": "tasks"
+                }
+            }),
+        ] {
+            let error = extension_capability(&meta).unwrap_err();
+            assert_eq!(error.code, -32602);
+            assert_eq!(error.message, "Invalid Tasks Extension capability");
+        }
+        assert!(matches!(
+            extension_capability(&json!({
+                "io.modelcontextprotocol/clientCapabilities": {}
+            })),
+            Ok(false)
+        ));
+    }
 
     fn meta(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Meta {
         Meta(
@@ -2287,6 +4434,48 @@ mod tests {
                 .map(|(key, value)| (key.to_string(), value))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn legacy_creation_wire_adds_authoritative_related_task_metadata() {
+        let task = Task::new(
+            "task-example".to_string(),
+            TaskStatus::Working,
+            "2025-11-25T10:30:00.000Z".to_string(),
+            "2025-11-25T10:30:00.000Z".to_string(),
+        );
+        let message = JsonRpcMessage::response(
+            ServerResult::CreateTaskResult(CreateTaskResult::new(task)),
+            rmcp::model::NumberOrString::Number(1),
+        );
+
+        let wire = serde_json::to_value(with_legacy_related_task_meta(message)).unwrap();
+        assert_eq!(wire["result"]["task"]["taskId"], "task-example");
+        assert_eq!(
+            wire["result"]["_meta"]["io.modelcontextprotocol/related-task"],
+            json!({ "taskId": "task-example" })
+        );
+    }
+
+    #[test]
+    fn legacy_task_ttl_accepts_exact_zero_fraction_integers() {
+        let exact = serde_json::from_str::<Value>("100.0").unwrap();
+        let fractional = serde_json::from_str::<Value>("100.5").unwrap();
+        assert_eq!(
+            legacy_task_ttl(Some(&serde_json::Map::from_iter([(
+                "ttl".to_string(),
+                exact,
+            )])))
+            .unwrap(),
+            Some(100)
+        );
+        assert!(
+            legacy_task_ttl(Some(&serde_json::Map::from_iter([(
+                "ttl".to_string(),
+                fractional,
+            )])))
+            .is_err()
+        );
     }
 
     #[test]
@@ -2511,24 +4700,6 @@ mod tests {
                 .text
                 .contains("application_error")
         );
-        assert_eq!(
-            task_completion_message(&result),
-            "Run command completed with an application error"
-        );
-    }
-
-    #[test]
-    fn task_completion_distinguishes_framework_errors_and_success() {
-        let framework = CallToolResult::structured_error(json!({
-            "status": "failed",
-            "error": { "code": "handler_failed" },
-        }));
-        assert_eq!(
-            task_completion_message(&framework),
-            "Run command completed with a framework error"
-        );
-        let success = CallToolResult::structured(json!({ "status": "ok" }));
-        assert_eq!(task_completion_message(&success), "Run command completed");
     }
 
     #[test]

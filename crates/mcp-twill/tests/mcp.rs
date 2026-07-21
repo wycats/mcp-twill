@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -381,16 +381,13 @@ async fn task_augmented_run_completes_when_negotiated() -> anyhow::Result<()> {
         };
     }
     assert_eq!(task.task.status, TaskStatus::Completed);
-    assert_eq!(
-        task.task.status_message.as_deref(),
-        Some("Run command completed")
-    );
+    assert_eq!(task.task.status_message.as_deref(), Some("Task completed"));
 
     let payload = client
         .send_request(ClientRequest::GetTaskResultRequest(Request::new(
             GetTaskResultParams {
                 meta: None,
-                task_id,
+                task_id: task_id.clone(),
             },
         )))
         .await?;
@@ -400,8 +397,187 @@ async fn task_augmented_run_completes_when_negotiated() -> anyhow::Result<()> {
         other => panic!("expected task payload result, got {other:?}"),
     };
     assert!(value.to_string().contains("issues"));
+    assert_eq!(
+        value["_meta"]["io.modelcontextprotocol/related-task"]["taskId"],
+        task_id
+    );
 
     client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_task_result_waits_for_a_working_task_to_finish() -> anyhow::Result<()> {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let registry = CommandRegistry::new("blocking-task", "Blocking task test").register(
+        CommandSpec::new(["issues", "wait"], "Wait", "Wait for release"),
+        {
+            let started = started.clone();
+            let release = release.clone();
+            move |_| {
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(CommandOutput::structured(json!({ "done": true })))
+                }
+            }
+        },
+    );
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(registry)?;
+    tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient::new().serve(client_transport).await?;
+
+    let request = RunRequest {
+        command: "issues wait".to_string(),
+        args: BTreeMap::new(),
+        stdin: None,
+        output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
+        dry_run: false,
+    };
+    let created = client
+        .send_request(ClientRequest::CallToolRequest(Request::new(
+            CallToolRequestParams::new("run")
+                .with_arguments(json_object(request)?)
+                .with_task(serde_json::Map::new()),
+        )))
+        .await?;
+    let ServerResult::CreateTaskResult(created) = created else {
+        panic!("expected CreateTaskResult, got {created:?}");
+    };
+    started.notified().await;
+
+    let handle = client
+        .send_cancellable_request(
+            ClientRequest::GetTaskResultRequest(Request::new(GetTaskResultParams {
+                meta: None,
+                task_id: created.task.task_id,
+            })),
+            PeerRequestOptions::no_options(),
+        )
+        .await?;
+    let mut result = Box::pin(handle.await_response());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), result.as_mut())
+            .await
+            .is_err()
+    );
+
+    release.notify_one();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), result.as_mut()).await??;
+    let value = match result {
+        ServerResult::GetTaskPayloadResult(payload) => serde_json::to_value(payload)?,
+        ServerResult::CallToolResult(result) => serde_json::to_value(result)?,
+        other => panic!("expected task payload result, got {other:?}"),
+    };
+    assert_eq!(
+        value["structuredContent"]["output"]["structured"]["done"],
+        true
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_task_runtime_belongs_to_one_negotiated_session() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(registry())?;
+    let second = server.clone();
+    let serving = tokio::spawn(async move { server.serve(server_transport).await });
+    let client = TestClient::new().serve(client_transport).await?;
+    let running = serving.await??;
+
+    let (second_transport, _unused_peer) = tokio::io::duplex(1024);
+    let error = match second.serve(second_transport).await {
+        Ok(_) => anyhow::bail!("a second legacy session reused one task runtime"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("already belongs to an MCP session")
+    );
+
+    client.cancel().await?;
+    running.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ending_legacy_session_signals_live_task_work() -> anyhow::Result<()> {
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    let started = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let started_for_handler = started.clone();
+    let dropped_for_handler = dropped.clone();
+    let registry = CommandRegistry::new("tasks", "Tasks").register(
+        CommandSpec::new(["work"], "Work", "Perform work"),
+        move |_| {
+            let started = started_for_handler.clone();
+            let dropped = dropped_for_handler.clone();
+            async move {
+                let _signal = DropSignal(dropped);
+                started.store(true, Ordering::Release);
+                std::future::pending::<mcp_twill::Result<CommandOutput>>().await
+            }
+        },
+    );
+    let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = CliMcpServer::new(registry)?;
+    let server_task = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient::new().serve(client_transport).await?;
+    let request = RunRequest {
+        command: "work".to_string(),
+        args: BTreeMap::new(),
+        stdin: None,
+        output: None,
+        mode: mcp_twill::RunMode::Execute,
+        approval: None,
+        dry_run: false,
+    };
+    let params = CallToolRequestParams::new("run")
+        .with_arguments(json_object(request)?)
+        .with_task(serde_json::Map::new());
+    let created = client
+        .send_request(ClientRequest::CallToolRequest(Request::new(params)))
+        .await?;
+    assert!(matches!(created, ServerResult::CreateTaskResult(_)));
+    for _ in 0..50 {
+        if started.load(Ordering::Acquire) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(started.load(Ordering::Acquire));
+
+    client.cancel().await?;
+    server_task.await??;
+    for _ in 0..50 {
+        if dropped.load(Ordering::Acquire) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(dropped.load(Ordering::Acquire));
     Ok(())
 }
 

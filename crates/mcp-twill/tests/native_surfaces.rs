@@ -18,7 +18,7 @@ use mcp_twill::{
     NativeConfirmationRoute, NativeExposurePolicy, NativeToolSurface, OutputContract,
     PermissionAuthorizer, PermissionDecision, PermissionEffect, PermissionSpec, Release,
     ResolveResource, Resource, ResourceDecl, ResourceRefusal, RunMode, RunRequest,
-    ServingSurfaceIdentity, TaskSupportSpec,
+    ServingSurfaceIdentity, TaskDeliveryDecl, TaskSupportSpec,
 };
 use rmcp::{
     ClientHandler, ServiceExt,
@@ -963,16 +963,12 @@ fn adapter_finalization_rejects_stale_surfaces_and_sidecar_mismatches() -> anyho
     assert!(error.to_string().contains("rejects a bridge"));
 
     let required_registry = item_registry(TaskSupportSpec::Required);
-    let required_surface =
-        grouped_surface(&required_registry, NativeConfirmationRoute::Unavailable)?;
-    let required = match CliMcpServer::with_surface(required_registry, required_surface) {
-        Ok(_) => anyhow::bail!("expected ordinary delivery to reject required task support"),
-        Err(error) => error,
-    };
+    let required =
+        grouped_surface(&required_registry, NativeConfirmationRoute::Unavailable).unwrap_err();
     assert!(
         required
             .to_string()
-            .contains("ordinary delivery cannot serve required task support")
+            .contains("disabled task delivery cannot expose")
     );
     Ok(())
 }
@@ -1480,11 +1476,7 @@ async fn native_surfaces_fail_closed_for_every_task_request() -> anyhow::Result<
     ];
     for request in requests {
         let error = client.send_request(request).await.unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Task requests are unavailable on native tool surfaces")
-        );
+        assert!(error.to_string().contains("Method not found"));
     }
 
     client.cancel().await?;
@@ -1553,13 +1545,45 @@ async fn effect_lanes_enforce_forbidden_and_required_task_delivery() -> anyhow::
         .await
         .unwrap_err();
     assert!(
-        error.to_string().contains("requires task-based invocation")
-            || error
-                .to_string()
-                .contains("requires task-augmented execution"),
+        format!("{error:?}").contains("ErrorCode(-32601)"),
         "{error:?}"
     );
     assert_eq!(required_calls.load(Ordering::SeqCst), 0);
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_required_legacy_tools_reject_ordinary_calls() -> anyhow::Result<()> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = item_registry_with_calls(TaskSupportSpec::Required, calls.clone());
+    let surface = NativeToolSurface::builder("task-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .exposure(NativeExposurePolicy::explicit_subset(["items.list"]))
+        .task_delivery(TaskDeliveryDecl::Legacy2025_11_25)
+        .direct("work", "items.get")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let server = CliMcpServer::with_surface(registry, surface)?;
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient.serve(client_transport).await?;
+    let error = client
+        .send_request(ClientRequest::CallToolRequest(Request::new(
+            CallToolRequestParams::new("work")
+                .with_arguments(serde_json::from_value(json!({ "id": "42" }))?),
+        )))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:?}").contains("ErrorCode(-32601)"),
+        "{error:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     client.cancel().await?;
     server_handle.await??;
     Ok(())
@@ -1849,7 +1873,7 @@ fn task_support_builder_and_low_level_paths_are_equivalent() -> anyhow::Result<(
         TaskSupportSpec::Required,
     ] {
         let low = low_level(support.clone());
-        let high = built(support)?;
+        let high = built(support.clone())?;
         assert_eq!(low.catalog(), high.catalog());
         assert_eq!(low.catalog_identity(), high.catalog_identity());
         let low_surface = direct_shape_surface_for_operation(&low, "work")?;
@@ -1858,10 +1882,12 @@ fn task_support_builder_and_low_level_paths_are_equivalent() -> anyhow::Result<(
             low_surface.snapshot().canonical_json(),
             high_surface.snapshot().canonical_json()
         );
-        assert_eq!(
-            low_surface.snapshot().tools()[0].task_support(),
-            rmcp::model::TaskSupport::Forbidden
-        );
+        let expected = match support {
+            TaskSupportSpec::Forbidden => rmcp::model::TaskSupport::Forbidden,
+            TaskSupportSpec::Optional => rmcp::model::TaskSupport::Optional,
+            TaskSupportSpec::Required => rmcp::model::TaskSupport::Required,
+        };
+        assert_eq!(low_surface.snapshot().tools()[0].task_support(), expected);
     }
 
     let optional = low_level(TaskSupportSpec::Optional);
@@ -1892,6 +1918,7 @@ fn direct_shape_surface_for_operation(
     NativeToolSurface::builder("task-tools")
         .framework_help(FrameworkHelpProjection::Omitted)
         .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .task_delivery(TaskDeliveryDecl::Legacy2025_11_25)
         .direct("work", operation_id)
         .build(registry, McpProtocolTarget::V2025_11_25)
 }

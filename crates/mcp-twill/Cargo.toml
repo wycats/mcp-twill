@@ -7,16 +7,20 @@ description = "A Rust MCP framework for CLI-shaped command templates over typed 
 
 [dependencies]
 async-trait = "0.1"
+bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+http = "1"
+http-body = "1"
 mcp-workspace-resolver = { path = "../mcp-workspace-resolver", features = ["rmcp"] }
 rand = "0.8"
 rmcp = { version = "1.7.0", features = ["client", "transport-io"] }
 schemars = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.10"
 thiserror = "2"
-tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tower-service = "0.3"
 
 [dev-dependencies]
 anyhow = "1"
