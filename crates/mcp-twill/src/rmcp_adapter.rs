@@ -525,7 +525,7 @@ fn finalize_task_runtime(
             }
         }
         None | Some(CompiledTaskDelivery::Legacy2025_11_25(_)) => {
-            let runtime = authored.unwrap_or_else(|| TaskRuntime {
+            let mut runtime = authored.unwrap_or_else(|| TaskRuntime {
                 store: InMemoryTaskStore::connection(),
                 access: TaskAccessPolicy::CapabilityId,
                 _mount: None,
@@ -535,6 +535,11 @@ fn finalize_task_runtime(
                     "legacy task delivery requires a connection-scoped task store".to_string(),
                 ));
             }
+            runtime._mount = Some(TaskStoreMount::acquire(&runtime.store).map_err(|()| {
+                FrameworkError::Build(
+                    "legacy task store is already mounted by a live server".to_string(),
+                )
+            })?);
             Ok(Some(runtime))
         }
         Some(CompiledTaskDelivery::TasksExtension(_)) => {
@@ -2300,15 +2305,30 @@ impl CliMcpServer {
         let creation = extension_task_handle(&semantic);
         let runtime = runtime.clone();
         let server = self.clone();
-        let live_tasks = self.live_tasks.clone();
         let task_id_for_runner = task_id.clone();
         let runner_cancellation = cancellation.clone();
         let (start, ready) = tokio::sync::oneshot::channel();
         let runner_runtime = runtime.clone();
         let runner_stored = stored.clone();
         let runner_semantic = semantic.clone();
+        let runner_live_tasks = self.live_tasks.clone();
+        let completion_runtime = runtime.clone();
+        let completion_stored = stored.clone();
+        let completion_semantic = semantic.clone();
+        let completion_live_tasks = self.live_tasks.clone();
+        let completion_task_id = task_id.clone();
         let handle = tokio::spawn(async move {
-            let _ = ready.await;
+            if !await_task_start(
+                ready,
+                runner_runtime.store.clone(),
+                runner_live_tasks,
+                task_id_for_runner,
+                key,
+            )
+            .await
+            {
+                return;
+            }
             let (status, value) = tokio::select! {
                 result = server.execute_native_tool_stateless(name, Some(meta), arguments, progress) => {
                     match serde_json::to_value(result) {
@@ -2337,9 +2357,16 @@ impl CliMcpServer {
                 value,
             )
             .await;
-            live_tasks.lock().await.remove(&task_id_for_runner);
         });
-        drop(handle);
+        monitor_task_runner(
+            handle,
+            completion_runtime,
+            key,
+            completion_stored,
+            completion_semantic,
+            completion_live_tasks,
+            completion_task_id,
+        );
         schedule_task_expiration(
             runtime.store.clone(),
             self.live_tasks.clone(),
@@ -2859,6 +2886,11 @@ impl ServerHandler for CliMcpServer {
         let runner_runtime = runtime.clone();
         let runner_stored = stored.clone();
         let runner_semantic = semantic.clone();
+        let completion_runtime = runtime.clone();
+        let completion_stored = stored.clone();
+        let completion_semantic = semantic.clone();
+        let completion_live_tasks = self.live_tasks.clone();
+        let completion_task_id = task_id.clone();
         let handle = tokio::spawn(async move {
             if !await_task_start(
                 ready,
@@ -2914,11 +2946,20 @@ impl ServerHandler for CliMcpServer {
                 value,
             )
             .await;
-            live_tasks.lock().await.remove(&task_id_for_runner);
         });
-        self.live_tasks.lock().await.insert(
-            task_id.clone(),
-            LiveTaskControl::Legacy(handle.abort_handle()),
+        let abort_handle = handle.abort_handle();
+        self.live_tasks
+            .lock()
+            .await
+            .insert(task_id.clone(), LiveTaskControl::Legacy(abort_handle));
+        monitor_task_runner(
+            handle,
+            completion_runtime,
+            key,
+            completion_stored,
+            completion_semantic,
+            completion_live_tasks,
+            completion_task_id,
         );
         schedule_task_expiration(
             runtime.store.clone(),
@@ -3151,6 +3192,31 @@ async fn await_task_start(
         schedule_task_expiration(store, live_tasks, task_id, key, Some(unix_millis()));
     }
     false
+}
+
+fn monitor_task_runner(
+    handle: tokio::task::JoinHandle<()>,
+    runtime: TaskRuntime,
+    key: crate::TaskStorageKey,
+    stored: StoredTaskRecord,
+    semantic: SemanticTaskRecord,
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    task_id: String,
+) {
+    tokio::spawn(async move {
+        if handle.await.is_err_and(|error| error.is_panic()) {
+            commit_task_outcome(
+                &runtime,
+                key,
+                stored,
+                semantic,
+                SemanticTaskStatus::Failed,
+                task_execution_failed_outcome(),
+            )
+            .await;
+        }
+        live_tasks.lock().await.remove(&task_id);
+    });
 }
 
 fn schedule_task_expiration(
@@ -3916,6 +3982,78 @@ mod tests {
         )
         .await
         .expect("cleanup cancels the unpublished live-task reservation");
+    }
+
+    #[tokio::test]
+    async fn panicked_task_runners_record_failure_and_release_the_live_slot() {
+        for (task_byte, profile, expires_at) in [
+            ("11", SemanticTaskProfile::Legacy2025_11_25, None),
+            (
+                "33",
+                SemanticTaskProfile::TasksExtension,
+                Some(1_700_000_060_000),
+            ),
+        ] {
+            let store = match profile {
+                SemanticTaskProfile::Legacy2025_11_25 => InMemoryTaskStore::connection(),
+                SemanticTaskProfile::TasksExtension => InMemoryTaskStore::server_instance(),
+            };
+            let task_id = task_byte.repeat(32);
+            let key = derive_task_storage_key(
+                &"22".repeat(32),
+                &TaskAccessPolicy::CapabilityId,
+                &task_id,
+                None,
+            )
+            .unwrap();
+            let semantic = SemanticTaskRecord::working(
+                task_id.clone(),
+                "22".repeat(32),
+                0,
+                None,
+                profile,
+                1_700_000_000_000,
+                expires_at,
+            );
+            let stored = StoredTaskRecord::encode(&semantic).unwrap();
+            store.create(key, stored.clone()).await.unwrap();
+            let live_tasks = Arc::new(Mutex::new(BTreeMap::from([(
+                task_id.clone(),
+                LiveTaskControl::Extension(TaskCancellation::default()),
+            )])));
+            let runtime = TaskRuntime {
+                store: store.clone(),
+                access: TaskAccessPolicy::CapabilityId,
+                _mount: None,
+            };
+
+            monitor_task_runner(
+                tokio::spawn(async { panic!("runner test panic") }),
+                runtime,
+                key,
+                stored,
+                semantic,
+                live_tasks.clone(),
+                task_id,
+            );
+
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    let failed = store
+                        .get(key)
+                        .await
+                        .unwrap()
+                        .and_then(|stored| stored.decode().ok())
+                        .is_some_and(|record| record.status() == SemanticTaskStatus::Failed);
+                    if failed && live_tasks.lock().await.is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("runner monitor records a static failure and releases the live slot");
+        }
     }
 
     #[tokio::test]

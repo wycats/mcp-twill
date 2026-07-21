@@ -241,9 +241,6 @@ impl Service<Request<Bytes>> for StatelessMcpHttpService {
                 .unwrap_or_else(|| std::sync::Arc::new(Extensions::new()));
             match preflight(&server, Some(&parts.method), Some(&parts.headers), &body) {
                 Ok(request) if !request.has_id => {
-                    tokio::spawn(async move {
-                        let _ = dispatch_request(&server, request, &extensions, None).await;
-                    });
                     let mut response = Response::new(StatelessMcpHttpBody::empty());
                     *response.status_mut() = StatusCode::ACCEPTED;
                     Ok(response)
@@ -1092,6 +1089,56 @@ mod tests {
         let (status, bytes) = response_bytes(response).await;
         assert_eq!(status, StatusCode::ACCEPTED);
         assert!(bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stateless_http_tool_notifications_do_not_dispatch_or_create_tasks() {
+        let registry = registry(TaskSupportSpec::Required);
+        let surface = NativeToolSurface::builder("tasks")
+            .framework_help(FrameworkHelpProjection::Omitted)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .task_delivery(TaskDeliveryDecl::tasks_extension(
+                ExtensionOptionalPolicy::DeferredWhenAvailable,
+                60_000,
+            ))
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        let store = InMemoryTaskStore::server_instance();
+        let mut service = CliMcpServer::builder(registry)
+            .surface(surface)
+            .task_runtime(store.clone(), TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap()
+            .into_stateless_service_with_evidence(true)
+            .unwrap()
+            .into_http_service();
+        let request = Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+            .header("Mcp-Method", "tools/call")
+            .header("Mcp-Name", "work")
+            .body(Bytes::from(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {
+                        "_meta": meta(true),
+                        "name": "work",
+                        "arguments": {}
+                    }
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = service.call(request).await.unwrap();
+        let (status, bytes) = response_bytes(response).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(bytes.is_empty());
+        assert_eq!(store.record_count_for_test().await, 0);
     }
 
     #[tokio::test]

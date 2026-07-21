@@ -576,7 +576,7 @@ impl SemanticTaskRecord {
     ) -> Self {
         let mut next = self.clone();
         next.revision = next.revision.saturating_add(1);
-        next.updated_at = now;
+        next.updated_at = now.max(self.updated_at).max(self.created_at);
         next.status = status;
         next.outcome = outcome;
         next
@@ -933,6 +933,20 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn successor_timestamps_remain_monotonic_when_the_clock_moves_backward() {
+        let mut working = working();
+        working.updated_at += 1_000;
+        let completed = working.successor(
+            SemanticTaskStatus::Completed,
+            Some(json!({ "content": [], "resultType": "complete" })),
+            working.created_at().saturating_sub(1),
+        );
+
+        assert_eq!(completed.updated_at(), working.updated_at());
+        assert!(StoredTaskRecord::encode(&completed).is_ok());
     }
 
     #[test]

@@ -259,6 +259,32 @@ fn delivery_and_server_finalization_fail_closed() -> anyhow::Result<()> {
         .surface(extension)
         .task_runtime(shared, TaskAccessPolicy::CapabilityId)
         .build()?;
+
+    let legacy_registry = self::registry(TaskSupportSpec::Optional);
+    let legacy = surface(
+        &legacy_registry,
+        McpProtocolTarget::V2025_11_25,
+        TaskDeliveryDecl::Legacy2025_11_25,
+    )?;
+    let shared: Arc<dyn TaskStore> = InMemoryTaskStore::connection();
+    let first = CliMcpServer::builder(legacy_registry.clone())
+        .surface(legacy.clone())
+        .task_runtime(shared.clone(), TaskAccessPolicy::CapabilityId)
+        .build()?;
+    let second = match CliMcpServer::builder(legacy_registry.clone())
+        .surface(legacy.clone())
+        .task_runtime(shared.clone(), TaskAccessPolicy::CapabilityId)
+        .build()
+    {
+        Ok(_) => anyhow::bail!("expected a legacy exclusive-mount failure"),
+        Err(error) => error,
+    };
+    assert!(second.to_string().contains("already mounted"));
+    drop(first);
+    CliMcpServer::builder(legacy_registry)
+        .surface(legacy)
+        .task_runtime(shared, TaskAccessPolicy::CapabilityId)
+        .build()?;
     Ok(())
 }
 
