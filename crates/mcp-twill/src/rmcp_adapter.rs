@@ -3183,10 +3183,14 @@ fn take_task_id(
 }
 
 fn map_task_error(error: rmcp::ErrorData) -> crate::stateless::StatelessDispatchError {
-    if error.code == ErrorCode::INTERNAL_ERROR {
-        crate::stateless::StatelessDispatchError::internal("Task storage failed")
-    } else {
-        crate::stateless::StatelessDispatchError::invalid_params("Unknown task")
+    match error.code {
+        ErrorCode::INTERNAL_ERROR => {
+            crate::stateless::StatelessDispatchError::internal("Task storage failed")
+        }
+        ErrorCode::INVALID_PARAMS => {
+            crate::stateless::StatelessDispatchError::invalid_params("Unknown task")
+        }
+        _ => crate::stateless::StatelessDispatchError::internal("Task operation failed"),
     }
 }
 
