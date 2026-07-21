@@ -344,15 +344,24 @@ impl LiveTaskControl {
 
 struct LiveTaskReservation {
     live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    store: Arc<dyn TaskStore>,
     task_id: String,
+    key: crate::TaskStorageKey,
     armed: bool,
 }
 
 impl LiveTaskReservation {
-    fn new(live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>, task_id: String) -> Self {
+    fn new(
+        live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+        store: Arc<dyn TaskStore>,
+        task_id: String,
+        key: crate::TaskStorageKey,
+    ) -> Self {
         Self {
             live_tasks,
+            store,
             task_id,
+            key,
             armed: true,
         }
     }
@@ -374,17 +383,13 @@ impl Drop for LiveTaskReservation {
         if !self.armed {
             return;
         }
-        if let Ok(mut tasks) = self.live_tasks.try_lock() {
-            tasks.remove(&self.task_id);
-            return;
-        }
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let live_tasks = self.live_tasks.clone();
-            let task_id = self.task_id.clone();
-            runtime.spawn(async move {
-                live_tasks.lock().await.remove(&task_id);
-            });
-        }
+        schedule_task_expiration(
+            self.store.clone(),
+            self.live_tasks.clone(),
+            self.task_id.clone(),
+            self.key,
+            Some(unix_millis()),
+        );
     }
 }
 
@@ -2283,8 +2288,12 @@ impl CliMcpServer {
                     LiveTaskControl::Extension(cancellation.clone()),
                 );
             }
-            let mut reservation =
-                LiveTaskReservation::new(self.live_tasks.clone(), task_id.clone());
+            let mut reservation = LiveTaskReservation::new(
+                self.live_tasks.clone(),
+                runtime.store.clone(),
+                task_id.clone(),
+                key,
+            );
             let create = runtime.store.create(key, stored.clone()).await;
             match create {
                 Ok(TaskStoreCreate::Created) => {
@@ -3812,6 +3821,61 @@ mod tests {
         release: Notify,
     }
 
+    struct CommittedPendingCreateStore {
+        inner: Arc<InMemoryTaskStore>,
+        committed: Notify,
+    }
+
+    impl TaskStore for CommittedPendingCreateStore {
+        fn scope(&self) -> TaskStoreScope {
+            TaskStoreScope::ServerInstance
+        }
+
+        fn create(
+            &self,
+            key: crate::TaskStorageKey,
+            record: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreCreate, crate::TaskStoreError>>
+        {
+            Box::pin(async move {
+                let result = self.inner.create(key, record).await;
+                self.committed.notify_one();
+                std::future::pending::<()>().await;
+                result
+            })
+        }
+
+        fn get(
+            &self,
+            key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<Option<StoredTaskRecord>, crate::TaskStoreError>,
+        > {
+            self.inner.get(key)
+        }
+
+        fn compare_and_set(
+            &self,
+            key: crate::TaskStorageKey,
+            expected: crate::TaskRevision,
+            next: StoredTaskRecord,
+        ) -> crate::TaskStoreFuture<'_, std::result::Result<TaskStoreWrite, crate::TaskStoreError>>
+        {
+            self.inner.compare_and_set(key, expected, next)
+        }
+
+        fn remove(
+            &self,
+            key: crate::TaskStorageKey,
+        ) -> crate::TaskStoreFuture<
+            '_,
+            std::result::Result<crate::TaskStoreRemoval, crate::TaskStoreError>,
+        > {
+            self.inner.remove(key)
+        }
+    }
+
     impl TaskStore for BlockingCreateStore {
         fn scope(&self) -> TaskStoreScope {
             TaskStoreScope::ServerInstance
@@ -4181,6 +4245,82 @@ mod tests {
         let result = call.await.unwrap();
         assert!(result.is_err());
         assert_eq!(store.attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_creation_cleans_up_a_record_committed_before_store_yield() {
+        let spec = crate::CommandSpec::new(["work"], "Work", "Perform work")
+            .task_support(TaskSupportSpec::Required)
+            .with_output(crate::OutputContract {
+                application: Some(crate::ApplicationResultContract::new(json!({
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                }))),
+                ..crate::OutputContract::default()
+            });
+        let registry =
+            CommandRegistry::new("tasks", "Task tests").register_dynamic(spec, |_| async {
+                Ok::<_, crate::DynamicCommandFailure>(crate::ApplicationSuccess::value(
+                    json!({ "ok": true }),
+                ))
+            });
+        let surface = NativeToolSurface::builder("task-tools")
+            .framework_help(crate::FrameworkHelpProjection::Omitted)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .task_delivery(crate::TaskDeliveryDecl::tasks_extension(
+                crate::ExtensionOptionalPolicy::DeferredWhenAvailable,
+                60_000,
+            ))
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        let inner = InMemoryTaskStore::server_instance();
+        let store = Arc::new(CommittedPendingCreateStore {
+            inner: inner.clone(),
+            committed: Notify::new(),
+        });
+        let server = CliMcpServer::builder(registry)
+            .surface(surface)
+            .task_runtime(store.clone(), TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let call_server = server.clone();
+        let call = tokio::spawn(async move {
+            call_server
+                .create_extension_task(
+                    "work".to_string(),
+                    rmcp::model::JsonObject::default(),
+                    Meta::default(),
+                    &Extensions::default(),
+                    60_000,
+                    None,
+                )
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            store.committed.notified(),
+        )
+        .await
+        .expect("external store commits before yielding");
+        assert_eq!(inner.record_count_for_test().await, 1);
+
+        call.abort();
+        match call.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("cancelled creation unexpectedly completed"),
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while inner.record_count_for_test().await != 0
+                || !server.live_tasks.lock().await.is_empty()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled creation removes the committed record and live reservation");
     }
 
     #[test]

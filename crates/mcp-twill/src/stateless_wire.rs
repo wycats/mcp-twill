@@ -66,11 +66,16 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
     }
     let known_method = known_method(&request.method, tasks_extension_enabled);
     if !known_method {
+        let params = request
+            .params
+            .as_deref()
+            .and_then(|params| serde_json::from_str::<Map<String, Value>>(params.get()).ok())
+            .unwrap_or_default();
         return Ok(Request {
             id: request.id,
             has_id,
             method: request.method,
-            params: Map::new(),
+            params,
             known_method,
         });
     }

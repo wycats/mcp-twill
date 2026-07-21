@@ -502,8 +502,22 @@ fn preflight(
         })?;
     let id = request.id.clone();
     if !request.known_method {
+        let observed_version = unknown_method_protocol_version(&request.params).map_err(|()| {
+            response(
+                StatusCode::BAD_REQUEST,
+                id.clone(),
+                -32602,
+                "Invalid params",
+                None,
+            )
+        })?;
         if let Some(headers) = headers
-            && (exact_header(headers, "mcp-protocol-version", PROTOCOL_VERSION).is_err()
+            && (exact_header(
+                headers,
+                "mcp-protocol-version",
+                observed_version.unwrap_or(PROTOCOL_VERSION),
+            )
+            .is_err()
                 || exact_header(headers, "mcp-method", &request.method).is_err())
         {
             return Err(response(
@@ -512,6 +526,20 @@ fn preflight(
                 -32001,
                 "Header mismatch",
                 None,
+            ));
+        }
+        if let Some(observed_version) = observed_version
+            && observed_version != PROTOCOL_VERSION
+        {
+            return Err(response(
+                StatusCode::BAD_REQUEST,
+                id,
+                -32004,
+                "Unsupported protocol version",
+                Some(json!({
+                    "supported": [PROTOCOL_VERSION],
+                    "requested": observed_version,
+                })),
             ));
         }
         return Ok(request);
@@ -556,6 +584,19 @@ fn preflight(
         ));
     }
     Ok(request)
+}
+
+fn unknown_method_protocol_version(
+    params: &Map<String, Value>,
+) -> std::result::Result<Option<&str>, ()> {
+    let Some(meta) = params.get("_meta") else {
+        return Ok(None);
+    };
+    let meta = meta.as_object().ok_or(())?;
+    match meta.get("io.modelcontextprotocol/protocolVersion") {
+        Some(version) => version.as_str().map(Some).ok_or(()),
+        None => Ok(None),
+    }
 }
 
 fn validated_response_id(body: &[u8]) -> Value {
@@ -1109,6 +1150,21 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(value["error"]["code"], -32601);
+
+        let unknown_unsupported_version = Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", "2099-01-01")
+            .header("Mcp-Method", "unknown/method")
+            .body(Bytes::from_static(
+                br#"{"jsonrpc":"2.0","id":5,"method":"unknown/method","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}"#,
+            ))
+            .unwrap();
+        let (status, value) =
+            response_value(service.call(unknown_unsupported_version).await.unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], -32004);
 
         let unknown_without_params = Request::builder()
             .method(Method::POST)
