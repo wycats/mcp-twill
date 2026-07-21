@@ -2898,7 +2898,7 @@ impl ServerHandler for CliMcpServer {
                 .load_task(&request.task_id, &context.extensions)
                 .await?;
             if let Some(payload) = record.semantic.outcome() {
-                return Ok(GetTaskPayloadResult::new(payload.clone()));
+                return legacy_task_payload(payload);
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
@@ -3110,6 +3110,28 @@ fn task_access_scope_unavailable() -> rmcp::ErrorData {
 
 fn task_storage_failed() -> rmcp::ErrorData {
     rmcp::ErrorData::internal_error("Task storage failed", None)
+}
+
+fn legacy_task_payload(
+    outcome: &Value,
+) -> std::result::Result<GetTaskPayloadResult, rmcp::ErrorData> {
+    let Some(error) = outcome.get("error").and_then(Value::as_object) else {
+        return Ok(GetTaskPayloadResult::new(outcome.clone()));
+    };
+    let code = error
+        .get("code")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok())
+        .ok_or_else(task_storage_failed)?;
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .ok_or_else(task_storage_failed)?;
+    Err(rmcp::ErrorData::new(
+        ErrorCode(code),
+        message.to_string(),
+        error.get("data").cloned(),
+    ))
 }
 
 fn complete_tool_result(
@@ -3642,6 +3664,20 @@ mod tests {
         assert_eq!(cancelled["status"], "cancelled");
         assert!(cancelled.get("error").is_none());
         assert!(cancelled.get("result").is_none());
+    }
+
+    #[test]
+    fn legacy_task_payload_preserves_the_terminal_json_rpc_error_channel() {
+        let error = legacy_task_payload(&task_cancelled_outcome()).unwrap_err();
+        assert_eq!(error.code, ErrorCode(-32000));
+        assert_eq!(error.message, "Task cancelled");
+        assert!(error.data.is_none());
+
+        let result = json!({ "content": [], "isError": false });
+        assert_eq!(
+            serde_json::to_value(legacy_task_payload(&result).unwrap()).unwrap(),
+            result
+        );
     }
 
     #[test]
