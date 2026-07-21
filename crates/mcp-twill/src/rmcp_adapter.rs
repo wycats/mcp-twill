@@ -3536,6 +3536,17 @@ impl NoAnnotation for RawResource {
 mod tests {
     use super::*;
 
+    #[test]
+    fn stateless_task_errors_map_by_json_rpc_code() {
+        let storage = map_task_error(rmcp::ErrorData::internal_error("renamed detail", None));
+        assert_eq!(storage.code, ErrorCode::INTERNAL_ERROR.0);
+        assert_eq!(storage.message, "Task storage failed");
+
+        let unknown = map_task_error(rmcp::ErrorData::invalid_params("Task storage failed", None));
+        assert_eq!(unknown.code, ErrorCode::INVALID_PARAMS.0);
+        assert_eq!(unknown.message, "Unknown task");
+    }
+
     fn meta(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Meta {
         Meta(
             entries
