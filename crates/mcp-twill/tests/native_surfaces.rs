@@ -1545,10 +1545,7 @@ async fn effect_lanes_enforce_forbidden_and_required_task_delivery() -> anyhow::
         .await
         .unwrap_err();
     assert!(
-        error.to_string().contains("requires task-based invocation")
-            || error
-                .to_string()
-                .contains("requires task-augmented execution"),
+        format!("{error:?}").contains("ErrorCode(-32601)"),
         "{error:?}"
     );
     assert_eq!(required_calls.load(Ordering::SeqCst), 0);
@@ -1583,10 +1580,7 @@ async fn native_required_legacy_tools_reject_ordinary_calls() -> anyhow::Result<
         .await
         .unwrap_err();
     assert!(
-        error.to_string().contains("requires task-based invocation")
-            || error
-                .to_string()
-                .contains("requires task-augmented execution"),
+        format!("{error:?}").contains("ErrorCode(-32601)"),
         "{error:?}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);

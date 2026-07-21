@@ -485,9 +485,7 @@ fn preflight(
                 None,
             ));
         }
-        if exact_header(headers, "content-type", "application/json").is_err()
-            || !accepts_json_and_sse(headers)
-        {
+        if json_content_type(headers).is_err() || !accepts_json_and_sse(headers) {
             return Err(response(
                 StatusCode::BAD_REQUEST,
                 Value::Null,
@@ -599,6 +597,29 @@ fn accepts_json_and_sse(headers: &HeaderMap) -> bool {
         }
     }
     json && sse
+}
+
+fn json_content_type(headers: &HeaderMap) -> std::result::Result<(), ()> {
+    let mut values = headers.get_all("content-type").iter();
+    let value = values.next().ok_or(())?;
+    if values.next().is_some() {
+        return Err(());
+    }
+    let value = value.to_str().map_err(|_| ())?;
+    let mut segments = value.split(';');
+    if !segments
+        .next()
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"))
+    {
+        return Err(());
+    }
+    for parameter in segments {
+        let (name, value) = parameter.trim().split_once('=').ok_or(())?;
+        if name.trim().is_empty() || value.trim().is_empty() {
+            return Err(());
+        }
+    }
+    Ok(())
 }
 
 async fn dispatch_request(
@@ -960,6 +981,15 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(value["result"]["tools"].is_array());
 
+        let mut with_charset = request(10, "tools/list", None, json!({ "_meta": meta(false) }));
+        with_charset.headers_mut().insert(
+            CONTENT_TYPE,
+            "application/json; charset=utf-8".parse().unwrap(),
+        );
+        let (status, value) = response_value(service.call(with_charset).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["result"]["tools"].is_array());
+
         let (status, value) = response_value(
             service
                 .call(request(
@@ -1067,6 +1097,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_request_ids_are_replaced_with_null_in_errors() {
         for invalid_id in [
+            Value::Null,
             json!(true),
             json!({ "private": "value" }),
             json!([1]),

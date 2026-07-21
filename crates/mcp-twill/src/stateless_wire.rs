@@ -87,7 +87,7 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
 
 fn valid_request_id(id: &Value) -> bool {
     match id {
-        Value::Null | Value::String(_) => true,
+        Value::String(_) => true,
         Value::Number(number) => number.is_i64() || number.is_u64(),
         _ => false,
     }
@@ -160,5 +160,13 @@ mod tests {
             parse(fractional, true),
             Err(WireError::InvalidRequest)
         ));
+
+        let null = br#"{
+            "jsonrpc":"2.0",
+            "id":null,
+            "method":"tools/list",
+            "params":{"_meta":{}}
+        }"#;
+        assert!(matches!(parse(null, true), Err(WireError::InvalidRequest)));
     }
 }

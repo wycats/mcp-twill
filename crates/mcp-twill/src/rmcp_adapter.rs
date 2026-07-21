@@ -2554,12 +2554,7 @@ impl ServerHandler for CliMcpServer {
                     .map_err(|_| {
                         rmcp::ErrorData::internal_error("Invalid effect-lane task support", None)
                     })?;
-                if matches!(task_support, TaskSupportSpec::Required) {
-                    return Err(rmcp::ErrorData::invalid_params(
-                        format!("Tool {tool_name} requires task-augmented execution"),
-                        None,
-                    ));
-                }
+                ensure_ordinary_task_support(&tool_name, task_support)?;
                 let request_meta = request.meta.clone();
                 let run_request = self.parse_run_request(request.arguments)?;
                 Ok(self
@@ -2865,7 +2860,17 @@ impl ServerHandler for CliMcpServer {
         let runner_stored = stored.clone();
         let runner_semantic = semantic.clone();
         let handle = tokio::spawn(async move {
-            let _ = ready.await;
+            if !await_task_start(
+                ready,
+                runner_runtime.store.clone(),
+                live_tasks.clone(),
+                task_id_for_runner.clone(),
+                key,
+            )
+            .await
+            {
+                return;
+            }
             let mut result = match invocation {
                 LegacyTaskInvocation::EffectLane(request) => {
                     server
@@ -3128,6 +3133,26 @@ async fn commit_task_outcome(
     }
 }
 
+async fn await_task_start(
+    ready: tokio::sync::oneshot::Receiver<()>,
+    store: Arc<dyn TaskStore>,
+    live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    task_id: String,
+    key: crate::TaskStorageKey,
+) -> bool {
+    if ready.await.is_ok() {
+        return true;
+    }
+    if store.remove(key).await.is_ok() {
+        if let Some(control) = live_tasks.lock().await.remove(&task_id) {
+            control.cancel();
+        }
+    } else {
+        schedule_task_expiration(store, live_tasks, task_id, key, Some(unix_millis()));
+    }
+    false
+}
+
 fn schedule_task_expiration(
     store: Arc<dyn TaskStore>,
     live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
@@ -3278,13 +3303,26 @@ fn extension_task(record: &SemanticTaskRecord, result_type: &'static str) -> Val
 fn extension_capability(
     meta: &Value,
 ) -> std::result::Result<bool, crate::stateless::StatelessDispatchError> {
-    let capability = meta
+    let Some(capabilities) = meta
         .as_object()
         .and_then(|meta| meta.get("io.modelcontextprotocol/clientCapabilities"))
-        .and_then(Value::as_object)
-        .and_then(|capabilities| capabilities.get("extensions"))
-        .and_then(Value::as_object)
-        .and_then(|extensions| extensions.get("io.modelcontextprotocol/tasks"));
+    else {
+        return Ok(false);
+    };
+    let capabilities = capabilities.as_object().ok_or_else(|| {
+        crate::stateless::StatelessDispatchError::invalid_params(
+            "Invalid Tasks Extension capability",
+        )
+    })?;
+    let Some(extensions) = capabilities.get("extensions") else {
+        return Ok(false);
+    };
+    let extensions = extensions.as_object().ok_or_else(|| {
+        crate::stateless::StatelessDispatchError::invalid_params(
+            "Invalid Tasks Extension capability",
+        )
+    })?;
+    let capability = extensions.get("io.modelcontextprotocol/tasks");
     let Some(capability) = capability else {
         return Ok(false);
     };
@@ -3325,12 +3363,13 @@ fn map_task_error(error: rmcp::ErrorData) -> crate::stateless::StatelessDispatch
 }
 
 fn ensure_ordinary_task_support(
-    tool_name: &str,
+    _tool_name: &str,
     task_support: TaskSupportSpec,
 ) -> std::result::Result<(), rmcp::ErrorData> {
     if matches!(task_support, TaskSupportSpec::Required) {
-        Err(rmcp::ErrorData::invalid_params(
-            format!("Tool {tool_name} requires task-augmented execution"),
+        Err(rmcp::ErrorData::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            "Method not found",
             None,
         ))
     } else {
@@ -3837,6 +3876,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dropped_creation_gate_removes_the_unpublished_task() {
+        let store = InMemoryTaskStore::server_instance();
+        let task_id = "11".repeat(32);
+        let key = derive_task_storage_key(
+            &"22".repeat(32),
+            &TaskAccessPolicy::CapabilityId,
+            &task_id,
+            None,
+        )
+        .unwrap();
+        let record = SemanticTaskRecord::working(
+            task_id.clone(),
+            "22".repeat(32),
+            0,
+            None,
+            SemanticTaskProfile::TasksExtension,
+            1_700_000_000_000,
+            Some(1_700_000_060_000),
+        );
+        store
+            .create(key, StoredTaskRecord::encode(&record).unwrap())
+            .await
+            .unwrap();
+        let cancellation = TaskCancellation::default();
+        let live_tasks = Arc::new(Mutex::new(BTreeMap::from([(
+            task_id.clone(),
+            LiveTaskControl::Extension(cancellation.clone()),
+        )])));
+        let (start, ready) = tokio::sync::oneshot::channel();
+        drop(start);
+
+        assert!(!await_task_start(ready, store.clone(), live_tasks.clone(), task_id, key,).await);
+        assert!(store.get(key).await.unwrap().is_none());
+        assert!(live_tasks.lock().await.is_empty());
+        tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            cancellation.cancelled(),
+        )
+        .await
+        .expect("cleanup cancels the unpublished live-task reservation");
+    }
+
+    #[tokio::test]
     async fn extension_creation_does_not_hold_the_live_task_lock_during_store_io() {
         let spec = crate::CommandSpec::new(["work"], "Work", "Perform work")
             .task_support(TaskSupportSpec::Optional)
@@ -3976,10 +4058,36 @@ mod tests {
     #[test]
     fn required_task_support_rejects_ordinary_native_dispatch() {
         let error = ensure_ordinary_task_support("work", TaskSupportSpec::Required).unwrap_err();
-        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
-        assert_eq!(error.message, "Tool work requires task-augmented execution");
+        assert_eq!(error.code, ErrorCode::METHOD_NOT_FOUND);
+        assert_eq!(error.message, "Method not found");
         assert!(ensure_ordinary_task_support("work", TaskSupportSpec::Optional).is_ok());
         assert!(ensure_ordinary_task_support("work", TaskSupportSpec::Forbidden).is_ok());
+    }
+
+    #[test]
+    fn malformed_extension_containers_are_invalid_params() {
+        for meta in [
+            json!({
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "extensions": []
+                }
+            }),
+            json!({
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "extensions": "tasks"
+                }
+            }),
+        ] {
+            let error = extension_capability(&meta).unwrap_err();
+            assert_eq!(error.code, -32602);
+            assert_eq!(error.message, "Invalid Tasks Extension capability");
+        }
+        assert!(matches!(
+            extension_capability(&json!({
+                "io.modelcontextprotocol/clientCapabilities": {}
+            })),
+            Ok(false)
+        ));
     }
 
     fn meta(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Meta {
