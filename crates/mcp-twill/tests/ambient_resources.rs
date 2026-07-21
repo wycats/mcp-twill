@@ -1188,6 +1188,7 @@ fn builder_rejects_ambiguous_incomplete_and_mismatched_sidecars() {
         framework_help: FrameworkHelpProjection::Omitted,
         application_errors: NativeApplicationErrorDialect::Canonical,
         confirmation: NativeConfirmationRoute::Unavailable,
+        task_delivery: mcp_twill::TaskDeliveryDecl::Disabled,
         resource_bindings: vec![ResourceBindingDecl {
             resource: "session".to_string(),
             mode: ResourceBindingMode::Ambient {
