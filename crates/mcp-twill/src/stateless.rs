@@ -74,15 +74,17 @@ impl StatelessMcpService {
             .map_err(|error| FrameworkError::Handler(error.to_string()))?
         {
             let bytes = Bytes::from(line);
-            if is_cancellation_notification(&bytes) {
-                if let Some(request_id) = cancellation_request_id(&bytes)
-                    && let Some(handle) = in_flight
-                        .lock()
-                        .await
-                        .remove(&canonical_request_id(&request_id))
+            if let Some(request_id) = cancellation_request_id(&bytes) {
+                if let Some(handle) = in_flight
+                    .lock()
+                    .await
+                    .remove(&canonical_request_id(&request_id))
                 {
                     handle.abort();
                 }
+                continue;
+            }
+            if is_json_notification(&bytes) {
                 continue;
             }
             let parsed = crate::stateless_wire::parse(
@@ -156,25 +158,39 @@ impl StatelessMcpService {
     }
 }
 
-fn is_cancellation_notification(bytes: &[u8]) -> bool {
+fn is_json_notification(bytes: &[u8]) -> bool {
     serde_json::from_slice::<Value>(bytes)
         .ok()
-        .and_then(|value| {
-            let object = value.as_object()?;
-            Some(
-                !object.contains_key("id")
-                    && object.get("method").and_then(Value::as_str)
-                        == Some("notifications/cancelled"),
-            )
-        })
+        .and_then(|value| value.as_object().map(|object| !object.contains_key("id")))
         .unwrap_or(false)
 }
 
 fn cancellation_request_id(bytes: &[u8]) -> Option<Value> {
-    serde_json::from_slice::<Value>(bytes)
-        .ok()?
-        .pointer("/params/requestId")
-        .cloned()
+    let value = serde_json::from_slice::<Value>(bytes).ok()?;
+    let object = value.as_object()?;
+    if object.contains_key("id")
+        || object.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || object.get("method").and_then(Value::as_str) != Some("notifications/cancelled")
+    {
+        return None;
+    }
+    let params = object.get("params")?.as_object()?;
+    if params.get("_meta").is_some_and(|meta| !meta.is_object())
+        || params
+            .get("reason")
+            .is_some_and(|reason| !reason.is_string())
+    {
+        return None;
+    }
+    let request_id = params.get("requestId")?;
+    matches!(request_id, Value::String(_))
+        .then(|| request_id.clone())
+        .or_else(|| {
+            request_id
+                .as_number()
+                .filter(|number| number.is_i64() || number.is_u64())
+                .map(|_| request_id.clone())
+        })
 }
 
 fn canonical_request_id(id: &Value) -> String {
@@ -1082,6 +1098,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_creation_waiting_for_live_slot_never_creates_a_record() {
+        let registry = registry(TaskSupportSpec::Required);
+        let surface = NativeToolSurface::builder("tasks")
+            .framework_help(FrameworkHelpProjection::Omitted)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .task_delivery(TaskDeliveryDecl::tasks_extension(
+                ExtensionOptionalPolicy::DeferredWhenAvailable,
+                60_000,
+            ))
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        let store = InMemoryTaskStore::server_instance();
+        let server = CliMcpServer::builder(registry)
+            .surface(surface)
+            .task_runtime(store.clone(), TaskAccessPolicy::CapabilityId)
+            .build()
+            .unwrap();
+        let service = server.into_stateless_service_with_evidence(true).unwrap();
+
+        let (acquired_tx, acquired_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let holder_server = service.server.clone();
+        let holder = tokio::spawn(async move {
+            holder_server
+                .hold_live_tasks_for_test(acquired_tx, release_rx)
+                .await;
+        });
+        acquired_rx.await.unwrap();
+
+        let mut http = service.into_http_service();
+        let pending = tokio::spawn(async move {
+            http.call(request(
+                1,
+                "tools/call",
+                Some("work"),
+                json!({
+                    "_meta": meta(true),
+                    "name": "work",
+                    "arguments": {}
+                }),
+            ))
+            .await
+        });
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!pending.is_finished());
+        assert_eq!(store.record_count_for_test().await, 0);
+
+        pending.abort();
+        match pending.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("cancelled request unexpectedly completed"),
+        }
+        let _ = release_tx.send(());
+        holder.await.unwrap();
+        assert_eq!(store.record_count_for_test().await, 0);
+    }
+
+    #[tokio::test]
     async fn disabled_delivery_rejects_task_methods_before_extension_decoding() {
         let mut service = disabled_service();
         let (_, value) = response_value(
@@ -1139,7 +1216,22 @@ mod tests {
         .await;
         let task_id = created["result"]["taskId"].as_str().unwrap().to_string();
 
-        for id in [2, 3] {
+        let (_, working) = response_value(
+            service
+                .call(request(
+                    2,
+                    "tasks/get",
+                    Some(&task_id),
+                    json!({ "_meta": meta(true), "taskId": task_id.clone() }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(working["result"]["resultType"], "complete");
+        assert_eq!(working["result"]["status"], "working");
+
+        for id in [3, 4] {
             let (_, acknowledgement) = response_value(
                 service
                     .call(request(
@@ -1159,7 +1251,7 @@ mod tests {
         }
 
         let mut observed = Value::Null;
-        for id in 4..24 {
+        for id in 5..25 {
             let (_, value) = response_value(
                 service
                     .call(request(
@@ -1179,7 +1271,9 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         assert_eq!(observed["result"]["status"], "cancelled");
-        assert_eq!(observed["result"]["error"]["error"]["code"], -32000);
+        assert_eq!(observed["result"]["resultType"], "complete");
+        assert!(observed["result"].get("error").is_none());
+        assert!(observed["result"].get("result").is_none());
     }
 
     #[tokio::test]
@@ -1277,6 +1371,73 @@ mod tests {
                 .await
                 .is_err()
         );
+
+        request_writer
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"method\":\"unknown/notification\",\"params\":false}\n",
+            )
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), responses.next_line())
+                .await
+                .is_err()
+        );
+
+        drop(request_writer);
+        serving.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_stdio_cancellation_cannot_abort_a_live_request() {
+        let spec = CommandSpec::new(["work"], "Work", "Perform work")
+            .task_support(TaskSupportSpec::Optional)
+            .with_output(OutputContract {
+                application: Some(ApplicationResultContract::new(json!({
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                }))),
+                ..OutputContract::default()
+            });
+        let registry = CommandRegistry::new("tasks", "Tasks").register_dynamic(spec, |_| async {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+        });
+        let service = stateless_service_from_registry(registry);
+        let (mut request_writer, request_reader) = tokio::io::duplex(4096);
+        let (response_writer, response_reader) = tokio::io::duplex(4096);
+        let serving = tokio::spawn(service.serve_stdio(request_reader, response_writer));
+        let mut responses = BufReader::new(response_reader).lines();
+
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "_meta": meta(false),
+                "name": "work",
+                "arguments": {}
+            }
+        });
+        request_writer
+            .write_all(format!("{call}\n").as_bytes())
+            .await
+            .unwrap();
+        request_writer
+            .write_all(b"{\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}\n")
+            .await
+            .unwrap();
+
+        let line = tokio::time::timeout(std::time::Duration::from_secs(1), responses.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(response["id"], 1);
+        assert_eq!(response["result"]["resultType"], "complete");
 
         drop(request_writer);
         serving.await.unwrap().unwrap();

@@ -1982,6 +1982,17 @@ impl CliMcpServer {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) async fn hold_live_tasks_for_test(
+        &self,
+        acquired: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let _guard = self.live_tasks.lock().await;
+        let _ = acquired.send(());
+        let _ = release.await;
+    }
+
     pub(crate) fn stateless_tasks_extension_enabled(&self) -> bool {
         self.task_profile() == Some(SemanticTaskProfile::TasksExtension)
     }
@@ -2155,6 +2166,7 @@ impl CliMcpServer {
         let scope_value = scope.as_ref().map(scope_hex);
         let now = unix_millis();
         let surface_hash = self.task_surface_hash().to_string();
+        let mut live_task_guard = self.live_tasks.lock().await;
         let mut created = None;
         for _ in 0..8 {
             let task_id = generate_task_id();
@@ -2199,7 +2211,7 @@ impl CliMcpServer {
         let (task_id, key, semantic, stored) = created.ok_or_else(|| {
             crate::stateless::StatelessDispatchError::internal("Task creation failed")
         })?;
-        let creation = extension_task(&semantic);
+        let creation = extension_task_handle(&semantic);
         let runtime = runtime.clone();
         let server = self.clone();
         let live_tasks = self.live_tasks.clone();
@@ -2242,10 +2254,8 @@ impl CliMcpServer {
             .await;
             live_tasks.lock().await.remove(&task_id_for_runner);
         });
-        self.live_tasks
-            .lock()
-            .await
-            .insert(task_id.clone(), LiveTaskControl::Extension(cancellation));
+        live_task_guard.insert(task_id.clone(), LiveTaskControl::Extension(cancellation));
+        drop(live_task_guard);
         drop(handle);
         schedule_task_expiration(
             runtime.clone(),
@@ -2269,7 +2279,7 @@ impl CliMcpServer {
             .load_task(&task_id, extensions)
             .await
             .map_err(map_task_error)?;
-        Ok(extension_task(&loaded.semantic))
+        Ok(extension_task_result(&loaded.semantic))
     }
 
     async fn stateless_update_task(
@@ -2491,6 +2501,9 @@ impl ServerHandler for CliMcpServer {
                         format!("Unknown tool {tool_name}"),
                         None,
                     ));
+                }
+                if let Some(task_support) = surface.task_support_for_tool(&tool_name) {
+                    ensure_ordinary_task_support(&tool_name, task_support)?;
                 }
                 Ok(self
                     .clone()
@@ -3105,7 +3118,15 @@ fn complete_tool_result(
     Ok(value)
 }
 
-fn extension_task(record: &SemanticTaskRecord) -> Value {
+fn extension_task_handle(record: &SemanticTaskRecord) -> Value {
+    extension_task(record, "task")
+}
+
+fn extension_task_result(record: &SemanticTaskRecord) -> Value {
+    extension_task(record, "complete")
+}
+
+fn extension_task(record: &SemanticTaskRecord, result_type: &'static str) -> Value {
     let status = match record.status() {
         SemanticTaskStatus::Working => "working",
         SemanticTaskStatus::Completed => "completed",
@@ -3119,7 +3140,7 @@ fn extension_task(record: &SemanticTaskRecord) -> Value {
         SemanticTaskStatus::Cancelled => "Task cancelled",
     };
     let mut value = json!({
-        "resultType": if record.status() == SemanticTaskStatus::Working { "task" } else { "complete" },
+        "resultType": result_type,
         "taskId": record.task_id(),
         "status": status,
         "statusMessage": message,
@@ -3129,15 +3150,23 @@ fn extension_task(record: &SemanticTaskRecord) -> Value {
         "pollIntervalMs": 100,
     });
     if let Some(outcome) = record.outcome() {
-        let field = if record.status() == SemanticTaskStatus::Completed {
-            "result"
-        } else {
-            "error"
+        let projection = match record.status() {
+            SemanticTaskStatus::Completed => Some(("result", outcome.clone())),
+            SemanticTaskStatus::Failed => Some((
+                "error",
+                outcome
+                    .get("error")
+                    .cloned()
+                    .expect("validated extension failure has an error object"),
+            )),
+            SemanticTaskStatus::Working | SemanticTaskStatus::Cancelled => None,
         };
-        value
-            .as_object_mut()
-            .expect("extension task projection is an object")
-            .insert(field.to_string(), outcome.clone());
+        if let Some((field, outcome)) = projection {
+            value
+                .as_object_mut()
+                .expect("extension task projection is an object")
+                .insert(field.to_string(), outcome);
+        }
     }
     value
 }
@@ -3188,6 +3217,20 @@ fn map_task_error(error: rmcp::ErrorData) -> crate::stateless::StatelessDispatch
             crate::stateless::StatelessDispatchError::internal("Task storage failed")
         }
         _ => crate::stateless::StatelessDispatchError::invalid_params("Unknown task"),
+    }
+}
+
+fn ensure_ordinary_task_support(
+    tool_name: &str,
+    task_support: TaskSupportSpec,
+) -> std::result::Result<(), rmcp::ErrorData> {
+    if matches!(task_support, TaskSupportSpec::Required) {
+        Err(rmcp::ErrorData::invalid_params(
+            format!("Tool {tool_name} requires task-augmented execution"),
+            None,
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -3554,6 +3597,51 @@ mod tests {
         ));
         assert_eq!(unexpected.code, ErrorCode::INVALID_PARAMS.0);
         assert_eq!(unexpected.message, "Unknown task");
+    }
+
+    #[test]
+    fn extension_task_projection_separates_handles_results_and_errors() {
+        let working = SemanticTaskRecord::working(
+            "11".repeat(32),
+            "22".repeat(32),
+            0,
+            None,
+            SemanticTaskProfile::TasksExtension,
+            1,
+            Some(1_001),
+        );
+        assert_eq!(extension_task_handle(&working)["resultType"], "task");
+        assert_eq!(extension_task_result(&working)["resultType"], "complete");
+
+        let failed = working.successor(
+            SemanticTaskStatus::Failed,
+            Some(task_execution_failed_outcome()),
+            2,
+        );
+        let failed = extension_task_result(&failed);
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["error"]["code"], -32603);
+        assert_eq!(failed["error"]["message"], "Task execution failed");
+        assert!(failed["error"].get("error").is_none());
+
+        let cancelled = working.successor(
+            SemanticTaskStatus::Cancelled,
+            Some(task_cancelled_outcome()),
+            2,
+        );
+        let cancelled = extension_task_result(&cancelled);
+        assert_eq!(cancelled["status"], "cancelled");
+        assert!(cancelled.get("error").is_none());
+        assert!(cancelled.get("result").is_none());
+    }
+
+    #[test]
+    fn required_task_support_rejects_ordinary_native_dispatch() {
+        let error = ensure_ordinary_task_support("work", TaskSupportSpec::Required).unwrap_err();
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(error.message, "Tool work requires task-augmented execution");
+        assert!(ensure_ordinary_task_support("work", TaskSupportSpec::Optional).is_ok());
+        assert!(ensure_ordinary_task_support("work", TaskSupportSpec::Forbidden).is_ok());
     }
 
     fn meta(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Meta {

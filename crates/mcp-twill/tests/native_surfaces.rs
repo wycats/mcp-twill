@@ -1557,6 +1557,44 @@ async fn effect_lanes_enforce_forbidden_and_required_task_delivery() -> anyhow::
     Ok(())
 }
 
+#[tokio::test]
+async fn native_required_legacy_tools_reject_ordinary_calls() -> anyhow::Result<()> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = item_registry_with_calls(TaskSupportSpec::Required, calls.clone());
+    let surface = NativeToolSurface::builder("task-tools")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .exposure(NativeExposurePolicy::explicit_subset(["items.list"]))
+        .task_delivery(TaskDeliveryDecl::Legacy2025_11_25)
+        .direct("work", "items.get")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let server = CliMcpServer::with_surface(registry, surface)?;
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    let server_handle = tokio::spawn(async move {
+        server.serve(server_transport).await?.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = TestClient.serve(client_transport).await?;
+    let error = client
+        .send_request(ClientRequest::CallToolRequest(Request::new(
+            CallToolRequestParams::new("work")
+                .with_arguments(serde_json::from_value(json!({ "id": "42" }))?),
+        )))
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("requires task-based invocation")
+            || error
+                .to_string()
+                .contains("requires task-augmented execution"),
+        "{error:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct TestClient;
 

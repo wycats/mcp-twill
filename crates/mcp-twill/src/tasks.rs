@@ -71,6 +71,11 @@ impl InMemoryTaskStore {
             records: Mutex::new(HashMap::new()),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) async fn record_count_for_test(&self) -> usize {
+        self.records.lock().await.len()
+    }
 }
 
 impl TaskStore for InMemoryTaskStore {
