@@ -56,7 +56,7 @@ RFC review should read the `Summary`, `Motivation`, `Guide-Level Explanation`, a
 - [RFC 0016: Ambient Resource Binding](stage-1/0016-ambient-resource-binding.md)
 - [RFC 0017: Schema-Constrained Arguments](stage-1/0017-schema-constrained-arguments.md)
 - [RFC 0018: Declared Invocation And Confirmation Presentation](stage-1/0018-declared-invocation-and-confirmation-presentation.md)
-- [RFC 0019: Catalog-Derived Host Adapters](stage-0/0019-catalog-derived-host-adapters.md)
+- [RFC 0019: Catalog-Derived Host Adapters](stage-1/0019-catalog-derived-host-adapters.md)
 - [RFC 0020: Protocol-Versioned Task Delivery](stage-1/0020-protocol-versioned-task-delivery.md)
 
 ## Native Application Adoption Suite
