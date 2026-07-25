@@ -13,7 +13,7 @@ use mcp_twill::{
     ResolveResource, Resource, ResourceDecl, ResourceRefusal, Result, TypeDecl, Variant,
     WorkspaceDecl, application_error_set, arg,
 };
-use rmcp::{ServiceExt, transport::stdio};
+use rmcp::transport::stdio;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

@@ -101,7 +101,7 @@ impl ErrorCode {
             FrameworkError::ConfirmationFailed { .. } => Self::ConfirmationFailed,
             FrameworkError::ApprovalInvalid(_) => Self::ApprovalInvalid,
             FrameworkError::WrongEffectLane { .. } => Self::WrongEffectLane,
-            FrameworkError::Build(_) => Self::BuildFailed,
+            FrameworkError::Build(_) | FrameworkError::ProtocolReleaseUnsealed => Self::BuildFailed,
             FrameworkError::Handler(_) => Self::HandlerFailed,
             FrameworkError::ResultContractViolation { .. } => Self::ResultContractViolation,
             FrameworkError::ArgumentContractViolation { .. } => Self::ArgumentContractViolation,
@@ -1036,7 +1036,9 @@ fn error_details(error: &FrameworkError) -> Value {
             "argument": argument,
             "reason": reason,
         }),
-        FrameworkError::EmptyCommand | FrameworkError::UnterminatedQuote => json!({}),
+        FrameworkError::EmptyCommand
+        | FrameworkError::UnterminatedQuote
+        | FrameworkError::ProtocolReleaseUnsealed => json!({}),
     }
 }
 

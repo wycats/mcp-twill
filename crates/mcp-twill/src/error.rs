@@ -226,6 +226,8 @@ pub enum FrameworkError {
         argument: Option<String>,
         reason: crate::ArgumentContractReason,
     },
+    #[error("protocol release evidence is not sealed")]
+    ProtocolReleaseUnsealed,
     #[error("command handler failed: {0}")]
     Handler(String),
 }

@@ -10,7 +10,7 @@ use mcp_twill::{
     CommandExample, CommandRegistry, CommandSpec, DynamicCommandFailure, FrameworkHelpProjection,
     McpProtocolTarget, NativeConfirmationRoute, NativeToolSurface, OutputContract, Result,
 };
-use rmcp::{ServiceExt, transport::stdio};
+use rmcp::transport::stdio;
 use serde_json::json;
 
 fn registry() -> CommandRegistry {

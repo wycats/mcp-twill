@@ -9,7 +9,10 @@ use std::{
 use async_trait::async_trait;
 use rmcp::{
     handler::server::tool::schema_for_type,
-    model::{JsonObject, TaskSupport, Tool, ToolAnnotations, ToolExecution},
+    model::{
+        JsonObject, TaskRequestsCapability, TaskSupport, TasksCapability, Tool, ToolAnnotations,
+        ToolExecution, ToolsTaskCapability,
+    },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,8 +20,9 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    CommandRegistry, FrameworkError, HelpRequest, HelpResult, OperationSpec, PermissionPreview,
-    PreparedConfirmation, Result, ServingSurfaceIdentity, SurfacePresentationDefaults,
+    CommandRegistry, FrameworkError, HelpRequest, HelpResult, MAX_STORED_TASK_RECORD_BYTES,
+    MAX_STORED_TASKS, OperationSpec, PermissionPreview, PreparedConfirmation, Result,
+    ServingSurfaceIdentity, SurfacePresentationDefaults, TASK_RUNTIME_CONTRACT_VERSION,
 };
 
 const SNAPSHOT_VERSION: u32 = 1;
@@ -58,15 +62,121 @@ pub(crate) struct EffectLaneSurfaceSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpProtocolTarget {
     V2025_11_25,
-    V2026_06_30,
+    V2026_07_28,
 }
 
 impl McpProtocolTarget {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::V2025_11_25 => "2025-11-25",
-            Self::V2026_06_30 => "2026-06-30",
+            Self::V2026_07_28 => "2026-07-28",
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TaskDeliveryDecl {
+    #[default]
+    Disabled,
+    Legacy2025_11_25,
+    TasksExtension {
+        optional_policy: ExtensionOptionalPolicy,
+        retention_ms: u64,
+    },
+}
+
+impl TaskDeliveryDecl {
+    pub fn tasks_extension(optional_policy: ExtensionOptionalPolicy, retention_ms: u64) -> Self {
+        Self::TasksExtension {
+            optional_policy,
+            retention_ms,
+        }
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        matches!(self, Self::Disabled)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ExtensionOptionalPolicy {
+    Immediate,
+    DeferredWhenAvailable,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledTaskDelivery {
+    Disabled,
+    Legacy2025_11_25(CompiledLegacyTaskDelivery),
+    TasksExtension(CompiledTasksExtensionDelivery),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledLegacyTaskDelivery {
+    capability: TasksCapability,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledTasksExtensionDelivery {
+    capability: TasksExtensionCapability,
+    optional_policy: ExtensionOptionalPolicy,
+    retention_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TasksExtensionCapability;
+
+impl CompiledLegacyTaskDelivery {
+    pub fn capability(&self) -> &TasksCapability {
+        &self.capability
+    }
+
+    pub fn runtime_contract_version(&self) -> u32 {
+        TASK_RUNTIME_CONTRACT_VERSION
+    }
+
+    pub fn max_stored_task_record_bytes(&self) -> usize {
+        MAX_STORED_TASK_RECORD_BYTES
+    }
+
+    pub fn max_stored_tasks(&self) -> usize {
+        MAX_STORED_TASKS
+    }
+}
+
+impl CompiledTasksExtensionDelivery {
+    pub fn extension_id(&self) -> &'static str {
+        "io.modelcontextprotocol/tasks"
+    }
+
+    pub fn capability(&self) -> &TasksExtensionCapability {
+        &self.capability
+    }
+
+    pub fn optional_policy(&self) -> ExtensionOptionalPolicy {
+        self.optional_policy
+    }
+
+    pub fn retention_ms(&self) -> u64 {
+        self.retention_ms
+    }
+
+    pub fn runtime_contract_version(&self) -> u32 {
+        TASK_RUNTIME_CONTRACT_VERSION
+    }
+
+    pub fn max_stored_task_record_bytes(&self) -> usize {
+        MAX_STORED_TASK_RECORD_BYTES
+    }
+
+    pub fn max_stored_tasks(&self) -> usize {
+        MAX_STORED_TASKS
     }
 }
 
@@ -87,6 +197,8 @@ pub struct NativeToolSurfaceDecl {
     pub confirmation: NativeConfirmationRoute,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_bindings: Vec<crate::ResourceBindingDecl>,
+    #[serde(default, skip_serializing_if = "TaskDeliveryDecl::is_disabled")]
+    pub task_delivery: TaskDeliveryDecl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -240,6 +352,21 @@ impl NativeToolSurface {
             .map(NativeSurfaceOperation::presentation_defaults)
     }
 
+    pub(crate) fn task_support_for_tool(&self, tool: &str) -> Option<crate::TaskSupportSpec> {
+        self.snapshot
+            .operations
+            .iter()
+            .find(|operation| operation.call.tool == tool)
+            .map(|operation| operation.spec.task_support.clone())
+            .or_else(|| {
+                matches!(
+                    &self.declaration.framework_help,
+                    FrameworkHelpProjection::Tool { name } if name == tool
+                )
+                .then_some(crate::TaskSupportSpec::Forbidden)
+            })
+    }
+
     pub(crate) fn resource_binding(&self, resource: &str) -> Option<&crate::ResourceBindingDecl> {
         self.declaration
             .resource_bindings
@@ -348,6 +475,7 @@ pub struct NativeToolSurfaceBuilder {
     framework_help_authored: bool,
     application_errors_authored: bool,
     confirmation_authored: bool,
+    task_delivery_authored: bool,
     seeded_resource_bindings: BTreeSet<String>,
     resource_binders: BTreeMap<String, Arc<dyn crate::ambient_resources::ErasedAmbientBinder>>,
     binder_error_footprints: BTreeMap<String, Vec<String>>,
@@ -365,11 +493,13 @@ impl NativeToolSurfaceBuilder {
                 application_errors: NativeApplicationErrorDialect::Canonical,
                 confirmation: NativeConfirmationRoute::Unavailable,
                 resource_bindings: Vec::new(),
+                task_delivery: TaskDeliveryDecl::Disabled,
             },
             exposure_authored: false,
             framework_help_authored: false,
             application_errors_authored: false,
             confirmation_authored: false,
+            task_delivery_authored: false,
             seeded_resource_bindings: BTreeSet::new(),
             resource_binders: BTreeMap::new(),
             binder_error_footprints: BTreeMap::new(),
@@ -396,6 +526,7 @@ impl NativeToolSurfaceBuilder {
             framework_help_authored: true,
             application_errors_authored: true,
             confirmation_authored: true,
+            task_delivery_authored: true,
             seeded_resource_bindings,
             resource_binders: BTreeMap::new(),
             binder_error_footprints: BTreeMap::new(),
@@ -454,6 +585,18 @@ impl NativeToolSurfaceBuilder {
         } else {
             self.confirmation_authored = true;
             self.declaration.confirmation = route;
+        }
+        self
+    }
+
+    pub fn task_delivery(mut self, delivery: TaskDeliveryDecl) -> Self {
+        if self.task_delivery_authored {
+            self.errors.push(build_error(
+                "native surface assigns `task_delivery` more than once",
+            ));
+        } else {
+            self.task_delivery_authored = true;
+            self.declaration.task_delivery = delivery;
         }
         self
     }
@@ -691,6 +834,7 @@ pub struct NativeToolSurfaceSnapshot {
     catalog_hash: String,
     surface_hash: String,
     declaration: NativeToolSurfaceDecl,
+    task_delivery: CompiledTaskDelivery,
     server_instructions: String,
     tools: Vec<Tool>,
     operations: Vec<NativeSurfaceOperation>,
@@ -742,6 +886,10 @@ impl NativeToolSurfaceSnapshot {
 
     pub fn declaration(&self) -> &NativeToolSurfaceDecl {
         &self.declaration
+    }
+
+    pub fn task_delivery(&self) -> &CompiledTaskDelivery {
+        &self.task_delivery
     }
 
     pub fn server_instructions(&self) -> &str {
@@ -930,6 +1078,7 @@ fn compile_native_surface(
 ) -> Result<NativeToolSurface> {
     validate_registry(registry)?;
     validate_surface_name(&declaration.name)?;
+    let task_delivery = compile_task_delivery(&declaration.task_delivery, target)?;
 
     let mut operation_specs = BTreeMap::new();
     for operation in registry.operation_specs() {
@@ -975,22 +1124,24 @@ fn compile_native_surface(
     if let FrameworkHelpProjection::Tool { name } = &declaration.framework_help {
         validate_tool_name(name, "framework help tool")?;
         tool_names.insert(name.clone());
-        tools.push(
-            Tool::new(
-                name.clone(),
-                "Return catalog-derived help for the native serving surface.",
-                schema_for_type::<HelpRequest>(),
-            )
-            .with_title("Help")
-            .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden))
-            .annotate(
-                ToolAnnotations::new()
-                    .read_only(true)
-                    .destructive(false)
-                    .idempotent(true)
-                    .open_world(false),
-            ),
+        let tool = Tool::new(
+            name.clone(),
+            "Return catalog-derived help for the native serving surface.",
+            schema_for_type::<HelpRequest>(),
+        )
+        .with_title("Help")
+        .annotate(
+            ToolAnnotations::new()
+                .read_only(true)
+                .destructive(false)
+                .idempotent(true)
+                .open_world(false),
         );
+        tools.push(with_delivery_execution(
+            tool,
+            &task_delivery,
+            &crate::TaskSupportSpec::Forbidden,
+        ));
     }
 
     for tool_decl in &declaration.tools {
@@ -1061,12 +1212,15 @@ fn compile_native_surface(
                 let tool = Tool::new(name.clone(), final_description, input)
                     .with_title(display_title.clone())
                     .with_raw_output_schema(Arc::new(output))
-                    .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden))
                     .annotate(annotations_for_operations(
                         std::slice::from_ref(operation),
                         &display_title,
                     ));
-                tools.push(tool);
+                tools.push(with_delivery_execution(
+                    tool,
+                    &task_delivery,
+                    &operation.task_support,
+                ));
                 operations.push(NativeSurfaceOperation {
                     spec: (*operation).clone(),
                     call: NativeSurfaceCall {
@@ -1182,18 +1336,14 @@ fn compile_native_surface(
                     &effective_bindings,
                 );
                 let defaults = presentation_defaults(&display_title)?;
-                tools.push(
-                    Tool::new(name.clone(), final_description, input)
-                        .with_title(display_title.clone())
-                        .with_raw_output_schema(Arc::new(output))
-                        .with_execution(
-                            ToolExecution::new().with_task_support(TaskSupport::Forbidden),
-                        )
-                        .annotate(annotations_for_operations(
-                            &member_operations,
-                            &display_title,
-                        )),
-                );
+                let tool = Tool::new(name.clone(), final_description, input)
+                    .with_title(display_title.clone())
+                    .with_raw_output_schema(Arc::new(output))
+                    .annotate(annotations_for_operations(
+                        &member_operations,
+                        &display_title,
+                    ));
+                tools.push(with_delivery_execution(tool, &task_delivery, &task_support));
                 for (operation, member) in member_operations.iter().zip(members) {
                     operations.push(NativeSurfaceOperation {
                         spec: operation.clone(),
@@ -1224,6 +1374,7 @@ fn compile_native_surface(
         &mapped_operations,
         registry,
     )?;
+    validate_task_support(&task_delivery, &operations)?;
 
     let server_instructions = registry
         .preamble()
@@ -1234,7 +1385,7 @@ fn compile_native_surface(
         .iter()
         .map(operation_document)
         .collect::<Result<Vec<_>>>()?;
-    let document = json!({
+    let mut document = json!({
         "version": SNAPSHOT_VERSION,
         "protocolVersion": target.as_str(),
         "name": declaration.name,
@@ -1244,6 +1395,12 @@ fn compile_native_surface(
         "tools": tools,
         "operations": operations_document,
     });
+    if let Some(delivery) = compiled_task_delivery_document(&task_delivery) {
+        document
+            .as_object_mut()
+            .expect("native surface document is an object")
+            .insert("taskDelivery".to_string(), delivery);
+    }
     let canonical_json = canonical_json(&document)?;
     let surface_hash = framed_snapshot_hash(NATIVE_HASH_DOMAIN, SNAPSHOT_VERSION, &canonical_json);
     let identity = ServingSurfaceIdentity::new(declaration.name.clone(), surface_hash.clone())?;
@@ -1254,6 +1411,7 @@ fn compile_native_surface(
         catalog_hash,
         surface_hash,
         declaration: declaration.clone(),
+        task_delivery,
         server_instructions,
         tools,
         operations,
@@ -1266,6 +1424,119 @@ fn compile_native_surface(
         routes,
         resource_binders,
     })
+}
+
+fn compile_task_delivery(
+    declaration: &TaskDeliveryDecl,
+    target: McpProtocolTarget,
+) -> Result<CompiledTaskDelivery> {
+    match declaration {
+        TaskDeliveryDecl::Disabled => Ok(CompiledTaskDelivery::Disabled),
+        TaskDeliveryDecl::Legacy2025_11_25 => {
+            if target != McpProtocolTarget::V2025_11_25 {
+                return Err(build_error(
+                    "legacy task delivery requires MCP protocol target `2025-11-25`",
+                ));
+            }
+            Ok(CompiledTaskDelivery::Legacy2025_11_25(
+                CompiledLegacyTaskDelivery {
+                    capability: legacy_tasks_capability(),
+                },
+            ))
+        }
+        TaskDeliveryDecl::TasksExtension {
+            optional_policy,
+            retention_ms,
+        } => {
+            if target != McpProtocolTarget::V2026_07_28 {
+                return Err(build_error(
+                    "Tasks Extension delivery requires MCP protocol target `2026-07-28`",
+                ));
+            }
+            if !(1..=604_800_000).contains(retention_ms) {
+                return Err(build_error(
+                    "Tasks Extension retention must be between 1 and 604800000 milliseconds",
+                ));
+            }
+            Ok(CompiledTaskDelivery::TasksExtension(
+                CompiledTasksExtensionDelivery {
+                    capability: TasksExtensionCapability,
+                    optional_policy: *optional_policy,
+                    retention_ms: *retention_ms,
+                },
+            ))
+        }
+    }
+}
+
+pub(crate) fn legacy_tasks_capability() -> TasksCapability {
+    TasksCapability {
+        requests: Some(TaskRequestsCapability {
+            sampling: None,
+            elicitation: None,
+            tools: Some(ToolsTaskCapability {
+                call: Some(JsonObject::new()),
+            }),
+        }),
+        list: None,
+        cancel: Some(JsonObject::new()),
+    }
+}
+
+fn validate_task_support(
+    delivery: &CompiledTaskDelivery,
+    operations: &[NativeSurfaceOperation],
+) -> Result<()> {
+    if matches!(delivery, CompiledTaskDelivery::Disabled)
+        && operations.iter().any(|operation| {
+            matches!(
+                operation.spec.task_support,
+                crate::TaskSupportSpec::Required
+            )
+        })
+    {
+        return Err(build_error(
+            "disabled task delivery cannot expose an operation with required task support",
+        ));
+    }
+    Ok(())
+}
+
+fn with_delivery_execution(
+    tool: Tool,
+    delivery: &CompiledTaskDelivery,
+    support: &crate::TaskSupportSpec,
+) -> Tool {
+    if matches!(delivery, CompiledTaskDelivery::Legacy2025_11_25(_)) {
+        tool.with_execution(ToolExecution::new().with_task_support(match support {
+            crate::TaskSupportSpec::Forbidden => TaskSupport::Forbidden,
+            crate::TaskSupportSpec::Optional => TaskSupport::Optional,
+            crate::TaskSupportSpec::Required => TaskSupport::Required,
+        }))
+    } else {
+        tool
+    }
+}
+
+fn compiled_task_delivery_document(delivery: &CompiledTaskDelivery) -> Option<Value> {
+    match delivery {
+        CompiledTaskDelivery::Disabled => None,
+        CompiledTaskDelivery::Legacy2025_11_25(_) => Some(json!({
+            "kind": "legacy2025_11_25",
+            "runtimeContractVersion": TASK_RUNTIME_CONTRACT_VERSION,
+            "maxStoredTaskRecordBytes": MAX_STORED_TASK_RECORD_BYTES,
+            "maxStoredTasks": MAX_STORED_TASKS,
+        })),
+        CompiledTaskDelivery::TasksExtension(delivery) => Some(json!({
+            "kind": "tasksExtension",
+            "extension": delivery.extension_id(),
+            "runtimeContractVersion": TASK_RUNTIME_CONTRACT_VERSION,
+            "maxStoredTaskRecordBytes": MAX_STORED_TASK_RECORD_BYTES,
+            "maxStoredTasks": MAX_STORED_TASKS,
+            "optionalPolicy": delivery.optional_policy(),
+            "retentionMs": delivery.retention_ms(),
+        })),
+    }
 }
 
 fn validate_registry(registry: &CommandRegistry) -> Result<()> {
@@ -2628,6 +2899,12 @@ pub(crate) fn compile_effect_lane_surface(
         "protocolVersion": "2025-11-25",
         "name": "effect-lanes",
         "catalogHash": registry.catalog_identity().catalog_hash,
+        "taskDelivery": {
+            "kind": "legacy2025_11_25",
+            "runtimeContractVersion": TASK_RUNTIME_CONTRACT_VERSION,
+            "maxStoredTaskRecordBytes": MAX_STORED_TASK_RECORD_BYTES,
+            "maxStoredTasks": MAX_STORED_TASKS,
+        },
         "server": { "instructions": instructions },
         "tools": tools,
         "presentationDefaults": presentation_defaults.iter().map(|(tool, defaults)| {

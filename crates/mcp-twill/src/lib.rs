@@ -16,6 +16,10 @@ pub mod response;
 pub mod results;
 pub mod rmcp_adapter;
 pub mod runtime;
+pub mod stateless;
+mod stateless_wire;
+pub mod tasks;
+mod tasks_extension_wire;
 pub mod template;
 pub mod types;
 
@@ -51,5 +55,7 @@ pub use rmcp_adapter::{
     WorkspaceMetadataCompatibility,
 };
 pub use runtime::RuntimeIdentity;
+pub use stateless::{StatelessMcpHttpBody, StatelessMcpHttpService, StatelessMcpService};
+pub use tasks::*;
 pub use template::{CommandTemplate, TemplateToken};
 pub use types::{Field, FieldShape, TypeDecl, Variant};
