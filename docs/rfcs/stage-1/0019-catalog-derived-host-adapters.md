@@ -2,7 +2,7 @@
 
 # RFC 0019: Catalog-Derived Host Adapters
 
-- Status: Draft
+- Status: Accepted
 - Area: host adapters, generated artifacts, private invocation transport, result projection
 - Target milestone: v0.4
 - Depends on: RFC 0009 (typed host workspace observations), RFC 0011 (guidance decomposition), RFC 0013 (conversation identity), RFC 0014 (application results), RFC 0015 (native surface snapshots), RFC 0016 (ambient resource binding), RFC 0018 (invocation and confirmation presentation), RFC 0020 (protocol-versioned task delivery)
