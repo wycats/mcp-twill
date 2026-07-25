@@ -4,7 +4,7 @@ import bundleJson from "../../public/evidence/bundle.json";
 import manifestJson from "../../public/evidence/manifest.json";
 import schemaJson from "../../public/evidence/schema.json";
 import vblHistoricalJson from "../../public/evidence/vbl/catalog-measurement.json";
-import vblFixtureJson from "../../public/evidence/vbl/v0.4.9-manifest.json";
+import vblFixtureRaw from "../../public/evidence/vbl/v0.4.9-manifest.json?raw";
 import {
   type EvidenceBundle,
   type EvidenceManifest,
@@ -342,10 +342,10 @@ export function parseEvidence(
   manifestValue: unknown,
   vblValue: {
     historicalMeasurement: JsonValue;
-    frozenFixtureManifest: JsonValue;
+    frozenFixtureManifestRaw: string;
   } = {
     historicalMeasurement: null,
-    frozenFixtureManifest: null,
+    frozenFixtureManifestRaw: "",
   },
 ): LoadedEvidence {
   const ajv = new Ajv2020({ allErrors: true, strict: false });
@@ -375,7 +375,7 @@ export function parseEvidence(
 export function loadTrackedEvidence(): LoadedEvidence {
   return parseEvidence(bundleJson, schemaJson, manifestJson, {
     historicalMeasurement: vblHistoricalJson as JsonValue,
-    frozenFixtureManifest: vblFixtureJson as JsonValue,
+    frozenFixtureManifestRaw: vblFixtureRaw,
   });
 }
 

@@ -186,11 +186,11 @@ function VblFieldStudy({ evidence }: AppProps) {
           <details className={styles.fieldEvidence}>
             <summary>Frozen evidence copy</summary>
             <CopyButton
-              value={prettyJson(evidence.vbl.frozenFixtureManifest)}
+              value={evidence.vbl.frozenFixtureManifestRaw}
               label="Copy fixture JSON"
             />
             <pre tabIndex={0}>
-              <code>{prettyJson(evidence.vbl.frozenFixtureManifest)}</code>
+              <code>{evidence.vbl.frozenFixtureManifestRaw}</code>
             </pre>
           </details>
         </article>

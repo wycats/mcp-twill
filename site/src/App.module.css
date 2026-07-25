@@ -578,7 +578,7 @@
   margin: 0;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1320px) {
   .experience {
     grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
   }

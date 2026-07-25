@@ -200,7 +200,7 @@ export interface LoadedEvidence {
   manifest: EvidenceManifest;
   vbl: {
     historicalMeasurement: JsonValue;
-    frozenFixtureManifest: JsonValue;
+    frozenFixtureManifestRaw: string;
   };
 }
 

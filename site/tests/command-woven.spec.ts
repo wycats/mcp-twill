@@ -107,6 +107,27 @@ test("has no page-level overflow at supported breakpoints", async ({ page }) => 
   ).toBeLessThanOrEqual(dimensions.client);
 });
 
+test("has no page-level overflow near the projection-grid breakpoint", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop transition widths");
+
+  for (const width of [1295, 1250, 1201]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+
+    const dimensions = await page.evaluate(() => ({
+      client: document.documentElement.clientWidth,
+      scroll: document.documentElement.scrollWidth,
+    }));
+
+    expect(
+      dimensions.scroll,
+      `page overflowed at ${width}px`,
+    ).toBeLessThanOrEqual(dimensions.client);
+  }
+});
+
 test("desktop causal threads survive resize and activate generated facts", async ({
   page,
 }, testInfo) => {

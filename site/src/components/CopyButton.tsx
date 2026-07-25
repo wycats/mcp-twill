@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import styles from "./CopyButton.module.css";
 
 interface CopyButtonProps {
@@ -6,15 +6,31 @@ interface CopyButtonProps {
   label?: string;
 }
 
+interface CopyFeedback {
+  value: string;
+  label: string;
+  message: "Copied" | "Copy unavailable";
+}
+
 export function CopyButton({ value, label = "Copy" }: CopyButtonProps) {
-  const [status, setStatus] = useState(label);
+  const [feedback, setFeedback] = useState<CopyFeedback | null>(null);
+  const latestRequestId = useRef(0);
+  const status =
+    feedback?.value === value && feedback.label === label
+      ? feedback.message
+      : label;
 
   async function copy() {
+    const requestId = ++latestRequestId.current;
     try {
       await navigator.clipboard.writeText(value);
-      setStatus("Copied");
+      if (requestId === latestRequestId.current) {
+        setFeedback({ value, label, message: "Copied" });
+      }
     } catch {
-      setStatus("Copy unavailable");
+      if (requestId === latestRequestId.current) {
+        setFeedback({ value, label, message: "Copy unavailable" });
+      }
     }
   }
 
