@@ -131,10 +131,10 @@ impl StatelessMcpService {
             let task = tokio::spawn(async move {
                 let _ = ready.await;
                 let dispatched = dispatch_bytes(&server, None, bytes, &Extensions::new()).await;
-                let _ = write_stdio_response(&writer, dispatched.body).await;
                 if let Some(request_id) = &request_id_for_task {
                     in_flight_for_task.lock().await.remove(request_id);
                 }
+                let _ = write_stdio_response(&writer, dispatched.body).await;
             });
             if let Some(request_id) = request_id {
                 in_flight
@@ -879,6 +879,7 @@ mod tests {
 
     use http_body::Body;
     use serde_json::json;
+    use tokio::io::AsyncReadExt;
 
     use super::*;
     use crate::{
@@ -1748,12 +1749,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stdio_request_ids_remain_live_until_the_response_is_written() {
+    async fn stdio_request_ids_are_released_before_the_response_is_written() {
         let service = stateless_service_from_registry(registry(TaskSupportSpec::Optional));
         let (mut request_writer, request_reader) = tokio::io::duplex(16 * 1024);
         let (response_writer, response_reader) = tokio::io::duplex(1);
         let serving = tokio::spawn(service.serve_stdio(request_reader, response_writer));
-        let mut responses = BufReader::new(response_reader).lines();
+        let mut responses = BufReader::new(response_reader);
         let request = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -1765,32 +1766,90 @@ mod tests {
             .write_all(format!("{request}\n").as_bytes())
             .await
             .unwrap();
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-        }
+        let first_byte =
+            tokio::time::timeout(std::time::Duration::from_secs(1), responses.read_u8())
+                .await
+                .unwrap()
+                .unwrap();
         request_writer
             .write_all(format!("{request}\n").as_bytes())
             .await
             .unwrap();
 
-        let first: Value = serde_json::from_str(
-            &tokio::time::timeout(std::time::Duration::from_secs(1), responses.next_line())
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap(),
+        let mut first_tail = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            responses.read_line(&mut first_tail),
         )
+        .await
+        .unwrap()
         .unwrap();
-        let second: Value = serde_json::from_str(
-            &tokio::time::timeout(std::time::Duration::from_secs(1), responses.next_line())
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap(),
+        let first: Value =
+            serde_json::from_str(&format!("{}{}", char::from(first_byte), first_tail)).unwrap();
+        let mut second_line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            responses.read_line(&mut second_line),
         )
+        .await
+        .unwrap()
         .unwrap();
+        let second: Value = serde_json::from_str(&second_line).unwrap();
         assert!(first["result"]["tools"].is_array());
-        assert_eq!(second["error"]["code"], -32600);
+        assert!(second["result"]["tools"].is_array());
+
+        drop(request_writer);
+        serving.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stdio_cancellation_cannot_truncate_a_response_write() {
+        let service = stateless_service_from_registry(registry(TaskSupportSpec::Optional));
+        let (mut request_writer, request_reader) = tokio::io::duplex(16 * 1024);
+        let (response_writer, response_reader) = tokio::io::duplex(1);
+        let serving = tokio::spawn(service.serve_stdio(request_reader, response_writer));
+        let mut responses = BufReader::new(response_reader);
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "_meta": meta(false) }
+        });
+        request_writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let first_byte =
+            tokio::time::timeout(std::time::Duration::from_secs(1), responses.read_u8())
+                .await
+                .unwrap()
+                .unwrap();
+
+        let cancelled = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": { "requestId": 1, "reason": "response is already writing" }
+        });
+        request_writer
+            .write_all(format!("{cancelled}\n").as_bytes())
+            .await
+            .unwrap();
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+
+        let mut response_tail = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            responses.read_line(&mut response_tail),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let response: Value =
+            serde_json::from_str(&format!("{}{}", char::from(first_byte), response_tail)).unwrap();
+        assert_eq!(response["id"], 1);
+        assert!(response["result"]["tools"].is_array());
 
         drop(request_writer);
         serving.await.unwrap().unwrap();

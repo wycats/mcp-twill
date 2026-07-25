@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt,
     sync::{
         Arc,
@@ -212,6 +212,7 @@ pub struct CliMcpServer {
     events: Arc<dyn EventSink>,
     identity: Arc<RuntimeIdentity>,
     legacy_session: Arc<LegacySessionState>,
+    legacy_task_keys: Arc<std::sync::Mutex<HashSet<crate::TaskStorageKey>>>,
 }
 
 #[derive(Default)]
@@ -228,6 +229,9 @@ struct LegacyCompatibilityTransport<T> {
 struct LegacySessionCleanup {
     state: Arc<LegacySessionState>,
     live_tasks: Arc<Mutex<BTreeMap<String, LiveTaskControl>>>,
+    store: Arc<dyn TaskStore>,
+    task_keys: Arc<std::sync::Mutex<HashSet<crate::TaskStorageKey>>>,
+    _mount: Option<Arc<TaskStoreMount>>,
 }
 
 impl LegacySessionCleanup {
@@ -235,33 +239,70 @@ impl LegacySessionCleanup {
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return;
         }
+        let task_keys = take_legacy_task_keys(&self.task_keys);
         let tasks = std::mem::take(&mut *self.live_tasks.lock().await);
         for task in tasks.into_values() {
             task.cancel();
         }
+        remove_legacy_task_records(self.store, task_keys).await;
     }
 
     fn run_after_drop(self) {
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return;
         }
-        if let Ok(mut tasks) = self.live_tasks.try_lock() {
-            let tasks = std::mem::take(&mut *tasks);
-            for task in tasks.into_values() {
-                task.cancel();
-            }
-            return;
-        }
+        let task_keys = take_legacy_task_keys(&self.task_keys);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let live_tasks = self.live_tasks;
+            let store = self.store;
+            let mount = self._mount;
             runtime.spawn(async move {
                 let tasks = std::mem::take(&mut *live_tasks.lock().await);
                 for task in tasks.into_values() {
                     task.cancel();
                 }
+                remove_legacy_task_records(store, task_keys).await;
+                drop(mount);
             });
+        } else if let Ok(mut tasks) = self.live_tasks.try_lock() {
+            let tasks = std::mem::take(&mut *tasks);
+            for task in tasks.into_values() {
+                task.cancel();
+            }
         }
     }
+}
+
+fn take_legacy_task_keys(
+    task_keys: &std::sync::Mutex<HashSet<crate::TaskStorageKey>>,
+) -> HashSet<crate::TaskStorageKey> {
+    std::mem::take(
+        &mut *task_keys
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+async fn remove_legacy_task_records(
+    store: Arc<dyn TaskStore>,
+    task_keys: HashSet<crate::TaskStorageKey>,
+) {
+    for key in task_keys {
+        if store.remove(key).await.is_err() {
+            schedule_task_record_removal(store.clone(), key);
+        }
+    }
+}
+
+fn schedule_task_record_removal(store: Arc<dyn TaskStore>, key: crate::TaskStorageKey) {
+    tokio::spawn(async move {
+        loop {
+            match store.remove(key).await {
+                Ok(_) => return,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            }
+        }
+    });
 }
 
 impl<T> Drop for LegacyCompatibilityTransport<T> {
@@ -694,6 +735,17 @@ impl CliMcpServer {
             Some(LegacySessionCleanup {
                 state: self.legacy_session.clone(),
                 live_tasks: self.live_tasks.clone(),
+                store: self
+                    .task_runtime
+                    .as_ref()
+                    .expect("legacy serving requires a task runtime")
+                    .store
+                    .clone(),
+                task_keys: self.legacy_task_keys.clone(),
+                _mount: self
+                    .task_runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime._mount.clone()),
             })
         } else {
             None
@@ -815,6 +867,7 @@ impl CliMcpServer {
             events: Arc::new(NoopEventSink),
             identity: Arc::new(identity),
             legacy_session: Arc::new(LegacySessionState::default()),
+            legacy_task_keys: Arc::new(std::sync::Mutex::new(HashSet::new())),
         })
     }
 
@@ -2297,8 +2350,7 @@ impl CliMcpServer {
             let create = runtime.store.create(key, stored.clone()).await;
             match create {
                 Ok(TaskStoreCreate::Created) => {
-                    reservation.disarm();
-                    created = Some((task_id, key, semantic, stored, cancellation));
+                    created = Some((task_id, key, semantic, stored, cancellation, reservation));
                     break;
                 }
                 Ok(TaskStoreCreate::Occupied) => {
@@ -2319,9 +2371,10 @@ impl CliMcpServer {
                 }
             }
         }
-        let (task_id, key, semantic, stored, cancellation) = created.ok_or_else(|| {
-            crate::stateless::StatelessDispatchError::internal("Task creation failed")
-        })?;
+        let (task_id, key, semantic, stored, cancellation, mut reservation) =
+            created.ok_or_else(|| {
+                crate::stateless::StatelessDispatchError::internal("Task creation failed")
+            })?;
         let creation = extension_task_handle(&semantic);
         let runtime = runtime.clone();
         let server = self.clone();
@@ -2378,6 +2431,7 @@ impl CliMcpServer {
             )
             .await;
         });
+        reservation.disarm();
         monitor_task_runner(
             handle,
             completion_runtime,
@@ -2558,6 +2612,20 @@ impl ServerHandler for CliMcpServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
+        if matches!(
+            &self.surface,
+            McpToolSurface::Native(surface)
+                if matches!(
+                    surface.task_support_for_tool(name),
+                    Some(TaskSupportSpec::Forbidden)
+                )
+        ) {
+            // rmcp 1.7 maps forbidden task augmentation to INVALID_PARAMS
+            // before `enqueue_task` runs. Omitting this private lookup lets
+            // Twill apply the accepted legacy METHOD_NOT_FOUND contract while
+            // leaving the public tools/list declaration unchanged.
+            return None;
+        }
         self.tools().into_iter().find(|tool| tool.name == name)
     }
 
@@ -2827,10 +2895,17 @@ impl ServerHandler for CliMcpServer {
                 .ok_or_else(|| rmcp::ErrorData::invalid_params("Unknown tool", None))?,
         };
         if matches!(task_support, TaskSupportSpec::Forbidden) {
-            return Err(rmcp::ErrorData::invalid_params(
-                format!("Tool {tool_name} does not support task-augmented execution"),
-                None,
-            ));
+            return match &self.surface {
+                McpToolSurface::Native(_) => Err(rmcp::ErrorData::new(
+                    ErrorCode::METHOD_NOT_FOUND,
+                    "Method not found",
+                    None,
+                )),
+                McpToolSurface::EffectLanes(_) => Err(rmcp::ErrorData::invalid_params(
+                    format!("Tool {tool_name} does not support task-augmented execution"),
+                    None,
+                )),
+            };
         }
         let ttl = legacy_task_ttl(request.task.as_ref())?;
         let request_meta = request.meta.clone();
@@ -2887,6 +2962,24 @@ impl ServerHandler for CliMcpServer {
                     .map_err(|_| task_creation_failed())?
                 {
                     TaskStoreCreate::Created => {
+                        let retained = {
+                            let mut task_keys = self
+                                .legacy_task_keys
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if self.legacy_session.closed.load(Ordering::Acquire) {
+                                false
+                            } else {
+                                task_keys.insert(key);
+                                true
+                            }
+                        };
+                        if !retained {
+                            if runtime.store.remove(key).await.is_err() {
+                                schedule_task_record_removal(runtime.store.clone(), key);
+                            }
+                            return Err(task_creation_failed());
+                        }
                         created = Some((task_id, key, semantic, stored));
                         break;
                     }
@@ -4016,6 +4109,118 @@ mod tests {
         .await
         .expect("expiration cleanup retries transient removal failures");
         drop(replacement);
+    }
+
+    #[tokio::test]
+    async fn legacy_session_cleanup_releases_completed_and_unbounded_records() {
+        let concrete = InMemoryTaskStore::connection();
+        let store: Arc<dyn TaskStore> = concrete.clone();
+        let task_keys = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let surface_hash = "22".repeat(32);
+
+        for index in 0..crate::tasks::MAX_STORED_TASKS {
+            let task_id = format!("{index:064x}");
+            let key = derive_task_storage_key(
+                &surface_hash,
+                &TaskAccessPolicy::CapabilityId,
+                &task_id,
+                None,
+            )
+            .unwrap();
+            let working = SemanticTaskRecord::working(
+                task_id,
+                surface_hash.clone(),
+                0,
+                None,
+                SemanticTaskProfile::Legacy2025_11_25,
+                1,
+                None,
+            );
+            let semantic = if index % 2 == 0 {
+                working.successor(
+                    SemanticTaskStatus::Completed,
+                    Some(json!({ "content": [] })),
+                    2,
+                )
+            } else {
+                working
+            };
+            assert_eq!(
+                store
+                    .create(key, StoredTaskRecord::encode(&semantic).unwrap())
+                    .await
+                    .unwrap(),
+                TaskStoreCreate::Created
+            );
+            task_keys
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(key);
+        }
+        assert_eq!(
+            concrete.record_count_for_test().await,
+            crate::tasks::MAX_STORED_TASKS
+        );
+
+        LegacySessionCleanup {
+            state: Arc::new(LegacySessionState::default()),
+            live_tasks: Arc::new(Mutex::new(BTreeMap::new())),
+            store,
+            task_keys,
+            _mount: None,
+        }
+        .run()
+        .await;
+
+        assert_eq!(concrete.record_count_for_test().await, 0);
+    }
+
+    #[tokio::test]
+    async fn armed_extension_reservation_removes_a_created_record_before_runner_transfer() {
+        let concrete = InMemoryTaskStore::server_instance();
+        let store: Arc<dyn TaskStore> = concrete.clone();
+        let live_tasks = Arc::new(Mutex::new(BTreeMap::new()));
+        let task_id = "11".repeat(32);
+        let key = derive_task_storage_key(
+            &"22".repeat(32),
+            &TaskAccessPolicy::CapabilityId,
+            &task_id,
+            None,
+        )
+        .unwrap();
+        let semantic = SemanticTaskRecord::working(
+            task_id.clone(),
+            "22".repeat(32),
+            0,
+            None,
+            SemanticTaskProfile::TasksExtension,
+            1,
+            Some(10_000),
+        );
+        store
+            .create(key, StoredTaskRecord::encode(&semantic).unwrap())
+            .await
+            .unwrap();
+        live_tasks.lock().await.insert(
+            task_id.clone(),
+            LiveTaskControl::Extension(TaskCancellation::default()),
+        );
+
+        drop(LiveTaskReservation::new(
+            live_tasks.clone(),
+            store,
+            task_id,
+            key,
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while concrete.record_count_for_test().await != 0 || !live_tasks.lock().await.is_empty()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("an armed reservation removes both the record and live slot");
     }
 
     #[test]
