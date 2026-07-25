@@ -1,0 +1,12 @@
+.failure {
+  max-width: 48rem;
+  margin: 5rem auto;
+  padding: 1rem;
+  border-left: 3px solid var(--error);
+}
+
+.failure pre {
+  margin-top: 1rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

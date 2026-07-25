@@ -1,0 +1,96 @@
+:root {
+  color-scheme: light;
+  --paper: #f4efe5;
+  --ink: #211f1b;
+  --muted: #6f675b;
+  --rust: #9a3f2e;
+  --teal: #1f6d68;
+  --error: #a12b2b;
+  --success: #315d41;
+  --line: color-mix(in srgb, var(--ink) 18%, transparent);
+  --line-strong: color-mix(in srgb, var(--ink) 38%, transparent);
+  --font-editorial: Iowan Old Style, Palatino Linotype, Book Antiqua, Palatino,
+    Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    Liberation Mono, monospace;
+  font-family: var(--font-editorial);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background:
+    linear-gradient(to right, transparent 0, transparent calc(100% - 1px), var(--line) 100%)
+      0 0 / 25% 100%,
+    var(--paper);
+  color: var(--ink);
+}
+
+button,
+select,
+input {
+  font: inherit;
+}
+
+button,
+summary,
+select {
+  cursor: pointer;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--teal) 34%, transparent);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--teal);
+  text-underline-offset: 0.16em;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+pre {
+  margin: 0;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

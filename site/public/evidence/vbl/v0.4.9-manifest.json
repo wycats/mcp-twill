@@ -1,0 +1,81 @@
+{
+  "files": [
+    {
+      "derivation": "rustExport",
+      "path": "application-error-vectors.json",
+      "sha256": "36aa551aa6dbb7ba0677ed5a9fa0fd221ba04c71adc8336e9c45ea61b92581dd",
+      "sources": [
+        {
+          "path": "src/leases.rs",
+          "sha256": "ae4bd10dfc2a57c3467ceb4c67811d96cc7308b5f586c6dc4ed161566d3d4ed0"
+        }
+      ]
+    },
+    {
+      "derivation": "rustExport",
+      "path": "baseline-tools.json",
+      "sha256": "ac160d41a025734eefbb08dda04a4f40f8043c7f11aa2970e7c06f3939f14e75",
+      "sources": [
+        {
+          "path": "agent-surface-contract/src/lib.rs",
+          "sha256": "dd1c6a7e513df14ae351c45edc019984dada39a8467a31e5d21b38159ca9f287"
+        }
+      ]
+    },
+    {
+      "derivation": "reviewedVector",
+      "path": "presentation-vectors.json",
+      "sha256": "8d064f8d058caa525fa7a419a979b5ff05b0854d40cfcfffb8c6d91f8f8e5e82",
+      "sources": [
+        {
+          "path": "vscode-extension/src/confirmation.ts",
+          "sha256": "ca571ac3f0acda354008889d3012f1b6096093703ccae0855558793d2d5778b2"
+        },
+        {
+          "path": "vscode-extension/src/extension.ts",
+          "sha256": "0bf2f9f813c0d67a228c5e415e969c45b58a603611a83e48495662413e948860"
+        }
+      ]
+    },
+    {
+      "derivation": "rustExport",
+      "path": "surface-catalog.json",
+      "sha256": "6538b3591f83519a1551b5f2f13e9075a54a16a46dcad617fe5fcd0ace8f66f2",
+      "sources": [
+        {
+          "path": "agent-surface-contract/src/lib.rs",
+          "sha256": "dd1c6a7e513df14ae351c45edc019984dada39a8467a31e5d21b38159ca9f287"
+        },
+        {
+          "path": "src/surface.rs",
+          "sha256": "97cea1634eda3b9177fc771b0b30d523ed6daa958e64691aafd1bb321ce6bcdd"
+        },
+        {
+          "path": "src/surface_cli.rs",
+          "sha256": "d0f69d5b83258ebf5c3df91f642f3dabed1d8b74745fd6afd8cade685fad51a9"
+        }
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "vscode-package.json",
+      "sha256": "2c6730ad53159c3f5d913a72be06214e7f1136dbc90c62be5a8f4f186e14e3fc",
+      "sources": [
+        {
+          "path": "vscode-extension/package.json",
+          "sha256": "2c6730ad53159c3f5d913a72be06214e7f1136dbc90c62be5a8f4f186e14e3fc"
+        }
+      ]
+    }
+  ],
+  "formatVersion": 1,
+  "importer": {
+    "command": "cargo xtask import-vbl-fixture --repository <local-git-repository> --ref v0.4.9",
+    "version": 1
+  },
+  "source": {
+    "commit": "f2bd478fa5506df7530b3fd60d7d0114f0ed3160",
+    "repository": "https://github.com/wycats/visible-browser-lab",
+    "tag": "v0.4.9"
+  }
+}
