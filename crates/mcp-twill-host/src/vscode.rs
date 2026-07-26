@@ -383,18 +383,24 @@ function cloneData(
     if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error(failure);
     if (hasInheritedEnumerableState(value)) throw new Error(failure);
     const keys = Reflect.ownKeys(value);
-    if (keys.some((key) => typeof key === "symbol" || (key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key)))) throw new Error(failure);
-    const items: unknown[] = [];
-    for (let index = 0; index < value.length; index++) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (!descriptor?.enumerable || !("value" in descriptor)) throw new Error(failure);
-      items.push(descriptor.value);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || lengthDescriptor.enumerable || !("value" in lengthDescriptor)) throw new Error(failure);
+    const length = lengthDescriptor.value;
+    if (!Number.isSafeInteger(length) || length < 0 || keys.length !== length + 1) throw new Error(failure);
+    for (const key of keys) {
+      if (key === "length") continue;
+      if (typeof key === "symbol") throw new Error(failure);
+      const index = Number(key);
+      if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) throw new Error(failure);
     }
     countCloneBytes(budget, "[");
-    const copy = items.map((item, index) => {
+    const copy: unknown[] = [];
+    for (let index = 0; index < length; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor?.enumerable || !("value" in descriptor)) throw new Error(failure);
       if (index > 0) countCloneBytes(budget, ",");
-      return cloneData(item, failure, depth + 1, seen, budget);
-    });
+      copy.push(cloneData(descriptor.value, failure, depth + 1, seen, budget));
+    }
     countCloneBytes(budget, "]");
     return Object.freeze(copy);
   }
@@ -984,19 +990,22 @@ class DiagnosticForwarder {
   }
 
   private write(chunk: Uint8Array, notice: boolean): void {
-    let result: void | Promise<void>;
+    let pending: Promise<void> | undefined;
     try {
-      result = this.sink!.write(chunk);
+      const result = this.sink!.write(chunk);
+      if (result && typeof (result as Promise<void>).then === "function") {
+        pending = Promise.resolve(result);
+      }
     } catch {
       this.disabled = true;
       return;
     }
-    if (!result || typeof (result as Promise<void>).then !== "function") {
+    if (!pending) {
       if (!notice) this.maybeNotice();
       return;
     }
     this.inFlight = true;
-    void Promise.resolve(result).then(
+    void pending.then(
       () => {
         this.inFlight = false;
         if (!notice) this.maybeNotice();
@@ -1111,18 +1120,37 @@ async function invokeRuntime(
   const diagnostics = new DiagnosticForwarder(runtime.diagnosticSink);
   child.stderr!.on("data", (chunk: Uint8Array) => diagnostics.offer(chunk));
   const cancellation = token.onCancellationRequested(requestTermination);
-  child.stdin!.end(envelope);
-  const exit = await new Promise<number | null>((resolve, reject) => {
+  let stdinFailed = false;
+  let settleStdin: () => void = () => {};
+  const stdinSettlement = new Promise<void>((resolve) => {
+    settleStdin = resolve;
+  });
+  child.stdin!.on("error", () => {
+    stdinFailed = true;
+    requestTermination();
+    settleStdin();
+  });
+  child.stdin!.once("finish", settleStdin);
+  child.stdin!.once("close", settleStdin);
+  const exitPromise = new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", resolve);
-  }).finally(() => {
+  });
+  try {
+    child.stdin!.end(envelope);
+  } catch {
+    stdinFailed = true;
+    requestTermination();
+    settleStdin();
+  }
+  const [exit] = await Promise.all([exitPromise, stdinSettlement]).finally(() => {
     if (forceTimer !== undefined) clearTimeout(forceTimer);
     cancellation.dispose();
     diagnostics.finish();
   });
   if (token.isCancellationRequested) throw new vscode.CancellationError();
   if (stdoutOverflow) throw new Error(PAYLOAD_FAILURE);
-  if (exit !== 0) throw new Error(CONTRACT_FAILURE);
+  if (stdinFailed || exit !== 0) throw new Error(CONTRACT_FAILURE);
   const bytes = new Uint8Array(stdoutBytes);
   let offset = 0;
   for (const chunk of stdout) { bytes.set(chunk, offset); offset += chunk.byteLength; }

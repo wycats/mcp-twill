@@ -138,6 +138,21 @@ fn surface_with_help(registry: &CommandRegistry) -> mcp_twill::Result<NativeTool
         .build(registry, McpProtocolTarget::V2025_11_25)
 }
 
+fn surface_with_long_help(registry: &CommandRegistry) -> mcp_twill::Result<NativeToolSurface> {
+    NativeToolSurface::builder("host-items-long-help")
+        .framework_help(FrameworkHelpProjection::Tool {
+            name: "framework_help_with_a_deliberately_long_generated_host_name".to_string(),
+        })
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .tool(NativeToolDecl::Direct {
+            name: "i".to_string(),
+            operation_id: "items.get".to_string(),
+            title: Some("Get Item".to_string()),
+            description: Some("Read one item from the catalog.".to_string()),
+        })
+        .build(registry, McpProtocolTarget::V2025_11_25)
+}
+
 fn unsupported_policy() -> UnsupportedContextPolicy {
     [
         HostContextReason::UnknownTokenShape,
@@ -185,6 +200,38 @@ fn builder_and_direct_declaration_compile_identically() -> anyhow::Result<()> {
     assert_eq!(
         built.snapshot().host_adapter_hash(),
         direct.snapshot().host_adapter_hash()
+    );
+    Ok(())
+}
+
+#[test]
+fn invocation_limits_include_the_framework_help_tool() -> anyhow::Result<()> {
+    let registry = registry();
+    let surface = surface_with_long_help(&registry)?;
+    let mut declaration = profile(surface.snapshot())?.declaration().clone();
+    let help_name = "host_framework_help_with_a_deliberately_long_generated_host_name";
+    let minimal_help = json!({
+        "version": 1,
+        "hostProfile": declaration.id.as_str(),
+        "hostAdapterHash": "0".repeat(64),
+        "surfaceHash": "0".repeat(64),
+        "tool": help_name,
+        "arguments": {},
+        "context": {"kind": "absent"},
+        "runtime": {"kind": "vs_code"},
+    });
+    let exact_bound = serde_json::to_vec(&minimal_help)?.len() as u32;
+
+    declaration.invocation_limits.max_call_bytes = exact_bound;
+    declaration.clone().compile(surface.snapshot())?;
+    declaration.invocation_limits.max_call_bytes = exact_bound - 1;
+    let error = declaration
+        .compile(surface.snapshot())
+        .expect_err("framework help must participate in call-bound validation");
+    assert!(
+        error
+            .to_string()
+            .contains("host call bound cannot contain every minimal valid call envelope")
     );
     Ok(())
 }

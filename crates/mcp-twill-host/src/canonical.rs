@@ -57,12 +57,10 @@ fn build_error(message: impl Into<String>) -> FrameworkError {
 fn validate_ijson(value: &Value) -> Result<()> {
     match value {
         Value::Number(number) => {
-            let exact_integer = number
-                .as_u64()
-                .is_none_or(|integer| (integer as f64) as u64 == integer)
+            let exact_integer = number.as_u64().is_none_or(exact_binary64_integer)
                 && number
                     .as_i64()
-                    .is_none_or(|integer| (integer as f64) as i64 == integer);
+                    .is_none_or(|integer| exact_binary64_integer(integer.unsigned_abs()));
             if !exact_integer || number.as_f64().is_some_and(|number| !number.is_finite()) {
                 return Err(build_error(
                     "host adapter number is outside the exact I-JSON domain",
@@ -82,6 +80,15 @@ fn validate_ijson(value: &Value) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+fn exact_binary64_integer(magnitude: u64) -> bool {
+    if magnitude == 0 {
+        return true;
+    }
+    let significant_bits = u64::BITS - magnitude.leading_zeros();
+    let discarded_bits = significant_bits.saturating_sub(f64::MANTISSA_DIGITS);
+    magnitude.trailing_zeros() >= discarded_bits
 }
 
 fn write_canonical_json(value: &Value, output: &mut Vec<u8>) -> Result<()> {
@@ -131,10 +138,16 @@ fn write_canonical_json(value: &Value, output: &mut Vec<u8>) -> Result<()> {
 
 fn canonical_number(number: &serde_json::Number) -> Result<String> {
     if let Some(value) = number.as_u64() {
-        return Ok(value.to_string());
+        if value <= (1_u64 << f64::MANTISSA_DIGITS) {
+            return Ok(value.to_string());
+        }
+        return canonical_binary64_number(value as f64);
     }
     if let Some(value) = number.as_i64() {
-        return Ok(value.to_string());
+        if value.unsigned_abs() <= (1_u64 << f64::MANTISSA_DIGITS) {
+            return Ok(value.to_string());
+        }
+        return canonical_binary64_number(value as f64);
     }
     let value = number
         .to_string()
@@ -142,6 +155,10 @@ fn canonical_number(number: &serde_json::Number) -> Result<String> {
         .ok()
         .filter(|value| value.is_finite())
         .ok_or_else(|| build_error("host adapter number is outside the I-JSON domain"))?;
+    canonical_binary64_number(value)
+}
+
+fn canonical_binary64_number(value: f64) -> Result<String> {
     if value == 0.0 {
         return Ok("0".to_string());
     }
@@ -380,6 +397,12 @@ mod tests {
 
         let rounded = Value::Number(9_007_199_254_740_993_u64.into());
         assert!(canonical_json(&rounded).is_err());
+        assert!(canonical_json(&Value::Number(u64::MAX.into())).is_err());
+        assert!(canonical_json(&Value::Number(i64::MAX.into())).is_err());
+        assert_eq!(
+            String::from_utf8(canonical_json(&Value::Number(i64::MIN.into())).unwrap()).unwrap(),
+            "-9223372036854776000"
+        );
     }
 
     #[test]

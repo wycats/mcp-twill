@@ -202,6 +202,37 @@ module.exports = {
   if (!overDepthPreparationFailed || providerCalls !== 0 || runtimeCalls !== 0) {
     throw new Error("over-depth preparation input reached a host hook");
   }
+  const numericLookingProperty = [];
+  Object.defineProperty(numericLookingProperty, "4294967295", {
+    enumerable: true,
+    value: "not-an-array-index",
+  });
+  let numericLookingPropertyFailed = false;
+  try {
+    await registration.implementation.invoke(
+      { input: { id: "42", values: numericLookingProperty } },
+      token(),
+    );
+  } catch (error) {
+    numericLookingPropertyFailed =
+      error.message === "Generated host adapter received an invalid result envelope";
+  }
+  if (!numericLookingPropertyFailed || providerCalls !== 0 || runtimeCalls !== 0) {
+    throw new Error("numeric-looking array property crossed the snapshot boundary");
+  }
+  let oversizedArrayFailed = false;
+  try {
+    await registration.implementation.invoke(
+      { input: { id: "42", values: Array.from({ length: 70_000 }, () => "value") } },
+      token(),
+    );
+  } catch (error) {
+    oversizedArrayFailed =
+      error.message === "Generated host call exceeds its configured byte limit";
+  }
+  if (!oversizedArrayFailed || providerCalls !== 0 || runtimeCalls !== 0) {
+    throw new Error("oversized array reached a host hook");
+  }
   provider.resolve = () => {
     throw new Error("replacement provider method was observed");
   };
@@ -295,24 +326,28 @@ module.exports = {
       this.signalCode = null;
       this.stdout = new EventEmitter();
       this.stderr = new EventEmitter();
-      this.stdin = {
-        end: (bytes) => {
-          const call = JSON.parse(new TextDecoder().decode(bytes));
+      this.stdin = new EventEmitter();
+      this.stdin.end = (bytes) => {
+        const call = JSON.parse(new TextDecoder().decode(bytes));
+        if (call.arguments.id === "stdin-error") {
+          queueMicrotask(() => this.stdin.emit("error", new Error("EPIPE")));
+          return;
+        }
+        queueMicrotask(() => {
+          this.stdin.emit("finish");
           if (call.arguments.id === "cancel") return;
-          queueMicrotask(() => {
-            this.stderr.emit("data", Uint8Array.from([1, 2, 3]));
-            this.stderr.emit("data", Uint8Array.from([4, 5, 6]));
-            const result = {
-              hostAdapterHash: call.hostAdapterHash,
-              outcome: { kind: "success", text: '{"id":"42","value":"found"}' },
-              surfaceHash: call.surfaceHash,
-              version: 1,
-            };
-            this.stdout.emit("data", new TextEncoder().encode(JSON.stringify(result)));
-            this.exitCode = 0;
-            this.emit("close", 0);
-          });
-        },
+          this.stderr.emit("data", Uint8Array.from([1, 2, 3]));
+          this.stderr.emit("data", Uint8Array.from([4, 5, 6]));
+          const result = {
+            hostAdapterHash: call.hostAdapterHash,
+            outcome: { kind: "success", text: '{"id":"42","value":"found"}' },
+            surfaceHash: call.surfaceHash,
+            version: 1,
+          };
+          this.stdout.emit("data", new TextEncoder().encode(JSON.stringify(result)));
+          this.exitCode = 0;
+          this.emit("close", 0);
+        });
       };
     }
 
@@ -348,6 +383,7 @@ module.exports = {
   let processResolverCalls = 0;
   let diagnosticCalls = 0;
   let settleDiagnostic;
+  let diagnosticMode = "pending";
   const processExtension = { subscriptions: [] };
   processModule.registerGeneratedHostTools(
     processExtension,
@@ -372,6 +408,13 @@ module.exports = {
       diagnosticSink: {
         write() {
           diagnosticCalls++;
+          if (diagnosticMode === "throwing-then") {
+            return Object.defineProperty({}, "then", {
+              get() {
+                throw new Error("hostile then getter");
+              },
+            });
+          }
           return new Promise((resolve) => {
             settleDiagnostic = resolve;
           });
@@ -397,6 +440,30 @@ module.exports = {
   await Promise.resolve();
   if (diagnosticCalls !== 1) {
     throw new Error("call-local diagnostics continued after transport cleanup");
+  }
+  diagnosticMode = "throwing-then";
+  const hostileDiagnosticResult = await processRegistration.implementation.invoke(
+    { input: { id: "diagnostic-thenable" } },
+    token(),
+  );
+  if (
+    diagnosticCalls !== 2
+    || hostileDiagnosticResult.content[0].value !== '{"id":"42","value":"found"}'
+  ) {
+    throw new Error("hostile diagnostic thenable escaped the process transport");
+  }
+  let stdinErrorFailed = false;
+  try {
+    await processRegistration.implementation.invoke(
+      { input: { id: "stdin-error" } },
+      token(),
+    );
+  } catch (error) {
+    stdinErrorFailed =
+      error.message === "Generated host adapter received an invalid result envelope";
+  }
+  if (!stdinErrorFailed) {
+    throw new Error("child stdin error escaped the process transport");
   }
   if (
     spawnRecord.executable !== process.execPath

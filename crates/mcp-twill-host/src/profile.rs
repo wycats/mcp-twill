@@ -998,19 +998,28 @@ fn validate_fitting_limits(
 ) -> Result<()> {
     let placeholder_hash = "0".repeat(64);
     for tool in tools {
-        let calls = tool.operations.iter().filter_map(|operation_id| {
-            operations.get(operation_id).map(|operation| {
-                let arguments = operation.call.arguments().cloned().unwrap_or_default();
-                json!({
-                    "version": 1,
-                    "hostProfile": declaration.id.as_str(),
-                    "hostAdapterHash": placeholder_hash.as_str(),
-                    "surfaceHash": placeholder_hash.as_str(),
-                    "tool": tool.host_name.as_str(),
-                    "arguments": arguments,
-                    "context": {"kind": "absent"},
-                    "runtime": {"kind": "vs_code"},
+        let arguments = if tool.operations.is_empty() {
+            vec![BTreeMap::new()]
+        } else {
+            tool.operations
+                .iter()
+                .filter_map(|operation_id| {
+                    operations
+                        .get(operation_id)
+                        .map(|operation| operation.call.arguments().cloned().unwrap_or_default())
                 })
+                .collect()
+        };
+        let calls = arguments.into_iter().map(|arguments| {
+            json!({
+                "version": 1,
+                "hostProfile": declaration.id.as_str(),
+                "hostAdapterHash": placeholder_hash.as_str(),
+                "surfaceHash": placeholder_hash.as_str(),
+                "tool": tool.host_name.as_str(),
+                "arguments": arguments,
+                "context": {"kind": "absent"},
+                "runtime": {"kind": "vs_code"},
             })
         });
         for call in calls {
