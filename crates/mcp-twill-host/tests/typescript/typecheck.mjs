@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 
-const root = new URL("../../../../", import.meta.url);
+const manifest = new URL("../../Cargo.toml", import.meta.url);
 const directory = mkdtempSync(join(tmpdir(), "mcp-twill-host-typescript-"));
 const generatedSources = new Map();
 
@@ -23,9 +23,7 @@ try {
         "run",
         "--quiet",
         "--manifest-path",
-        new URL("Cargo.toml", root).pathname,
-        "-p",
-        "mcp-twill-host",
+        manifest.pathname,
         "--example",
         "generated_vscode_adapter",
         "--",

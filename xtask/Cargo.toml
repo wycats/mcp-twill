@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+flate2 = "1"
 mcp-twill = { path = "../crates/mcp-twill" }
 rmcp = { version = "1.7.0", features = ["client", "transport-io"] }
 schemars = { version = "1", features = ["derive"] }

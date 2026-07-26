@@ -1,3 +1,11 @@
+//! Build MCP servers from one authoritative catalog of typed operations.
+//!
+//! Twill compiles command declarations into planning, native MCP surfaces,
+//! help, schemas, permissions, resources, tasks, results, and host-facing
+//! projections. Structured arguments remain JSON values; command templates
+//! only place those values into CLI-shaped operation syntax and never become
+//! shell programs.
+
 pub mod ambient_resources;
 pub mod argument_schemas;
 pub mod builder;

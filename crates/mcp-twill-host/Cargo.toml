@@ -1,16 +1,24 @@
 [package]
 name = "mcp-twill-host"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Compiled host profiles, generated adapters, and runtime policy for mcp-twill servers."
+documentation = "https://docs.rs/mcp-twill-host"
+readme = "README.md"
+keywords = ["mcp", "vscode", "code-generation", "adapter", "typescript"]
+categories = ["development-tools"]
+publish = ["crates-io"]
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = [
   "clock",
   "std",
 ] }
-mcp-twill = { path = "../mcp-twill" }
+mcp-twill = { version = "0.1.0", path = "../mcp-twill" }
 schemars = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value", "unbounded_depth"] }
