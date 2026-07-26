@@ -1332,12 +1332,14 @@ fn validate_context_policies(
     for operation in surface.operations() {
         if let Some(contract) = &operation.spec().output.application {
             for error in &contract.errors {
-                if let Some(existing) = identities.insert(error.code.clone(), error.clone())
-                    && existing != *error
-                {
-                    return Err(build_error(
-                        "application error identity drifts across exposed operations",
-                    ));
+                if let Some(existing) = identities.get(&error.code) {
+                    if !same_application_error_identity(existing, error) {
+                        return Err(build_error(
+                            "application error identity drifts across exposed operations",
+                        ));
+                    }
+                } else {
+                    identities.insert(error.code.clone(), error.clone());
                 }
             }
         }
@@ -1443,6 +1445,16 @@ fn record_recovery_summary(
         ));
     }
     Ok(())
+}
+
+fn same_application_error_identity(
+    left: &ApplicationErrorSpec,
+    right: &ApplicationErrorSpec,
+) -> bool {
+    left.code == right.code
+        && left.summary == right.summary
+        && left.message == right.message
+        && left.details_schema == right.details_schema
 }
 
 fn validate_recovery(recovery: &HostRecoveryAction) -> Result<()> {

@@ -110,6 +110,17 @@ module.exports = {
     writeFileSync(path, javascript);
     return path;
   };
+  const rewriteSnapshot = (source, update) => {
+    const prefix = "const HOST_SNAPSHOT = ";
+    const suffix = " as const;";
+    const line = source
+      .split("\n")
+      .find((candidate) => candidate.startsWith(prefix) && candidate.endsWith(suffix));
+    if (!line) throw new Error("missing generated host snapshot");
+    const snapshot = JSON.parse(line.slice(prefix.length, -suffix.length));
+    update(snapshot);
+    return source.replace(line, `${prefix}${JSON.stringify(snapshot)}${suffix}`);
+  };
   const requireFromFixture = createRequire(join(directory, "fixture.cjs"));
   const vscode = requireFromFixture("vscode");
   const token = (cancelled = false) => ({
@@ -325,6 +336,128 @@ module.exports = {
     throw new Error("pre-dispatch cancellation reached a host hook");
   }
 
+  vscode.__state.registrations.length = 0;
+  vscode.__state.registerTool = undefined;
+  const boundedContextSource = rewriteSnapshot(inProcessSource, (snapshot) => {
+    for (const reason of Object.keys(snapshot.profile.unsupportedContext.reasons)) {
+      snapshot.profile.unsupportedContext.reasons[reason] = "x".repeat(1024);
+    }
+  });
+  const boundedContext = requireFromFixture(
+    compileRuntimeModule("runtime-bounded-context", boundedContextSource),
+  );
+  let boundedRuntimeCalls = 0;
+  boundedContext.registerGeneratedHostTools(
+    { subscriptions: [] },
+    { resolve: () => ({ kind: "unsupported", reason: "provider_failed" }) },
+    {
+      async call() {
+        boundedRuntimeCalls++;
+        throw new Error("bounded context rejection reached runtime");
+      },
+    },
+  );
+  let boundedContextText = "";
+  try {
+    await vscode.__state.registrations.at(-1).implementation.invoke(
+      { input: { id: "42" } },
+      token(),
+    );
+  } catch (error) {
+    boundedContextText = error.message;
+  }
+  if (
+    boundedRuntimeCalls !== 0
+    || [...boundedContextText].length !== 1024
+    || !boundedContextText.startsWith("item_get failed with unsupported_host. ")
+    || !boundedContextText.endsWith("…")
+  ) {
+    throw new Error("local context rejection did not use bounded Rust-compatible rendering");
+  }
+
+  vscode.__state.registrations.length = 0;
+  const sharedIdentitySource = rewriteSnapshot(inProcessSource, (snapshot) => {
+    const owner = structuredClone(snapshot.nativeSurface.document.operations[0]);
+    owner.spec.id = "items.identity";
+    owner.spec.output.application.errors = [{
+      code: "shared_error",
+      summary: "Shared server-wide summary",
+    }];
+    snapshot.nativeSurface.document.operations.push(owner);
+    snapshot.profile.absentContext = {
+      rejections: {
+        "items.get": { applicationCode: "shared_error" },
+      },
+    };
+    snapshot.applicationCodes.push("shared_error");
+  });
+  const sharedIdentity = requireFromFixture(
+    compileRuntimeModule("runtime-shared-identity", sharedIdentitySource),
+  );
+  let sharedIdentityRuntimeCalls = 0;
+  sharedIdentity.registerGeneratedHostTools(
+    { subscriptions: [] },
+    { resolve: () => ({ kind: "absent" }) },
+    {
+      async call() {
+        sharedIdentityRuntimeCalls++;
+        throw new Error("shared identity rejection reached runtime");
+      },
+    },
+  );
+  let sharedIdentityText = "";
+  try {
+    await vscode.__state.registrations.at(-1).implementation.invoke(
+      { input: { id: "42" } },
+      token(),
+    );
+  } catch (error) {
+    sharedIdentityText = error.message;
+  }
+  if (
+    sharedIdentityRuntimeCalls !== 0
+    || sharedIdentityText !==
+      "item_get failed with shared_error. Shared server-wide summary"
+  ) {
+    throw new Error("local rejection did not use the server-wide error identity");
+  }
+
+  vscode.__state.registrations.length = 0;
+  const unsafeResult = requireFromFixture(
+    compileRuntimeModule("runtime-unsafe-result"),
+  );
+  unsafeResult.registerGeneratedHostTools(
+    { subscriptions: [] },
+    { resolve: () => ({ kind: "absent" }) },
+    {
+      async call() {
+        return {
+          version: 1,
+          hostAdapterHash: hashes.host,
+          surfaceHash: hashes.surface,
+          outcome: {
+            kind: "framework_error",
+            code: "host_contract_mismatch",
+            text: "unsafe \u202e result",
+          },
+        };
+      },
+    },
+  );
+  let unsafeResultFailed = false;
+  try {
+    await vscode.__state.registrations.at(-1).implementation.invoke(
+      { input: { id: "42" } },
+      token(),
+    );
+  } catch (error) {
+    unsafeResultFailed =
+      error.message === "Generated host adapter received an invalid result envelope";
+  }
+  if (!unsafeResultFailed) {
+    throw new Error("presentation-unsafe host result reached the host UI");
+  }
+
   const processSource = generatedSources.get("process");
   if (!processSource) throw new Error("missing generated process source");
   const processHashes = {
@@ -354,6 +487,10 @@ module.exports = {
         queueMicrotask(() => {
           this.stdin.emit("finish");
           if (call.arguments.id === "cancel") return;
+          if (call.arguments.id === "bom") {
+            this.complete(call, true);
+            return;
+          }
           if (call.arguments.id === "backpressure") {
             this.stderr.emit("data", Uint8Array.from([1]));
             this.stderr.emit("data", new Uint8Array(70_000));
@@ -370,14 +507,22 @@ module.exports = {
       };
     }
 
-    complete(call) {
+    complete(call, withBom = false) {
       const result = {
         hostAdapterHash: call.hostAdapterHash,
         outcome: { kind: "success", text: '{"id":"42","value":"found"}' },
         surfaceHash: call.surfaceHash,
         version: 1,
       };
-      this.stdout.emit("data", new TextEncoder().encode(JSON.stringify(result)));
+      const encoded = new TextEncoder().encode(JSON.stringify(result));
+      if (withBom) {
+        const bytes = new Uint8Array(encoded.length + 3);
+        bytes.set([0xef, 0xbb, 0xbf]);
+        bytes.set(encoded, 3);
+        this.stdout.emit("data", bytes);
+      } else {
+        this.stdout.emit("data", encoded);
+      }
       this.exitCode = 0;
       this.emit("close", 0);
     }
@@ -520,6 +665,19 @@ module.exports = {
   if (!diagnosticChunks.some((chunk) => chunk.length === 1 && chunk[0] === 9)) {
     throw new Error("dropped stderr consumed the offered-byte allowance");
   }
+  let bomResultFailed = false;
+  try {
+    await processRegistration.implementation.invoke(
+      { input: { id: "bom" } },
+      token(),
+    );
+  } catch (error) {
+    bomResultFailed =
+      error.message === "Generated host adapter received an invalid result envelope";
+  }
+  if (!bomResultFailed) {
+    throw new Error("BOM-prefixed process result crossed the canonical wire boundary");
+  }
   if (
     spawnRecord.executable !== process.execPath
     || spawnRecord.options.shell !== false
@@ -572,14 +730,26 @@ module.exports = {
     globalThis.setTimeout = (callback, delay, ...args) =>
       originalSetTimeout(callback, Math.min(delay, 10), ...args);
   }
+  let cancellationSettled = false;
+  void pendingCancellation.then(
+    () => {
+      cancellationSettled = true;
+    },
+    () => {
+      cancellationSettled = true;
+    },
+  );
   cancelProcess();
+  await Promise.resolve();
+  await Promise.resolve();
+  if (process.platform !== "win32" && cancellationSettled) {
+    throw new Error("generated cancellation resolved before descendant reaping");
+  }
   let processRaisedCancellation = false;
   try {
     await pendingCancellation;
-    await new Promise((resolve) => originalSetTimeout(resolve, 50));
   } catch (error) {
     processRaisedCancellation = error instanceof vscode.CancellationError;
-    await new Promise((resolve) => originalSetTimeout(resolve, 50));
   } finally {
     process.kill = originalProcessKill;
     globalThis.setTimeout = originalSetTimeout;

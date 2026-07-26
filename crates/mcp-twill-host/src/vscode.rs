@@ -300,6 +300,7 @@ const PREPARE_FAILURE = "Generated host adapter could not prepare this invocatio
 const CONTRACT_FAILURE = "Generated host adapter received an invalid result envelope";
 const CALL_PAYLOAD_FAILURE = "Generated host call exceeds its configured byte limit";
 const PAYLOAD_FAILURE = "Generated host result exceeds its configured byte limit";
+const MAX_ERROR_TEXT_SCALARS = 1024;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
 let registered = false;
@@ -323,6 +324,56 @@ function isWellFormedUnicode(value: string): boolean {
     }
   }
   return true;
+}
+
+function hostTextScalarIsUnsafe(scalar: string): boolean {
+  const point = scalar.codePointAt(0)!;
+  return point <= 0x1f
+    || (point >= 0x7f && point <= 0x9f)
+    || point === 0x061c
+    || (point >= 0x200e && point <= 0x200f)
+    || (point >= 0x2028 && point <= 0x202e)
+    || (point >= 0x2060 && point <= 0x206f)
+    || point === 0xfeff;
+}
+
+function encodeAndTruncateHostText(text: string, limit: number): string {
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length;) {
+    const point = text.codePointAt(index)!;
+    const scalar = String.fromCodePoint(point);
+    index += scalar.length;
+    if (scalar === "\\") {
+      const unicode = /^u[0-9A-Fa-f]{4}/.exec(text.slice(index));
+      if (unicode) {
+        chunks.push(`\\${unicode[0]}`);
+        index += unicode[0].length;
+        continue;
+      }
+      const short = /^[\\"bfnrt]/.exec(text.slice(index));
+      if (short) {
+        chunks.push(`\\${short[0]}`);
+        index += 1;
+        continue;
+      }
+      chunks.push("\\");
+    } else if (hostTextScalarIsUnsafe(scalar)) {
+      chunks.push(`\\u${point.toString(16).toUpperCase().padStart(4, "0")}`);
+    } else {
+      chunks.push(scalar);
+    }
+  }
+  const total = chunks.reduce((count, chunk) => count + [...chunk].length, 0);
+  if (total <= limit) return chunks.join("");
+  const kept: string[] = [];
+  let width = 0;
+  for (const chunk of chunks) {
+    const chunkWidth = [...chunk].length;
+    if (width + chunkWidth > Math.max(0, limit - 1)) break;
+    kept.push(chunk);
+    width += chunkWidth;
+  }
+  return `${kept.join("")}…`;
 }
 
 interface CloneBudget {
@@ -785,10 +836,13 @@ function validateResult(value: HostCallResultV1): HostCallResultV1 {
   const outcomeKeys = result.outcome.kind === "success" ? ["kind", "text"] : ["code", "kind", "text"];
   if (!exactKeys(result.outcome, outcomeKeys)) throw new Error(CONTRACT_FAILURE);
   if (typeof result.outcome.text !== "string" || result.outcome.text.length === 0 && result.outcome.kind !== "success") throw new Error(CONTRACT_FAILURE);
-  if (result.outcome.kind !== "success" && ([...result.outcome.text].length > 1024 || [...result.outcome.text].some((scalar) => {
-    const point = scalar.codePointAt(0)!;
-    return point <= 0x1f || (point >= 0x7f && point <= 0x9f);
-  }))) throw new Error(CONTRACT_FAILURE);
+  if (
+    result.outcome.kind !== "success"
+    && (
+      [...result.outcome.text].length > MAX_ERROR_TEXT_SCALARS
+      || [...result.outcome.text].some(hostTextScalarIsUnsafe)
+    )
+  ) throw new Error(CONTRACT_FAILURE);
   if (result.outcome.kind === "application_error" && !(HOST_SNAPSHOT.applicationCodes as readonly string[]).includes(result.outcome.code)) throw new Error(CONTRACT_FAILURE);
   if (result.outcome.kind === "framework_error" && !(HOST_SNAPSHOT.frameworkCodes as readonly string[]).includes(result.outcome.code)) throw new Error(CONTRACT_FAILURE);
   if (result.outcome.kind === "success") scanCompactJson(result.outcome.text);
@@ -918,7 +972,21 @@ function declaredErrorText(
   recovery: { summary: string } | undefined,
 ): string {
   const base = `${subject} failed with ${code}. ${message}`;
-  return recovery ? `${base}. Recovery: ${recovery.summary}` : base;
+  return encodeAndTruncateHostText(
+    recovery ? `${base}. Recovery: ${recovery.summary}` : base,
+    MAX_ERROR_TEXT_SCALARS,
+  );
+}
+
+function applicationErrorIdentity(code: string): any | undefined {
+  for (const operation of HOST_SNAPSHOT.nativeSurface.document.operations as readonly any[]) {
+    const errors = operation.spec.output?.application?.errors ?? [];
+    const identity = errors.find(
+      (error: { code: string }) => error.code === code,
+    );
+    if (identity) return identity;
+  }
+  return undefined;
 }
 
 function contextRejection(
@@ -947,10 +1015,7 @@ function contextRejection(
   if (context.kind === "absent") {
     const rejection = profile.absentContext?.rejections?.[operationId];
     if (rejection) {
-      const errors = operation.spec.output?.application?.errors ?? [];
-      const identity = errors.find(
-        (error: { code: string }) => error.code === rejection.applicationCode,
-      );
+      const identity = applicationErrorIdentity(rejection.applicationCode);
       const message = rejection.runtimeMessage
         ?? identity?.summary
         ?? "Application rejected this host invocation";
@@ -1149,13 +1214,22 @@ function processGroupExists(child: import("node:child_process").ChildProcess): b
   }
 }
 
-function forceTerminateAndReap(child: import("node:child_process").ChildProcess): void {
+async function forceTerminateAndReap(
+  child: import("node:child_process").ChildProcess,
+): Promise<void> {
+  if (process.platform === "win32") {
+    forceTerminateProcess(child);
+    return;
+  }
   if (!processGroupExists(child)) return;
   forceTerminateProcess(child);
-  const waitForExit = () => {
-    if (processGroupExists(child)) setTimeout(waitForExit, 25);
-  };
-  setTimeout(waitForExit, 25);
+  await new Promise<void>((resolve) => {
+    const waitForExit = () => {
+      if (processGroupExists(child)) setTimeout(waitForExit, 25);
+      else resolve();
+    };
+    setTimeout(waitForExit, 25);
+  });
 }
 
 async function invokeRuntime(
@@ -1182,11 +1256,18 @@ async function invokeRuntime(
   let stdoutOverflow = false;
   let terminationRequested = false;
   let forceTimer: ReturnType<typeof setTimeout> | undefined;
+  let settleTermination: (() => void) | undefined;
+  let terminationSettlement = Promise.resolve();
   const requestTermination = () => {
     if (terminationRequested) return;
     terminationRequested = true;
+    terminationSettlement = new Promise<void>((resolve) => {
+      settleTermination = resolve;
+    });
     terminateProcess(child);
-    forceTimer = setTimeout(() => forceTerminateAndReap(child), TERMINATION_GRACE_MS);
+    forceTimer = setTimeout(() => {
+      void forceTerminateAndReap(child).then(() => settleTermination?.());
+    }, TERMINATION_GRACE_MS);
   };
   child.stdout!.on("data", (chunk: Uint8Array) => {
     if (stdoutOverflow) return;
@@ -1225,17 +1306,27 @@ async function invokeRuntime(
     requestTermination();
     settleStdin();
   }
-  const [exit] = await Promise.all([exitPromise, stdinSettlement]).finally(() => {
-    if (forceTimer !== undefined && !processGroupExists(child)) clearTimeout(forceTimer);
+  let exit: number | null;
+  try {
+    [exit] = await Promise.all([exitPromise, stdinSettlement]);
+  } finally {
+    if (terminationRequested && !processGroupExists(child)) {
+      if (forceTimer !== undefined) clearTimeout(forceTimer);
+      settleTermination?.();
+    }
+    if (terminationRequested) await terminationSettlement;
     cancellation.dispose();
     diagnostics.finish();
-  });
+  }
   if (token.isCancellationRequested) throw new vscode.CancellationError();
   if (stdoutOverflow) throw new Error(PAYLOAD_FAILURE);
   if (stdinFailed || exit !== 0) throw new Error(CONTRACT_FAILURE);
   const bytes = new Uint8Array(stdoutBytes);
   let offset = 0;
   for (const chunk of stdout) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    throw new Error(CONTRACT_FAILURE);
+  }
   let text: string;
   try { text = textDecoder.decode(bytes); } catch { throw new Error(CONTRACT_FAILURE); }
   const parsed = parseUniqueJson(text);

@@ -2,11 +2,13 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use mcp_twill::{
+    ApplicationActionDecl, ApplicationErrorSpec, ApplicationMessageDecl, ApplicationRecoveryDecl,
     ApplicationResultContract, ApplicationSuccess, ArgSpec, CliMcpServer, CommandContext,
     CommandRegistry, CommandSpec, ConversationIdentity, DynamicCommandFailure,
     FrameworkHelpProjection, McpProtocolTarget, NativeConfirmationBridge,
     NativeConfirmationBridgeError, NativeConfirmationDecision, NativeConfirmationRequest,
     NativeConfirmationRoute, NativeToolDecl, NativeToolSurface, OutputContract,
+    RecoveryCardinality,
 };
 use mcp_twill_host::{
     HostAdapterProfile, HostCallOutcomeV1, HostConfirmationPolicy, HostConfirmationTrigger,
@@ -474,6 +476,99 @@ fn omitted_and_framework_help_descriptions_use_the_compiled_native_copy() -> any
             format!("{compiled} Host suffix.")
         );
     }
+    Ok(())
+}
+
+#[test]
+fn host_profiles_compare_only_server_wide_application_error_identity() -> anyhow::Result<()> {
+    let success = || {
+        json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+            "required": ["value"],
+            "additionalProperties": false
+        })
+    };
+    let error = |action: &str, summary: &str, cardinality| ApplicationErrorSpec {
+        code: "shared_error".to_string(),
+        summary: "Shared server-wide summary".to_string(),
+        message: ApplicationMessageDecl::DeclarationSummary,
+        details_schema: json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }),
+        capability: None,
+        recoveries: vec![ApplicationRecoveryDecl::Action(ApplicationActionDecl {
+            code: action.to_string(),
+            summary: summary.to_string(),
+        })],
+        recovery_cardinality: cardinality,
+    };
+    let registry = CommandRegistry::new("host-error-identity", "Host error identity")
+        .register_dynamic(
+            CommandSpec::new(["items", "first"], "First", "First operation.").with_output(
+                OutputContract {
+                    application: Some(ApplicationResultContract::new(success()).with_error_spec(
+                        error(
+                            "retry_first",
+                            "Retry the first operation",
+                            RecoveryCardinality::Any,
+                        ),
+                    )),
+                    ..OutputContract::default()
+                },
+            ),
+            |_context: CommandContext| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                    "value": "first"
+                })))
+            },
+        )
+        .register_dynamic(
+            CommandSpec::new(["items", "second"], "Second", "Second operation.").with_output(
+                OutputContract {
+                    application: Some(ApplicationResultContract::new(success()).with_error_spec(
+                        error(
+                            "retry_second",
+                            "Retry the second operation",
+                            RecoveryCardinality::AtMostOne,
+                        ),
+                    )),
+                    ..OutputContract::default()
+                },
+            ),
+            |_context: CommandContext| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                    "value": "second"
+                })))
+            },
+        );
+    let surface = NativeToolSurface::builder("host-error-identity")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .tool(NativeToolDecl::Direct {
+            name: "first".to_string(),
+            operation_id: "items.first".to_string(),
+            title: None,
+            description: None,
+        })
+        .tool(NativeToolDecl::Direct {
+            name: "second".to_string(),
+            operation_id: "items.second".to_string(),
+            title: None,
+            description: None,
+        })
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+
+    HostAdapterProfile::vscode("host-error-identity", VsCodeVersion::new(1, 120, 0))
+        .confirmation(HostConfirmationPolicy::presentation_only(
+            HostConfirmationTrigger::None,
+        ))
+        .unsupported_context(unsupported_policy())
+        .invocation_limits(HostInvocationLimits::new(64 * 1024, 64 * 1024))
+        .in_process()
+        .build(surface.snapshot())?;
     Ok(())
 }
 
