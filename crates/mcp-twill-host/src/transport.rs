@@ -547,6 +547,11 @@ async fn execute_host_call(
                 HostNativeConfirmationMode::ServerOnly,
             )
             .await;
+        if execution.operation_id().is_some()
+            || execution.native_tool() != Some(compiled_tool.native_name.as_str())
+        {
+            return framework_result(profile, "host_contract_mismatch", contract_message());
+        }
         let result = match execution.into_outcome() {
             HostNativeExecutionOutcome::FrameworkHelp(value) => {
                 let text = serde_json::to_string(&value)
@@ -646,6 +651,11 @@ async fn execute_host_call(
             confirmation_mode,
         )
         .await;
+    if execution.operation_id() != Some(operation_id.as_str())
+        || execution.native_tool() != Some(operation.native_tool.as_str())
+    {
+        return framework_result(profile, "host_contract_mismatch", contract_message());
+    }
     let result = match execution.into_outcome() {
         HostNativeExecutionOutcome::Command(outcome) => match *outcome {
             Ok(CommandExecutionOutcome::Success(response)) => {
