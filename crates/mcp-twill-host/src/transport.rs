@@ -510,6 +510,19 @@ async fn execute_host_call(
     else {
         return framework_result(profile, "host_contract_mismatch", contract_message());
     };
+    let context = if compiled_tool.operations.is_empty() {
+        HostInvocationContextV1::Absent {
+            workspace_roots: None,
+        }
+    } else {
+        context
+    };
+    if validate_map_container_depth(&arguments, 128).is_err() {
+        return bounded_result(
+            profile,
+            framework_result(profile, "host_contract_mismatch", contract_message()),
+        );
+    }
     let envelope = HostCallEnvelopeV1 {
         version: TRANSPORT_VERSION,
         host_profile: profile.declaration.id.clone(),
@@ -523,19 +536,27 @@ async fn execute_host_call(
     let call_size = serde_json::to_value(&envelope)
         .map_err(|_| ())
         .and_then(|value| {
-            validate_container_depth(value.get("arguments").ok_or(())?, 128)?;
             validate_container_depth(value.get("context").ok_or(())?, 128)?;
             canonical_json(&value).map_err(|_| ())
         })
         .map(|bytes| bytes.len());
-    if call_size.is_err()
-        || call_size
-            .is_ok_and(|size| size > profile.declaration.invocation_limits.max_call_bytes as usize)
-    {
-        return payload_result(
+    let call_size = match call_size {
+        Ok(size) => size,
+        Err(()) => {
+            return bounded_result(
+                profile,
+                framework_result(profile, "host_contract_mismatch", contract_message()),
+            );
+        }
+    };
+    if call_size > profile.declaration.invocation_limits.max_call_bytes as usize {
+        return bounded_result(
             profile,
-            "call",
-            profile.declaration.invocation_limits.max_call_bytes,
+            payload_result(
+                profile,
+                "call",
+                profile.declaration.invocation_limits.max_call_bytes,
+            ),
         );
     }
     if compiled_tool.operations.is_empty() {
@@ -1060,6 +1081,39 @@ fn validate_container_depth(value: &Value, maximum: usize) -> std::result::Resul
     Ok(())
 }
 
+fn validate_map_container_depth(
+    value: &BTreeMap<String, Value>,
+    maximum: usize,
+) -> std::result::Result<(), ()> {
+    if maximum == 0 {
+        return Err(());
+    }
+    let mut stack = value
+        .values()
+        .map(|value| (value, 1_usize))
+        .collect::<Vec<_>>();
+    while let Some((value, containers)) = stack.pop() {
+        match value {
+            Value::Array(values) => {
+                let containers = containers + 1;
+                if containers > maximum {
+                    return Err(());
+                }
+                stack.extend(values.iter().map(|value| (value, containers)));
+            }
+            Value::Object(values) => {
+                let containers = containers + 1;
+                if containers > maximum {
+                    return Err(());
+                }
+                stack.extend(values.values().map(|value| (value, containers)));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn application_family_result(
     profile: &HostAdapterProfile,
     application: bool,
@@ -1332,6 +1386,38 @@ mod tests {
         assert!(truncated.ends_with('…'));
         assert!(!truncated.ends_with("\\u20…"));
         assert!(!truncated.contains('\u{0085}'));
+    }
+
+    #[test]
+    fn call_payload_fallback_is_bounded_as_a_result() {
+        let mut host = process_host();
+        host.profile.declaration.invocation_limits.max_call_bytes = u32::MAX;
+        let result_fallback = payload_result(
+            &host.profile,
+            "result",
+            host.profile.declaration.invocation_limits.max_result_bytes,
+        );
+        let result_bound = serde_json::to_value(&result_fallback)
+            .ok()
+            .and_then(|value| canonical_json(&value).ok())
+            .expect("canonical result fallback")
+            .len();
+        host.profile.declaration.invocation_limits.max_result_bytes =
+            u32::try_from(result_bound).expect("test result bound");
+        let call_fallback = payload_result(
+            &host.profile,
+            "call",
+            host.profile.declaration.invocation_limits.max_call_bytes,
+        );
+
+        assert_eq!(
+            bounded_result(&host.profile, call_fallback),
+            payload_result(
+                &host.profile,
+                "result",
+                host.profile.declaration.invocation_limits.max_result_bytes,
+            )
+        );
     }
 
     #[test]

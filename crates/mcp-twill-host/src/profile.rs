@@ -1715,6 +1715,11 @@ fn project_result_schema(document: &mut Value, properties: &BTreeSet<String>) ->
     };
     project_result_schema_object(target, properties, true)?;
     prune_unreachable_definitions(schema);
+    if schema_contains_retained_property_constraint(schema, properties) {
+        return Err(build_error(
+            "host result omission conflicts with a retained schema constraint",
+        ));
+    }
     Ok(())
 }
 
@@ -1739,6 +1744,53 @@ fn project_result_schema_object(
         required.retain(|entry| entry.as_str().is_none_or(|name| !properties.contains(name)));
     }
     Ok(())
+}
+
+fn schema_contains_retained_property_constraint(
+    value: &Value,
+    properties: &BTreeSet<String>,
+) -> bool {
+    match value {
+        Value::Object(object) => {
+            for (keyword, constraint) in object {
+                let references_property = match keyword.as_str() {
+                    "properties" | "dependentSchemas" => {
+                        constraint.as_object().is_some_and(|entries| {
+                            entries.keys().any(|name| properties.contains(name))
+                        })
+                    }
+                    "required" => constraint.as_array().is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .any(|name| properties.contains(name))
+                    }),
+                    "dependentRequired" => constraint.as_object().is_some_and(|entries| {
+                        entries.iter().any(|(name, dependencies)| {
+                            properties.contains(name)
+                                || dependencies.as_array().is_some_and(|dependencies| {
+                                    dependencies
+                                        .iter()
+                                        .filter_map(Value::as_str)
+                                        .any(|name| properties.contains(name))
+                                })
+                        })
+                    }),
+                    _ => false,
+                };
+                if references_property
+                    || schema_contains_retained_property_constraint(constraint, properties)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(|value| schema_contains_retained_property_constraint(value, properties)),
+        _ => false,
+    }
 }
 
 fn prune_unreachable_definitions(schema: &mut Value) {
@@ -1956,6 +2008,41 @@ mod tests {
         assert_eq!(
             policy.reasons.get(&HostContextReason::UnknownTokenShape),
             Some(&String::new())
+        );
+    }
+
+    #[test]
+    fn result_omission_rejects_retained_branch_constraints() {
+        let mut document = json!({
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" },
+                    "secret": { "type": "string" }
+                },
+                "required": ["value", "secret"],
+                "oneOf": [
+                    {
+                        "properties": {
+                            "secret": { "const": "private" }
+                        },
+                        "required": ["secret"]
+                    },
+                    {
+                        "properties": {
+                            "value": { "const": "missing" }
+                        }
+                    }
+                ],
+                "additionalProperties": false
+            }
+        });
+        let error = project_result_schema(&mut document, &BTreeSet::from(["secret".to_string()]))
+            .expect_err("retained branch constraint must reject the omission");
+        assert!(
+            error
+                .to_string()
+                .contains("host result omission conflicts with a retained schema constraint")
         );
     }
 }

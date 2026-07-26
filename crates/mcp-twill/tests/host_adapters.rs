@@ -326,6 +326,56 @@ async fn in_process_host_uses_native_dispatch_and_projects_results() -> anyhow::
 }
 
 #[tokio::test]
+async fn in_process_host_rejects_noncanonical_arguments_before_dispatch() -> anyhow::Result<()> {
+    let registry = registry();
+    let surface = surface(&registry)?;
+    let profile = profile(surface.snapshot())?;
+    let server = CliMcpServer::builder(registry).surface(surface).build()?;
+    let adapter = profile.bind_in_process(server)?;
+
+    let nonrepresentable = adapter
+        .call(
+            "host_item_get",
+            BTreeMap::from([("id".to_string(), json!(9_007_199_254_740_993_u64))]),
+            HostInvocationContextV1::Absent {
+                workspace_roots: None,
+            },
+            HostRuntimeFactsV1::VsCode {
+                engine_version: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        nonrepresentable.outcome,
+        HostCallOutcomeV1::FrameworkError { ref code, .. }
+            if code == "host_contract_mismatch"
+    ));
+
+    let mut nested = Value::Null;
+    for _ in 0..128 {
+        nested = Value::Array(vec![nested]);
+    }
+    let over_depth = adapter
+        .call(
+            "host_item_get",
+            BTreeMap::from([("id".to_string(), nested)]),
+            HostInvocationContextV1::Absent {
+                workspace_roots: None,
+            },
+            HostRuntimeFactsV1::VsCode {
+                engine_version: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        over_depth.outcome,
+        HostCallOutcomeV1::FrameworkError { ref code, .. }
+            if code == "host_contract_mismatch"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn host_dispatch_records_terminal_events() -> anyhow::Result<()> {
     let registry = registry();
     let surface = surface(&registry)?;
@@ -481,7 +531,8 @@ async fn generated_framework_help_discards_private_context() -> anyhow::Result<(
     let profile = profile(surface.snapshot())?;
     let server = CliMcpServer::builder(registry).surface(surface).build()?;
     let adapter = profile.bind_in_process(server)?;
-    let identity = ConversationIdentity::new("com.example.host", "private-conversation")?;
+    let private_id = "private-conversation".repeat(5_000);
+    let identity = ConversationIdentity::new("com.example.host", private_id.clone())?;
     let result = adapter
         .call(
             "host_help",
@@ -499,7 +550,7 @@ async fn generated_framework_help_discards_private_context() -> anyhow::Result<(
     match result.outcome {
         HostCallOutcomeV1::Success { text } => {
             assert!(text.contains("item_get"), "{text}");
-            assert!(!text.contains("private-conversation"));
+            assert!(!text.contains(&private_id));
             assert!(!text.contains("com.example.host"));
         }
         other => panic!("expected framework help, got {other:?}"),

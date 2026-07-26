@@ -245,6 +245,60 @@ module.exports = {
   if (!oversizedArrayFailed || providerCalls !== 0 || runtimeCalls !== 0) {
     throw new Error("oversized array reached a host hook");
   }
+  let oversizedArrayOwnKeys = 0;
+  const oversizedArrayProxy = new Proxy(
+    Object.assign([], { length: 1_000_000 }),
+    {
+      ownKeys(target) {
+        oversizedArrayOwnKeys++;
+        return Reflect.ownKeys(target);
+      },
+    },
+  );
+  let oversizedArrayGuardFailed = false;
+  try {
+    await registration.implementation.invoke(
+      { input: { id: "42", values: oversizedArrayProxy } },
+      token(),
+    );
+  } catch (error) {
+    oversizedArrayGuardFailed =
+      error.message === "Generated host call exceeds its configured byte limit";
+  }
+  if (
+    !oversizedArrayGuardFailed
+    || oversizedArrayOwnKeys !== 0
+    || providerCalls !== 0
+    || runtimeCalls !== 0
+  ) {
+    throw new Error("oversized array enumerated keys before enforcing the byte budget");
+  }
+  let prototypeCalls = 0;
+  let cyclingPrototype;
+  cyclingPrototype = new Proxy([], {
+    getPrototypeOf() {
+      prototypeCalls++;
+      return prototypeCalls === 1 ? Array.prototype : cyclingPrototype;
+    },
+  });
+  let cyclingPrototypeFailed = false;
+  try {
+    await registration.implementation.invoke(
+      { input: { id: "42", values: cyclingPrototype } },
+      token(),
+    );
+  } catch (error) {
+    cyclingPrototypeFailed =
+      error.message === "Generated host adapter received an invalid result envelope";
+  }
+  if (
+    !cyclingPrototypeFailed
+    || prototypeCalls < 3
+    || providerCalls !== 0
+    || runtimeCalls !== 0
+  ) {
+    throw new Error("cyclic reflected prototype chain crossed the snapshot boundary");
+  }
   provider.resolve = () => {
     throw new Error("replacement provider method was observed");
   };

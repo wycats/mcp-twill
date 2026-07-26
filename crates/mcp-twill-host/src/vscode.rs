@@ -391,9 +391,14 @@ function countCloneBytes(budget: CloneBudget | undefined, text: string): void {
   if (budget.total > budget.limit) throw new CloneLimitError(budget.failure);
 }
 
-function hasInheritedEnumerableState(value: object): boolean {
+function hasInheritedEnumerableState(value: object, failure: string): boolean {
+  const visited = new Set<object>();
+  let depth = 0;
   let prototype = Object.getPrototypeOf(value);
   while (prototype !== null) {
+    if (visited.has(prototype) || depth >= 128) throw new Error(failure);
+    visited.add(prototype);
+    depth++;
     for (const key of Reflect.ownKeys(prototype)) {
       if (Object.getOwnPropertyDescriptor(prototype, key)?.enumerable) return true;
     }
@@ -433,12 +438,18 @@ function cloneData(
     if (seen.has(value)) throw new Error(failure);
     seen.add(value);
     if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error(failure);
-    if (hasInheritedEnumerableState(value)) throw new Error(failure);
-    const keys = Reflect.ownKeys(value);
+    if (hasInheritedEnumerableState(value, failure)) throw new Error(failure);
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
     if (!lengthDescriptor || lengthDescriptor.enumerable || !("value" in lengthDescriptor)) throw new Error(failure);
     const length = lengthDescriptor.value;
-    if (!Number.isSafeInteger(length) || length < 0 || keys.length !== length + 1) throw new Error(failure);
+    if (!Number.isSafeInteger(length) || length < 0) throw new Error(failure);
+    if (budget) {
+      const remaining = budget.limit - budget.total;
+      const maximumElements = remaining >= 2 ? Math.floor((remaining - 1) / 2) : -1;
+      if (length > maximumElements) throw new CloneLimitError(budget.failure);
+    }
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== length + 1) throw new Error(failure);
     for (const key of keys) {
       if (key === "length") continue;
       if (typeof key === "symbol") throw new Error(failure);
@@ -462,7 +473,7 @@ function cloneData(
   seen.add(value);
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) throw new Error(failure);
-  if (hasInheritedEnumerableState(value)) throw new Error(failure);
+  if (hasInheritedEnumerableState(value, failure)) throw new Error(failure);
   const copy: Record<string, unknown> = Object.create(null);
   countCloneBytes(budget, "{");
   for (const [index, key] of Reflect.ownKeys(value).entries()) {
