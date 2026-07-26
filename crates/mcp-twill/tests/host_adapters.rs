@@ -79,6 +79,7 @@ fn registry() -> CommandRegistry {
         "Get Item",
         "Read one item from the catalog.",
     )
+    .use_when("looking up one catalog item")
     .with_arg(ArgSpec::string("id", "Item id"))
     .with_output(OutputContract {
         application: Some(ApplicationResultContract::new(json!({
@@ -149,6 +150,63 @@ fn surface_with_long_help(registry: &CommandRegistry) -> mcp_twill::Result<Nativ
             operation_id: "items.get".to_string(),
             title: Some("Get Item".to_string()),
             description: Some("Read one item from the catalog.".to_string()),
+        })
+        .build(registry, McpProtocolTarget::V2025_11_25)
+}
+
+fn grouped_registry() -> CommandRegistry {
+    let success = || {
+        ApplicationResultContract::new(json!({
+            "type": "object",
+            "properties": {
+                "value": { "type": "string" }
+            },
+            "required": ["value"],
+            "additionalProperties": false
+        }))
+    };
+    CommandRegistry::new("host-group-test", "Host group acceptance")
+        .register_dynamic(
+            CommandSpec::new(["items", "get"], "Get Item", "Read one item.").with_output(
+                OutputContract {
+                    application: Some(success()),
+                    ..OutputContract::default()
+                },
+            ),
+            |_context: CommandContext| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                    "value": "one"
+                })))
+            },
+        )
+        .register_dynamic(
+            CommandSpec::new(["items", "list"], "List Items", "List items.").with_output(
+                OutputContract {
+                    application: Some(success()),
+                    ..OutputContract::default()
+                },
+            ),
+            |_context: CommandContext| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                    "value": "many"
+                })))
+            },
+        )
+}
+
+fn surface_with_omitted_group_description(
+    registry: &CommandRegistry,
+) -> mcp_twill::Result<NativeToolSurface> {
+    NativeToolSurface::builder("host-group")
+        .framework_help(FrameworkHelpProjection::Tool {
+            name: "help".to_string(),
+        })
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .group("items", |group| {
+            group
+                .selector("operation")
+                .member("get", "items.get")
+                .member("list", "items.list");
         })
         .build(registry, McpProtocolTarget::V2025_11_25)
 }
@@ -363,11 +421,59 @@ fn guidance_uses_typed_structural_references() -> anyhow::Result<()> {
         "Host entry point: item_get. Call the named tools directly."
     );
     let generated = generate_vscode_artifacts(compiled.snapshot())?;
+    assert_eq!(
+        generated.manifest_projection()["contributes"]["languageModelTools"][0]["userDescription"],
+        "Read one item from the catalog."
+    );
     assert!(
         generated.manifest_projection()["contributes"]["languageModelTools"][0]["modelDescription"]
             .as_str()
-            .is_some_and(|description| description.ends_with(" Prefer item_get."))
+            .is_some_and(|description| {
+                description.contains("Use when: looking up one catalog item")
+                    && description.ends_with(" Prefer item_get.")
+            })
     );
+    Ok(())
+}
+
+#[test]
+fn omitted_and_framework_help_descriptions_use_the_compiled_native_copy() -> anyhow::Result<()> {
+    let registry = grouped_registry();
+    let surface = surface_with_omitted_group_description(&registry)?;
+    let profile = HostAdapterProfile::vscode("group-vscode", VsCodeVersion::new(1, 120, 0))
+        .tool_name_prefix("host_")
+        .guidance(HostGuidanceProjection {
+            tool_suffix: vec![HostGuidanceSegment::Text("Host suffix.".to_string())],
+            ..HostGuidanceProjection::default()
+        })
+        .confirmation(HostConfirmationPolicy::presentation_only(
+            HostConfirmationTrigger::None,
+        ))
+        .unsupported_context(unsupported_policy())
+        .invocation_limits(HostInvocationLimits::new(64 * 1024, 64 * 1024))
+        .in_process()
+        .build(surface.snapshot())?;
+    let generated = generate_vscode_artifacts(profile.snapshot())?;
+    let generated_tools = generated.manifest_projection()["contributes"]["languageModelTools"]
+        .as_array()
+        .expect("generated contributions");
+
+    for native_tool in surface.snapshot().tools() {
+        let host_name = format!("host_{}", native_tool.name);
+        let generated = generated_tools
+            .iter()
+            .find(|tool| tool["name"] == host_name)
+            .expect("generated native contribution");
+        let compiled = native_tool
+            .description
+            .as_deref()
+            .expect("compiled native description");
+        assert_eq!(generated["userDescription"], compiled);
+        assert_eq!(
+            generated["modelDescription"],
+            format!("{compiled} Host suffix.")
+        );
+    }
     Ok(())
 }
 
@@ -509,7 +615,6 @@ fn vbl_v049_host_profile_generates_the_released_tool_contributions() -> anyhow::
             "name",
             "displayName",
             "userDescription",
-            "modelDescription",
             "icon",
             "inputSchema",
             "canBeReferencedInPrompt",
@@ -530,7 +635,56 @@ fn vbl_v049_host_profile_generates_the_released_tool_contributions() -> anyhow::
                 "VBL contribution `{name}` differs at `{field}`"
             );
         }
+        let native_name = name
+            .strip_prefix("visible_browser_lab_")
+            .expect("VBL host prefix");
+        let compiled_description = surface
+            .snapshot()
+            .tools()
+            .iter()
+            .find(|tool| tool.name.as_ref() == native_name)
+            .and_then(|tool| tool.description.as_deref())
+            .expect("compiled VBL native description");
+        let released_user = released["userDescription"]
+            .as_str()
+            .expect("released VBL user description");
+        let released_model = released["modelDescription"]
+            .as_str()
+            .expect("released VBL model description");
+        let released_host_suffix = released_model
+            .strip_prefix(released_user)
+            .expect("released model description starts with user copy");
+        assert_eq!(
+            generated["modelDescription"],
+            format!("{compiled_description}{released_host_suffix}"),
+            "VBL contribution `{name}` loses compiled native guidance"
+        );
     }
+
+    let mut carrier_guidance = profile.declaration().clone();
+    carrier_guidance.guidance.tool_suffix = vec![
+        HostGuidanceSegment::Text("Carrier: ".to_string()),
+        HostGuidanceSegment::ResourceCarrier {
+            resource: "session".to_string(),
+        },
+    ];
+    let carrier_profile = carrier_guidance.compile(surface.snapshot())?;
+    let carrier_generated = generate_vscode_artifacts(carrier_profile.snapshot())?;
+    let new_tab_description =
+        carrier_generated.manifest_projection()["contributes"]["languageModelTools"]
+            .as_array()
+            .expect("carrier-guidance contributions")
+            .iter()
+            .find(|tool| tool["name"] == "visible_browser_lab_new_tab")
+            .and_then(|tool| tool["modelDescription"].as_str())
+            .expect("new_tab model description");
+    assert_eq!(new_tab_description.matches("Resource bindings:").count(), 1);
+    assert_eq!(
+        new_tab_description
+            .matches("Carrier: agent_session_id")
+            .count(),
+        1
+    );
 
     // Loading the host-specific support module must not displace the already
     // accepted RFC 0011/RFC 0015 adoption paths it extends.

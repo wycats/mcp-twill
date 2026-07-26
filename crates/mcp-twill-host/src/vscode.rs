@@ -49,7 +49,7 @@ pub fn generate_vscode_artifacts(
             .get("title")
             .and_then(Value::as_str)
             .unwrap_or(native_name);
-        let description = document
+        let compiled_description = document
             .get("description")
             .and_then(Value::as_str)
             .unwrap_or("");
@@ -58,12 +58,12 @@ pub fn generate_vscode_artifacts(
         contribution.insert("displayName".to_string(), Value::String(title.to_string()));
         contribution.insert(
             "userDescription".to_string(),
-            Value::String(description.to_string()),
+            Value::String(tool.user_description.clone()),
         );
         contribution.insert(
             "modelDescription".to_string(),
             Value::String(model_description(
-                description,
+                compiled_description,
                 &tool.operations,
                 &snapshot.guidance,
             )),
@@ -911,6 +911,69 @@ function parseUniqueJson(text: string): unknown {
   return parsed;
 }
 
+function declaredErrorText(
+  subject: string,
+  code: string,
+  message: string,
+  recovery: { summary: string } | undefined,
+): string {
+  const base = `${subject} failed with ${code}. ${message}`;
+  return recovery ? `${base}. Recovery: ${recovery.summary}` : base;
+}
+
+function contextRejection(
+  operation: any,
+  context: HostInvocationContextV1,
+): HostCallResultV1 | undefined {
+  const operationId = operation.spec.id as string;
+  const nativeTool = operation.call.tool as string;
+  const profile = HOST_SNAPSHOT.profile as any;
+  if (context.kind === "unsupported") {
+    const policy = profile.unsupportedContext;
+    if (!(policy.allowedOperations as readonly string[] | undefined)?.includes(operationId)) {
+      const message = policy.reasons[context.reason] as string;
+      return validateResult({
+        version: 1,
+        hostAdapterHash: HOST_ADAPTER_HASH,
+        surfaceHash: SURFACE_HASH,
+        outcome: {
+          kind: "framework_error",
+          code: "unsupported_host",
+          text: declaredErrorText(nativeTool, "unsupported_host", message, policy.recovery),
+        },
+      });
+    }
+  }
+  if (context.kind === "absent") {
+    const rejection = profile.absentContext?.rejections?.[operationId];
+    if (rejection) {
+      const errors = operation.spec.output?.application?.errors ?? [];
+      const identity = errors.find(
+        (error: { code: string }) => error.code === rejection.applicationCode,
+      );
+      const message = rejection.runtimeMessage
+        ?? identity?.summary
+        ?? "Application rejected this host invocation";
+      return validateResult({
+        version: 1,
+        hostAdapterHash: HOST_ADAPTER_HASH,
+        surfaceHash: SURFACE_HASH,
+        outcome: {
+          kind: "application_error",
+          code: rejection.applicationCode,
+          text: declaredErrorText(
+            nativeTool,
+            rejection.applicationCode,
+            message,
+            rejection.recovery,
+          ),
+        },
+      });
+    }
+  }
+  return undefined;
+}
+
 function projectResult(result: HostCallResultV1): vscode.LanguageModelToolResult {
   if (result.outcome.kind === "success") return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(result.outcome.text)]);
   throw new Error(result.outcome.text);
@@ -966,14 +1029,14 @@ class DiagnosticForwarder {
 
   offer(chunk: Uint8Array): void {
     if (!this.sink || this.disabled) return;
-    const count = Math.min(this.remaining, chunk.byteLength);
-    if (count < chunk.byteLength) this.truncated = true;
-    this.remaining -= count;
-    if (count === 0) return;
     if (this.inFlight) {
       this.truncated = true;
       return;
     }
+    const count = Math.min(this.remaining, chunk.byteLength);
+    if (count < chunk.byteLength) this.truncated = true;
+    this.remaining -= count;
+    if (count === 0) return;
     this.write(Uint8Array.from(chunk.subarray(0, count)), false);
   }
 
@@ -1076,6 +1139,25 @@ function forceTerminateProcess(child: import("node:child_process").ChildProcess)
   try { child.kill("SIGKILL"); } catch {}
 }
 
+function processGroupExists(child: import("node:child_process").ChildProcess): boolean {
+  if (!child.pid || process.platform === "win32") return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function forceTerminateAndReap(child: import("node:child_process").ChildProcess): void {
+  if (!processGroupExists(child)) return;
+  forceTerminateProcess(child);
+  const waitForExit = () => {
+    if (processGroupExists(child)) setTimeout(waitForExit, 25);
+  };
+  setTimeout(waitForExit, 25);
+}
+
 async function invokeRuntime(
   runtime: HostProcessRuntime,
   hostName: string,
@@ -1104,7 +1186,7 @@ async function invokeRuntime(
     if (terminationRequested) return;
     terminationRequested = true;
     terminateProcess(child);
-    forceTimer = setTimeout(() => forceTerminateProcess(child), TERMINATION_GRACE_MS);
+    forceTimer = setTimeout(() => forceTerminateAndReap(child), TERMINATION_GRACE_MS);
   };
   child.stdout!.on("data", (chunk: Uint8Array) => {
     if (stdoutOverflow) return;
@@ -1144,7 +1226,7 @@ async function invokeRuntime(
     settleStdin();
   }
   const [exit] = await Promise.all([exitPromise, stdinSettlement]).finally(() => {
-    if (forceTimer !== undefined) clearTimeout(forceTimer);
+    if (forceTimer !== undefined && !processGroupExists(child)) clearTimeout(forceTimer);
     cancellation.dispose();
     diagnostics.finish();
   });
@@ -1184,7 +1266,9 @@ const TYPESCRIPT_REGISTRATION_BODY: &str = r#"
           const input = inputSnapshot(options, CONTRACT_FAILURE, CALL_PAYLOAD_FAILURE);
           const record = toolRecord(hostName, CONTRACT_FAILURE);
           const frameworkHelp = isFrameworkHelp(record);
-          if (!frameworkHelp) operationRecord(record, input, CONTRACT_FAILURE);
+          const operation = frameworkHelp
+            ? undefined
+            : operationRecord(record, input, CONTRACT_FAILURE);
           let context: HostInvocationContextV1;
           if (frameworkHelp) {
             context = Object.freeze({ kind: "absent" });
@@ -1196,6 +1280,10 @@ const TYPESCRIPT_REGISTRATION_BODY: &str = r#"
             }
           }
           if (token.isCancellationRequested) throw new vscode.CancellationError();
+          if (operation) {
+            const rejection = contextRejection(operation, context);
+            if (rejection) return projectResult(rejection);
+          }
           let result: HostCallResultV1;
           try {
             result = await invokeRuntime(capturedRuntime as never, hostName, input, context, capturedRuntimeFacts, token);

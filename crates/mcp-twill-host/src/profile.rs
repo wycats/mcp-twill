@@ -36,6 +36,7 @@ pub struct HostAdapterProfile {
 pub(crate) struct CompiledHostTool {
     pub(crate) native_name: String,
     pub(crate) host_name: String,
+    pub(crate) user_description: String,
     pub(crate) document: Value,
     pub(crate) operations: Vec<String>,
 }
@@ -804,13 +805,12 @@ impl HostAdapterProfileDecl {
                 .map(|operation| operation.spec().id.clone())
                 .collect::<Vec<_>>();
             let mut document = document.clone();
-            document
-                .as_object_mut()
-                .ok_or_else(|| build_error("native tool snapshot is not an object"))?
-                .insert(
-                    "description".to_string(),
-                    Value::String(surface_tool_description(surface, &native_name)?),
-                );
+            let compiled_description = document
+                .get("description")
+                .and_then(Value::as_str)
+                .ok_or_else(|| build_error("native tool snapshot is missing its description"))?;
+            let user_description =
+                surface_tool_user_description(surface, &native_name, compiled_description)?;
             if let [operation_id] = operations.as_slice()
                 && let Some(properties) = self.results.omit_top_level_properties.get(operation_id)
             {
@@ -819,6 +819,7 @@ impl HostAdapterProfileDecl {
             tools.push(CompiledHostTool {
                 native_name,
                 host_name,
+                user_description,
                 document,
                 operations,
             });
@@ -887,6 +888,7 @@ impl HostAdapterProfileDecl {
                 json!({
                     "nativeName": tool.native_name,
                     "hostName": tool.host_name,
+                    "userDescription": tool.user_description,
                     "operations": tool.operations,
                     "document": tool.document,
                 })
@@ -941,21 +943,16 @@ impl HostAdapterProfileDecl {
     }
 }
 
-fn surface_tool_description(
+fn surface_tool_user_description(
     surface: &NativeToolSurfaceSnapshot,
     native_name: &str,
+    compiled_description: &str,
 ) -> Result<String> {
     if matches!(
         &surface.declaration().framework_help,
         mcp_twill::FrameworkHelpProjection::Tool { name } if name == native_name
     ) {
-        return surface
-            .tools()
-            .iter()
-            .find(|tool| tool.name.as_ref() == native_name)
-            .and_then(|tool| tool.description.as_deref())
-            .map(str::to_string)
-            .ok_or_else(|| build_error("native help tool is missing from its snapshot"));
+        return Ok(compiled_description.to_string());
     }
     let declaration = surface
         .declaration()
@@ -968,25 +965,11 @@ fn surface_tool_description(
         })
         .ok_or_else(|| build_error("native tool declaration is missing from its snapshot"))?;
     match declaration {
-        NativeToolDecl::Direct {
-            operation_id,
-            description,
-            ..
-        } => Ok(description.clone().unwrap_or_else(|| {
-            surface
-                .operation(operation_id)
-                .expect("compiled direct operation exists")
-                .spec()
-                .description
+        NativeToolDecl::Direct { description, .. } | NativeToolDecl::Group { description, .. } => {
+            Ok(description
                 .clone()
-        })),
-        NativeToolDecl::Group {
-            selector,
-            description,
-            ..
-        } => Ok(description
-            .clone()
-            .unwrap_or_else(|| format!("Select one operation with `{selector}`."))),
+                .unwrap_or_else(|| compiled_description.to_string()))
+        }
     }
 }
 

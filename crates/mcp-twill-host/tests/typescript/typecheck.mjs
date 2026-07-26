@@ -127,12 +127,13 @@ module.exports = {
   const first = requireFromFixture(compileRuntimeModule("runtime-success"));
   let providerCalls = 0;
   let runtimeCalls = 0;
+  let providerContext = { kind: "absent" };
   const provider = {
     marker: "provider",
     resolve() {
       if (this.marker !== "provider") throw new Error("lost provider receiver");
       providerCalls++;
-      return { kind: "absent" };
+      return providerContext;
     },
   };
   const runtime = {
@@ -250,6 +251,22 @@ module.exports = {
   ) {
     throw new Error("generated invocation did not preserve captured hooks");
   }
+  providerContext = { kind: "unsupported", reason: "unknown_token_shape" };
+  let unsupportedContextFailed = false;
+  try {
+    await registration.implementation.invoke(
+      { input: { id: "42" } },
+      token(),
+    );
+  } catch (error) {
+    unsupportedContextFailed =
+      error.message ===
+      "item_get failed with unsupported_host. This host cannot supply invocation context";
+  }
+  if (!unsupportedContextFailed || providerCalls !== 2 || runtimeCalls !== 1) {
+    throw new Error("known context rejection reached the runtime hook");
+  }
+  providerContext = { kind: "absent" };
   const shared = { value: "copied" };
   let repeatedIdentityFailed = false;
   try {
@@ -261,7 +278,7 @@ module.exports = {
     repeatedIdentityFailed =
       error.message === "Generated host adapter received an invalid result envelope";
   }
-  if (!repeatedIdentityFailed || providerCalls !== 1 || runtimeCalls !== 1) {
+  if (!repeatedIdentityFailed || providerCalls !== 2 || runtimeCalls !== 1) {
     throw new Error("repeated source identity crossed the snapshot boundary");
   }
   let duplicateFailed = false;
@@ -304,7 +321,7 @@ module.exports = {
   } catch (error) {
     cancelled = error instanceof vscode.CancellationError;
   }
-  if (!cancelled || providerCalls !== 1 || runtimeCalls !== 1) {
+  if (!cancelled || providerCalls !== 2 || runtimeCalls !== 1) {
     throw new Error("pre-dispatch cancellation reached a host hook");
   }
 
@@ -318,10 +335,11 @@ module.exports = {
     throw new Error("missing generated process hashes");
   }
   let spawnRecord;
+  let resumeBackpressure = () => {};
   class FakeChild extends EventEmitter {
     constructor() {
       super();
-      this.pid = 42;
+      this.pid = 987_654_321;
       this.exitCode = null;
       this.signalCode = null;
       this.stdout = new EventEmitter();
@@ -336,19 +354,32 @@ module.exports = {
         queueMicrotask(() => {
           this.stdin.emit("finish");
           if (call.arguments.id === "cancel") return;
+          if (call.arguments.id === "backpressure") {
+            this.stderr.emit("data", Uint8Array.from([1]));
+            this.stderr.emit("data", new Uint8Array(70_000));
+            resumeBackpressure = () => {
+              this.stderr.emit("data", Uint8Array.from([9]));
+              this.complete(call);
+            };
+            return;
+          }
           this.stderr.emit("data", Uint8Array.from([1, 2, 3]));
           this.stderr.emit("data", Uint8Array.from([4, 5, 6]));
-          const result = {
-            hostAdapterHash: call.hostAdapterHash,
-            outcome: { kind: "success", text: '{"id":"42","value":"found"}' },
-            surfaceHash: call.surfaceHash,
-            version: 1,
-          };
-          this.stdout.emit("data", new TextEncoder().encode(JSON.stringify(result)));
-          this.exitCode = 0;
-          this.emit("close", 0);
+          this.complete(call);
         });
       };
+    }
+
+    complete(call) {
+      const result = {
+        hostAdapterHash: call.hostAdapterHash,
+        outcome: { kind: "success", text: '{"id":"42","value":"found"}' },
+        surfaceHash: call.surfaceHash,
+        version: 1,
+      };
+      this.stdout.emit("data", new TextEncoder().encode(JSON.stringify(result)));
+      this.exitCode = 0;
+      this.emit("close", 0);
     }
 
     kill(signal) {
@@ -362,8 +393,9 @@ module.exports = {
     if (request === "node:child_process") {
       return {
         spawn(executable, args, options) {
-          spawnRecord = { executable, args, options };
-          return new FakeChild();
+          const child = new FakeChild();
+          spawnRecord = { executable, args, options, child };
+          return child;
         },
       };
     }
@@ -382,8 +414,10 @@ module.exports = {
   let processProviderCalls = 0;
   let processResolverCalls = 0;
   let diagnosticCalls = 0;
+  const diagnosticChunks = [];
   let settleDiagnostic;
   let diagnosticMode = "pending";
+  let firstBackpressureWrite = true;
   const processExtension = { subscriptions: [] };
   processModule.registerGeneratedHostTools(
     processExtension,
@@ -406,8 +440,9 @@ module.exports = {
         };
       },
       diagnosticSink: {
-        write() {
+        write(chunk) {
           diagnosticCalls++;
+          diagnosticChunks.push([...chunk]);
           if (diagnosticMode === "throwing-then") {
             return Object.defineProperty({}, "then", {
               get() {
@@ -415,6 +450,10 @@ module.exports = {
               },
             });
           }
+          if (diagnosticMode === "backpressure" && !firstBackpressureWrite) {
+            return;
+          }
+          firstBackpressureWrite = false;
           return new Promise((resolve) => {
             settleDiagnostic = resolve;
           });
@@ -465,6 +504,22 @@ module.exports = {
   if (!stdinErrorFailed) {
     throw new Error("child stdin error escaped the process transport");
   }
+  diagnosticMode = "backpressure";
+  firstBackpressureWrite = true;
+  const backpressured = processRegistration.implementation.invoke(
+    { input: { id: "backpressure" } },
+    token(),
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+  settleDiagnostic();
+  await Promise.resolve();
+  await Promise.resolve();
+  resumeBackpressure();
+  await backpressured;
+  if (!diagnosticChunks.some((chunk) => chunk.length === 1 && chunk[0] === 9)) {
+    throw new Error("dropped stderr consumed the offered-byte allowance");
+  }
   if (
     spawnRecord.executable !== process.execPath
     || spawnRecord.options.shell !== false
@@ -494,15 +549,49 @@ module.exports = {
     processToken,
   );
   await Promise.resolve();
+  const originalProcessKill = process.kill;
+  const originalSetTimeout = globalThis.setTimeout;
+  const groupSignals = [];
+  let groupAlive = process.platform !== "win32";
+  if (process.platform !== "win32") {
+    process.kill = (pid, signal) => {
+      if (pid !== -spawnRecord.child.pid) return originalProcessKill(pid, signal);
+      if (signal === 0) {
+        if (groupAlive) return true;
+        const error = new Error("no such process group");
+        error.code = "ESRCH";
+        throw error;
+      }
+      groupSignals.push(signal);
+      if (signal === "SIGTERM") {
+        queueMicrotask(() => spawnRecord.child.emit("close", null));
+      }
+      if (signal === "SIGKILL") groupAlive = false;
+      return true;
+    };
+    globalThis.setTimeout = (callback, delay, ...args) =>
+      originalSetTimeout(callback, Math.min(delay, 10), ...args);
+  }
   cancelProcess();
   let processRaisedCancellation = false;
   try {
     await pendingCancellation;
+    await new Promise((resolve) => originalSetTimeout(resolve, 50));
   } catch (error) {
     processRaisedCancellation = error instanceof vscode.CancellationError;
+    await new Promise((resolve) => originalSetTimeout(resolve, 50));
+  } finally {
+    process.kill = originalProcessKill;
+    globalThis.setTimeout = originalSetTimeout;
   }
   if (!processRaisedCancellation || spawnRecord.options.detached !== (process.platform !== "win32")) {
     throw new Error("generated process cancellation did not reap its wrapper");
+  }
+  if (
+    process.platform !== "win32"
+    && (!groupSignals.includes("SIGTERM") || !groupSignals.includes("SIGKILL") || groupAlive)
+  ) {
+    throw new Error("generated process cancellation did not reap its descendant group");
   }
 } finally {
   rmSync(directory, { recursive: true, force: true });
