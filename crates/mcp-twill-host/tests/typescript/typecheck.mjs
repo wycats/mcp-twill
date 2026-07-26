@@ -458,6 +458,41 @@ module.exports = {
     throw new Error("presentation-unsafe host result reached the host UI");
   }
 
+  vscode.__state.registrations.length = 0;
+  const adversarialRuntime = requireFromFixture(
+    compileRuntimeModule("runtime-adversarial-error"),
+  );
+  let spoofedRuntimeMessage =
+    "Generated host call exceeds its configured byte limit";
+  adversarialRuntime.registerGeneratedHostTools(
+    { subscriptions: [] },
+    { resolve: () => ({ kind: "absent" }) },
+    {
+      async call() {
+        throw new Error(spoofedRuntimeMessage);
+      },
+    },
+  );
+  for (const message of [
+    "Generated host call exceeds its configured byte limit",
+    "Generated host result exceeds its configured byte limit",
+  ]) {
+    spoofedRuntimeMessage = message;
+    let adversarialRuntimeFailed = false;
+    try {
+      await vscode.__state.registrations.at(-1).implementation.invoke(
+        { input: { id: "42" } },
+        token(),
+      );
+    } catch (error) {
+      adversarialRuntimeFailed =
+        error.message === "Generated host adapter received an invalid result envelope";
+    }
+    if (!adversarialRuntimeFailed) {
+      throw new Error("runtime hook spoofed a framework-generated payload failure");
+    }
+  }
+
   const processSource = generatedSources.get("process");
   if (!processSource) throw new Error("missing generated process source");
   const processHashes = {

@@ -1703,29 +1703,41 @@ fn project_result_schema(document: &mut Value, properties: &BTreeSet<String>) ->
         .and_then(Value::as_str)
         .and_then(|reference| reference.strip_prefix('#'))
         .map(ToOwned::to_owned);
-    {
-        let target = if let Some(pointer) = target_pointer {
-            schema
-                .pointer_mut(&pointer)
-                .ok_or_else(|| build_error("host result projection cannot resolve output schema"))?
-        } else {
-            &mut *schema
-        };
-        let object = target
-            .as_object_mut()
-            .ok_or_else(|| build_error("host result projection requires an object schema"))?;
-        let schema_properties = object
-            .get_mut("properties")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| build_error("host result projection requires object properties"))?;
+    if target_pointer.is_some() {
+        project_result_schema_object(schema, properties, false)?;
+    }
+    let target = if let Some(pointer) = target_pointer {
+        schema
+            .pointer_mut(&pointer)
+            .ok_or_else(|| build_error("host result projection cannot resolve output schema"))?
+    } else {
+        &mut *schema
+    };
+    project_result_schema_object(target, properties, true)?;
+    prune_unreachable_definitions(schema);
+    Ok(())
+}
+
+fn project_result_schema_object(
+    schema: &mut Value,
+    properties: &BTreeSet<String>,
+    require_properties: bool,
+) -> Result<()> {
+    let object = schema
+        .as_object_mut()
+        .ok_or_else(|| build_error("host result projection requires an object schema"))?;
+    if let Some(schema_properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
         for property in properties {
             schema_properties.remove(property);
         }
-        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
-            required.retain(|entry| entry.as_str().is_none_or(|name| !properties.contains(name)));
-        }
+    } else if require_properties {
+        return Err(build_error(
+            "host result projection requires object properties",
+        ));
     }
-    prune_unreachable_definitions(schema);
+    if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+        required.retain(|entry| entry.as_str().is_none_or(|name| !properties.contains(name)));
+    }
     Ok(())
 }
 
@@ -1773,6 +1785,11 @@ fn collect_definition_references_without_defs(
 ) {
     match value {
         Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                && let Some(name) = references.get(reference)
+            {
+                found.insert(name.clone());
+            }
             for (key, value) in object {
                 if key != "$defs" {
                     collect_definition_references(value, references, found);

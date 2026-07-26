@@ -987,6 +987,28 @@ impl CliMcpServer {
         invocation_context: InvocationContext,
         confirmation_mode: HostNativeConfirmationMode,
     ) -> HostNativeExecution {
+        let execution = self
+            .execute_host_native_call_inner(
+                tool_name,
+                arguments,
+                invocation_context,
+                confirmation_mode,
+            )
+            .await;
+        if self.events.enabled() {
+            self.events
+                .record(self.host_native_execution_event(&execution));
+        }
+        execution
+    }
+
+    async fn execute_host_native_call_inner(
+        &self,
+        tool_name: &str,
+        arguments: rmcp::model::JsonObject,
+        invocation_context: InvocationContext,
+        confirmation_mode: HostNativeConfirmationMode,
+    ) -> HostNativeExecution {
         let surface = match &self.surface {
             McpToolSurface::Native(surface) => surface,
             McpToolSurface::EffectLanes(_) => {
@@ -1245,6 +1267,67 @@ impl CliMcpServer {
                     .await,
             ),
         }
+    }
+
+    fn host_native_execution_event(&self, execution: &HostNativeExecution) -> FrameworkEvent {
+        let (envelope, plan) = match &execution.outcome {
+            HostNativeExecutionOutcome::FrameworkHelp(_) => (
+                ResponseEnvelope {
+                    status: crate::ResponseStatus::Ok,
+                    command: None,
+                    output: None,
+                    error: None,
+                    diagnostics: Vec::new(),
+                    steering: Vec::new(),
+                    display: None,
+                    replay: None,
+                    preview: None,
+                    plan: None,
+                    retry: None,
+                },
+                None,
+            ),
+            HostNativeExecutionOutcome::Command(outcome) => match outcome.as_ref() {
+                Ok(crate::CommandExecutionOutcome::Success(response)) => (
+                    ResponseEnvelope::success(response.clone(), ResponseProfile::CompactStructured),
+                    Some(PlanFacts::from(&response.plan)),
+                ),
+                Ok(crate::CommandExecutionOutcome::ApplicationError { plan, error }) => (
+                    ResponseEnvelope::application_error(
+                        plan.clone(),
+                        error.clone(),
+                        ResponseProfile::CompactStructured,
+                    ),
+                    Some(PlanFacts::from(plan)),
+                ),
+                Err(error) => {
+                    let envelope = execution
+                        .operation_id
+                        .as_deref()
+                        .and_then(|operation_id| {
+                            let McpToolSurface::Native(surface) = &self.surface else {
+                                return None;
+                            };
+                            let operation = surface.snapshot().operation(operation_id)?;
+                            Some(ResponseEnvelope::framework_error_for_operation(
+                                error.clone(),
+                                operation_id,
+                                &operation.spec().path,
+                            ))
+                        })
+                        .unwrap_or_else(|| {
+                            ResponseEnvelope::framework_error(error.clone(), None, None)
+                        });
+                    (envelope, None)
+                }
+            },
+        };
+        let mut event = FrameworkEvent::from_envelope(&envelope, plan.as_ref())
+            .with_runtime((*self.identity).clone());
+        if event.operation_id.is_none() {
+            event.operation_id.clone_from(&execution.operation_id);
+        }
+        event
     }
 
     async fn notify_progress(

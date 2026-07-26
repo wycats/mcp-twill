@@ -383,6 +383,7 @@ interface CloneBudget {
 }
 
 class CloneLimitError extends Error {}
+class RuntimeHookError extends Error {}
 
 function countCloneBytes(budget: CloneBudget | undefined, text: string): void {
   if (!budget) return;
@@ -1072,7 +1073,12 @@ async function invokeRuntime(
   token: vscode.CancellationToken,
 ): Promise<HostCallResultV1> {
   encodeCallEnvelope(hostName, input, context, facts);
-  const result = await runtime.call(hostName, input, context, facts, token);
+  let result: HostCallResultV1;
+  try {
+    result = await runtime.call(hostName, input, context, facts, token);
+  } catch {
+    throw new RuntimeHookError();
+  }
   if (token.isCancellationRequested) throw new vscode.CancellationError();
   const validated = validateResult(result);
   if (canonicalJsonByteLength(validated, MAX_RESULT_BYTES) > MAX_RESULT_BYTES) throw new Error(PAYLOAD_FAILURE);
@@ -1382,6 +1388,7 @@ const TYPESCRIPT_REGISTRATION_BODY: &str = r#"
             if (token.isCancellationRequested || error instanceof vscode.CancellationError) {
               throw new vscode.CancellationError();
             }
+            if (error instanceof RuntimeHookError) throw new Error(CONTRACT_FAILURE);
             const message = error instanceof Error ? error.message : "";
             if ([CONTRACT_FAILURE, CALL_PAYLOAD_FAILURE, PAYLOAD_FAILURE].includes(message)) {
               throw new Error(message);

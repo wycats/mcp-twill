@@ -5,10 +5,10 @@ use mcp_twill::{
     ApplicationActionDecl, ApplicationErrorSpec, ApplicationMessageDecl, ApplicationRecoveryDecl,
     ApplicationResultContract, ApplicationSuccess, ArgSpec, CliMcpServer, CommandContext,
     CommandRegistry, CommandSpec, ConversationIdentity, DynamicCommandFailure,
-    FrameworkHelpProjection, McpProtocolTarget, NativeConfirmationBridge,
+    FrameworkHelpProjection, InMemoryEventSink, McpProtocolTarget, NativeConfirmationBridge,
     NativeConfirmationBridgeError, NativeConfirmationDecision, NativeConfirmationRequest,
     NativeConfirmationRoute, NativeToolDecl, NativeToolSurface, OutputContract,
-    RecoveryCardinality,
+    RecoveryCardinality, ResponseStatus,
 };
 use mcp_twill_host::{
     HostAdapterProfile, HostCallOutcomeV1, HostConfirmationPolicy, HostConfirmationTrigger,
@@ -321,6 +321,124 @@ async fn in_process_host_uses_native_dispatch_and_projects_results() -> anyhow::
         HostCallOutcomeV1::Success {
             text: r#"{"id":"42","value":"found"}"#.to_string()
         }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_dispatch_records_terminal_events() -> anyhow::Result<()> {
+    let registry = registry();
+    let surface = surface(&registry)?;
+    let profile = profile(surface.snapshot())?;
+    let events = Arc::new(InMemoryEventSink::new());
+    let server = CliMcpServer::builder(registry)
+        .surface(surface)
+        .build()?
+        .with_event_sink(events.clone());
+    let adapter = profile.bind_in_process(server)?;
+
+    let result = adapter
+        .call(
+            "host_item_get",
+            BTreeMap::from([("id".to_string(), json!("42"))]),
+            HostInvocationContextV1::Absent {
+                workspace_roots: None,
+            },
+            HostRuntimeFactsV1::VsCode {
+                engine_version: None,
+            },
+        )
+        .await;
+    assert!(matches!(result.outcome, HostCallOutcomeV1::Success { .. }));
+
+    let invalid = adapter
+        .call(
+            "host_item_get",
+            BTreeMap::new(),
+            HostInvocationContextV1::Absent {
+                workspace_roots: None,
+            },
+            HostRuntimeFactsV1::VsCode {
+                engine_version: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        invalid.outcome,
+        HostCallOutcomeV1::FrameworkError { .. }
+    ));
+
+    let recorded = events.events();
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0].status, ResponseStatus::Ok);
+    assert_eq!(recorded[0].operation_id.as_deref(), Some("items.get"));
+    assert_eq!(
+        recorded[0].command.as_deref(),
+        Some(&["items".into(), "get".into()][..])
+    );
+    assert_eq!(recorded[1].status, ResponseStatus::InvalidInput);
+    assert_eq!(recorded[1].operation_id.as_deref(), Some("items.get"));
+    assert!(recorded.iter().all(|event| event.runtime.is_some()));
+    Ok(())
+}
+
+#[test]
+fn result_omissions_apply_to_ref_sibling_constraints() -> anyhow::Result<()> {
+    let registry = CommandRegistry::new("host-ref-result", "Host ref result").register_dynamic(
+        CommandSpec::new(["items", "get"], "Get Item", "Read one item.").with_output(
+            OutputContract {
+                application: Some(ApplicationResultContract::new(json!({
+                    "$ref": "#/$defs/Item",
+                    "required": ["secret"],
+                    "$defs": {
+                        "Item": {
+                            "type": "object",
+                            "properties": {
+                                "value": { "type": "string" },
+                                "secret": { "type": "string" }
+                            },
+                            "required": ["value", "secret"],
+                            "additionalProperties": false
+                        }
+                    }
+                }))),
+                ..OutputContract::default()
+            },
+        ),
+        |_context: CommandContext| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "value": "found",
+                "secret": "private"
+            })))
+        },
+    );
+    let surface = NativeToolSurface::builder("host-ref-result")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .tool(NativeToolDecl::Direct {
+            name: "item_get".to_string(),
+            operation_id: "items.get".to_string(),
+            title: None,
+            description: None,
+        })
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let profile = HostAdapterProfile::vscode("host-ref-result", VsCodeVersion::new(1, 120, 0))
+        .confirmation(HostConfirmationPolicy::presentation_only(
+            HostConfirmationTrigger::None,
+        ))
+        .omit_result_property("items.get", "secret")
+        .unsupported_context(unsupported_policy())
+        .invocation_limits(HostInvocationLimits::new(64 * 1024, 64 * 1024))
+        .in_process()
+        .build(surface.snapshot())?;
+
+    let schema = &profile.snapshot().document()["tools"][0]["document"]["outputSchema"];
+    assert_eq!(schema["required"], json!([]));
+    assert_eq!(schema["$defs"]["Item"]["required"], json!(["value"]));
+    assert!(
+        schema["$defs"]["Item"]["properties"]
+            .get("secret")
+            .is_none()
     );
     Ok(())
 }
