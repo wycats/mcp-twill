@@ -7,6 +7,14 @@
   margin: 0 auto;
   padding: clamp(3rem, 7vw, 7rem) clamp(1.1rem, 4vw, 4rem) 3rem;
   border-bottom: 1px solid var(--line-strong);
+  background-image: linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(100% - 1px),
+    var(--line) 100%
+  );
+  background-position: 0 0;
+  background-size: 25% 100%;
 }
 
 .masthead h1 {
@@ -50,24 +58,48 @@
 }
 
 .guideStep {
-  padding: 2rem 1.4rem;
+  position: relative;
+  padding: 1.65rem 1.5rem 1.8rem;
   border-bottom: 1px solid var(--line);
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.guideStep:has(button:hover) {
+  background: color-mix(in srgb, var(--paper) 94%, var(--teal));
+}
+
+.guideStep:has(button:focus-visible) {
+  box-shadow: inset 3px 0 var(--teal);
+}
+
+.guideStepActive {
+  background: color-mix(in srgb, var(--paper) 96%, var(--teal));
+  box-shadow: inset 3px 0 var(--teal);
 }
 
 .guideStep h2 {
-  margin: 0.45rem 0;
-  font-size: 1.25rem;
+  margin: 0.5rem 0 0.4rem;
+  font-size: 1.16rem;
   font-weight: 400;
+  line-height: 1.2;
 }
 
 .guideStep p:not(.eyebrow) {
-  margin: 0 0 1rem;
+  margin: 0 0 0.8rem;
   color: var(--muted);
-  font-size: 0.92rem;
-  line-height: 1.5;
+  font-size: 0.86rem;
+  line-height: 1.48;
 }
 
-.guideStep button,
+.guideStep .guideStatus {
+  margin-top: -0.15rem;
+  color: var(--teal);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+}
+
 .authoritySwitch button,
 .profileSwitch button,
 .agreement button,
@@ -81,7 +113,6 @@
   padding: 0.42rem 0.58rem;
 }
 
-.guideStep button:hover,
 .authoritySwitch button:hover,
 .profileSwitch button:hover,
 .agreement button:hover,
@@ -91,27 +122,83 @@
   color: var(--teal);
 }
 
+.guideStep button {
+  appearance: none;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+  padding: 0.12rem 0;
+  font-size: 0.78rem;
+}
+
+.guideStep button::after {
+  content: " →";
+  color: var(--rust);
+}
+
+.guideStep button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.guideStep button:hover {
+  border-bottom-color: var(--teal);
+  color: var(--teal);
+}
+
 .workbench {
+  container: workbench / inline-size;
   min-width: 0;
-  padding: 1.4rem;
+  padding: clamp(1.5rem, 2.4vw, 2.4rem);
 }
 
 .workbenchHeader {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
-  padding-bottom: 1rem;
+  gap: 2rem;
+  padding-bottom: 1.4rem;
 }
 
 .workbenchHeader h2 {
   margin: 0.25rem 0 0;
-  font-size: clamp(1.3rem, 3vw, 2rem);
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
   font-weight: 400;
+}
+
+.displaySwitches {
+  display: flex;
+  align-items: start;
+  justify-content: flex-end;
+  gap: 1.25rem;
+}
+
+.displayControl {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.displayControl > span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .authoritySwitch {
   display: flex;
+}
+
+.profileSwitch {
+  display: flex;
+  min-width: 0;
+}
+
+.authoritySwitch button {
+  font-size: 0.72rem;
 }
 
 .authoritySwitch button + button,
@@ -129,14 +216,16 @@
 
 .controls {
   display: grid;
-  grid-template-columns: repeat(5, minmax(7.5rem, 1fr));
-  gap: 0.65rem;
-  padding: 0.85rem 0;
+  grid-template-columns: repeat(4, minmax(8.5rem, 1fr));
+  gap: 1rem;
+  min-width: 0;
+  margin: 0;
+  padding: 1.2rem 0 1.35rem;
   border-block: 1px solid var(--line);
+  border-inline: 0;
 }
 
-.controls label,
-.profileSwitch {
+.controls label {
   display: grid;
   align-content: start;
   gap: 0.35rem;
@@ -146,23 +235,23 @@
   padding: 0;
 }
 
-.controls label > span,
-.profileSwitch legend {
+.controls label > span {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: 0.61rem;
   letter-spacing: 0.04em;
 }
 
 .controls select {
   width: 100%;
-  min-height: 2.15rem;
-  border: 1px solid var(--line-strong);
+  min-height: 2.3rem;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
   border-radius: 0;
   background: var(--paper);
   color: var(--ink);
-  padding: 0.32rem;
-  font-size: 0.78rem;
+  padding: 0.4rem 1.25rem 0.4rem 0;
+  font-size: 0.8rem;
 }
 
 .controls select:disabled {
@@ -170,19 +259,43 @@
   cursor: not-allowed;
 }
 
-.profileSwitch div {
-  display: flex;
-}
-
 .profileSwitch button {
   flex: 1;
-  font-size: 0.76rem;
+  display: grid;
+  gap: 0.08rem;
+  min-width: 5.9rem;
+  font-size: 0.72rem;
+  line-height: 1.1;
+}
+
+.profileSwitch button small {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.02em;
+  opacity: 0.72;
+}
+
+.compareSurfaces {
+  justify-self: start;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+  padding: 0.08rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.54rem;
+  text-align: left;
+}
+
+.compareSurfaces:hover,
+.compareSurfaces[aria-pressed="true"] {
+  border-bottom-color: var(--teal);
+  color: var(--teal);
 }
 
 .agreement {
-  margin: 0.9rem 0;
-  padding: 0.65rem 0.75rem;
-  border-left: 3px solid;
+  margin: 0.65rem 0 1.3rem;
+  padding: 0.45rem 0;
   font-size: 0.82rem;
   transition:
     background-color 180ms ease,
@@ -199,20 +312,21 @@
 }
 
 .agreementPassed {
-  border-color: var(--success);
-  background: color-mix(in srgb, var(--paper) 88%, var(--success));
+  border-bottom: 1px solid var(--line);
+  color: var(--success);
 }
 
 .agreementFailed {
-  border-color: var(--error);
+  padding: 0.75rem 0.85rem;
+  border-left: 3px solid var(--error);
   background: color-mix(in srgb, var(--paper) 88%, var(--error));
 }
 
 .woven {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(15rem, 0.78fr) minmax(0, 2.22fr);
-  gap: 1.2rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(2.5rem, 4vw, 4rem);
   isolation: isolate;
 }
 
@@ -224,8 +338,8 @@
 }
 
 .declaration {
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--line-strong);
+  padding-top: 0.95rem;
+  border-top: 2px solid var(--rust);
 }
 
 .declaration > header {
@@ -235,27 +349,38 @@
 }
 
 .declaration h3 {
-  margin: 0.35rem 0 0.7rem;
-  font-size: 1rem;
+  margin: 0.35rem 0 0.4rem;
+  font-size: 1.08rem;
   font-weight: 400;
 }
 
-.declaration pre {
-  max-height: 28rem;
-  overflow: auto;
-  padding: 0.8rem 0;
-  border-block: 1px solid var(--line);
+.sourceCue {
+  display: grid;
+  max-width: 48rem;
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.sourceCue > span {
+  grid-area: 1 / 1;
+}
+
+.sourceCue strong {
   color: var(--ink);
-  font-size: 0.7rem;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.sourceCue .cueHidden {
+  visibility: hidden;
 }
 
 .factList {
   display: grid;
-  gap: 0.35rem;
-  margin-top: 0.75rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0 0.8rem;
+  margin-top: 1rem;
 }
 
 .factList button {
@@ -265,11 +390,12 @@
   gap: 0.12rem;
   width: 100%;
   border: 0;
-  border-left: 2px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line);
   border-radius: 0;
-  background: color-mix(in srgb, var(--paper) 96%, var(--teal));
+  background: transparent;
   color: var(--ink);
-  padding: 0.4rem 0.5rem;
+  padding: 0.55rem 0.65rem;
   text-align: left;
   transition:
     background-color 180ms ease,
@@ -279,11 +405,12 @@
 .factList button span {
   color: var(--teal);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: 0.55rem;
+  overflow-wrap: anywhere;
 }
 
 .factList button strong {
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   font-weight: 500;
 }
 
@@ -295,7 +422,7 @@
 
 .factList .factActive {
   border-color: var(--teal);
-  background: color-mix(in srgb, var(--paper) 78%, var(--teal));
+  background: color-mix(in srgb, var(--paper) 88%, var(--teal));
 }
 
 .declarationProvenance,
@@ -316,22 +443,62 @@
 
 .projectionArea {
   min-width: 0;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line-strong);
 }
 
 .projections {
   display: grid;
-  grid-template-columns: repeat(5, minmax(7.8rem, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1rem 1.15rem;
+}
+
+.projections > * {
+  grid-column: span 2;
+}
+
+.projections > [data-projection-panel="confirmation"],
+.projections > [data-projection-panel="host"] {
+  grid-column: span 3;
 }
 
 .mobileTabs {
   display: none;
 }
 
+@container workbench (min-width: 64.5rem) {
+  .woven {
+    grid-template-columns: minmax(45rem, 2.6fr) minmax(17.5rem, 1fr);
+    align-items: start;
+    gap: 2rem;
+  }
+
+  .projectionArea {
+    align-self: start;
+    padding-top: 0;
+    border-top: 2px solid var(--teal);
+  }
+
+  .projections {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .projections > *,
+  .projections > [data-projection-panel="confirmation"],
+  .projections > [data-projection-panel="host"] {
+    grid-column: 1;
+  }
+
+  .projections > :first-child {
+    border-top: 0;
+  }
+}
+
 .microscope,
 .privateContext {
-  margin-top: 1.5rem;
-  padding-top: 1.25rem;
+  margin-top: clamp(3rem, 5vw, 4.5rem);
+  padding-top: 1.6rem;
   border-top: 1px solid var(--line-strong);
 }
 
@@ -358,18 +525,20 @@
 .traceSteps {
   display: grid;
   grid-template-columns: repeat(7, minmax(5.4rem, 1fr));
-  margin-top: 0.9rem;
+  margin-top: 1.15rem;
+  border-block: 1px solid var(--line);
 }
 
 .traceSteps button {
   min-width: 0;
-  border-right: 0;
-  padding: 0.5rem 0.35rem;
+  border: 0;
+  border-right: 1px solid var(--line);
+  padding: 0.6rem 0.35rem;
   font-size: 0.68rem;
 }
 
 .traceSteps button:last-child {
-  border-right: 1px solid var(--line-strong);
+  border-right: 0;
 }
 
 .traceSteps button span {
@@ -387,9 +556,9 @@
 .traceDetail {
   display: grid;
   grid-template-columns: minmax(10rem, 0.7fr) minmax(0, 1.3fr);
-  gap: 1rem;
+  gap: 1.5rem;
   min-height: 9rem;
-  padding: 0.9rem 0;
+  padding: 1.15rem 0;
   border-bottom: 1px solid var(--line);
 }
 
@@ -438,7 +607,7 @@
 .privateContext {
   display: grid;
   grid-template-columns: 1.4fr 0.7fr 1fr;
-  gap: 1rem;
+  gap: 2rem;
 }
 
 .privateContext p:not(.eyebrow) {
@@ -586,35 +755,48 @@
   .projections {
     grid-template-columns: repeat(2, minmax(9rem, 1fr));
   }
-}
 
-@media (max-width: 900px) {
-  .masthead {
-    grid-template-columns: 1fr;
-    gap: 2rem;
+  .projections > * {
+    grid-column: auto;
   }
 
+  .projections > [data-projection-panel="host"] {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 1100px) {
   .experience {
     display: block;
   }
 
   .narrative {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
     border-right: 0;
     border-bottom: 1px solid var(--line-strong);
+    scrollbar-color: var(--line-strong) transparent;
   }
 
   .guideStep {
+    flex: 0 0 min(20rem, 78vw);
+    min-height: 11.5rem;
+    border-bottom: 0;
     border-right: 1px solid var(--line);
+    scroll-snap-align: start;
+  }
+}
+
+@media (max-width: 960px) {
+  .masthead {
+    grid-template-columns: 1fr;
+    gap: 2rem;
   }
 
   .controls {
-    grid-template-columns: repeat(3, minmax(8rem, 1fr));
-  }
-
-  .woven {
-    grid-template-columns: minmax(15rem, 0.7fr) minmax(0, 1.3fr);
+    grid-template-columns: repeat(2, minmax(8rem, 1fr));
   }
 
   .traceSteps {
@@ -622,7 +804,7 @@
   }
 
   .traceSteps button:nth-child(4) {
-    border-right: 1px solid var(--line-strong);
+    border-right: 0;
   }
 
   .fieldStudy {
@@ -643,36 +825,41 @@
     font-size: clamp(3.4rem, 20vw, 5.2rem);
   }
 
-  .narrative {
-    display: block;
-  }
-
   .guideStep {
-    border-right: 0;
+    flex-basis: min(19rem, 84vw);
+    min-height: 11rem;
+    padding: 1.5rem 1.35rem 1.65rem;
   }
 
   .workbench {
-    padding: 1.05rem;
+    padding: 1.35rem 1.1rem 1.8rem;
   }
 
   .workbenchHeader {
     display: grid;
+    gap: 1.25rem;
   }
 
-  .authoritySwitch {
+  .displaySwitches {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .authoritySwitch,
+  .profileSwitch {
     width: 100%;
   }
 
-  .authoritySwitch button {
+  .authoritySwitch button,
+  .profileSwitch button {
     flex: 1;
+    min-width: 0;
+    padding-inline: 0.35rem;
   }
 
   .controls {
     grid-template-columns: 1fr 1fr;
-  }
-
-  .profileSwitch {
-    grid-column: 1 / -1;
   }
 
   .woven {
@@ -680,7 +867,12 @@
   }
 
   .declaration {
-    margin-bottom: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .factList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 0.6rem;
   }
 
   .mobileTabs {
@@ -722,7 +914,11 @@
 
   .traceSteps button,
   .traceSteps button:nth-child(4) {
-    border-right: 1px solid var(--line-strong);
+    border-right: 1px solid var(--line);
+  }
+
+  .traceSteps button:nth-child(2n) {
+    border-right: 0;
   }
 
   .traceDetail {
@@ -746,18 +942,20 @@
   }
 }
 
-@media (max-width: 400px) {
+@media (max-width: 340px) {
   .controls {
     grid-template-columns: 1fr;
   }
 
-  .profileSwitch {
-    grid-column: 1;
+  .factList,
+  .displaySwitches {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .agreement,
+  .guideStep,
   .factList button {
     transition: none;
   }

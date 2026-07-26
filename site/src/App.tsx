@@ -17,6 +17,7 @@ import type {
 import { projections } from "./evidence/types";
 import { findVariant, prettyJson } from "./evidence/adapter";
 import {
+  displayedFactId,
   initialState,
   mismatches,
   seedHandwrittenDrift,
@@ -24,6 +25,7 @@ import {
 } from "./state";
 import { CausalThreads } from "./components/CausalThreads";
 import { CopyButton } from "./components/CopyButton";
+import { DeclarationCode } from "./components/DeclarationCode";
 import { ProjectionPanel } from "./components/ProjectionPanel";
 import styles from "./App.module.css";
 
@@ -94,18 +96,26 @@ function GuideStep({
   children,
   action,
   actionLabel = "Show this",
+  active = false,
+  status,
 }: {
   number: string;
   title: string;
   children: React.ReactNode;
   action: (trigger: HTMLButtonElement) => void;
   actionLabel?: string;
+  active?: boolean;
+  status?: string | undefined;
 }) {
   return (
-    <section className={styles.guideStep}>
+    <section
+      className={`${styles.guideStep} ${active ? styles.guideStepActive : ""}`}
+      data-active={active}
+    >
       <p className={styles.eyebrow}>{number}</p>
       <h2>{title}</h2>
       <p>{children}</p>
+      {status ? <p className={styles.guideStatus}>{status}</p> : null}
       <button type="button" onClick={(event) => action(event.currentTarget)}>
         {actionLabel}
       </button>
@@ -219,6 +229,12 @@ export function App({ evidence }: AppProps) {
     () => findVariant(bundle.variants, state.selection),
     [bundle.variants, state.selection],
   );
+  const activeFactId = displayedFactId(state);
+  const omittedDeclarationFact = variant.declaration.facts.find(
+    (fact) => fact.codePresence === "omitted",
+  );
+  const activeFactIsOmitted =
+    omittedDeclarationFact?.id === activeFactId;
   const drift = mismatches(variant, state.overrides);
   const driftTargetIds = useMemo(
     () => new Set(drift.map((target) => target.id)),
@@ -312,63 +328,84 @@ export function App({ evidence }: AppProps) {
           <nav className={styles.narrative} aria-label="Guided essay">
             <GuideStep
               number="01"
-              title="One command, many surfaces"
+              title="One command makes five promises"
               action={() => showSelection(defaults, null)}
+              actionLabel="See the five promises"
             >
-              Read one <code>issues create</code> declaration across five
-              synchronized projections.
+              <code>issues create</code> is described to people, agents, the
+              runtime, confirmation UI, and host UI. Today, they agree.
             </GuideStep>
             <GuideStep
               number="02"
-              title="A constraint travels"
+              title="Change the rule once"
               action={() => showSelection(withTitleLimit, titleFactId)}
+              actionLabel="Change the title rule"
             >
-              Require a non-empty title. The same <code>minLength: 1</code>{" "}
-              fact reaches every interpretation that needs it.
+              Require a non-empty title. Every promise should now tell the same
+              new truth: <code>minLength: 1</code>.
             </GuideStep>
             <GuideStep
               number="03"
-              title="Behavior travels too"
+              title="Behavior is part of the promise"
               action={() => showSelection(withRemote, destinationFactId)}
+              actionLabel="Add network access"
             >
-              Move from local write to remote write plus network. Permissions,
-              authorization, annotations, and host warning move together.
+              Add network access. Permissions, authorization, annotations, and
+              host warnings must change together.
             </GuideStep>
             <GuideStep
               number="04"
-              title="Drift is the bug"
+              title="Handwritten copies eventually disagree"
               action={enterHandwritten}
+              actionLabel="Introduce drift"
             >
-              Let independently maintained surfaces disagree. The check can
-              name the divergence, but cannot choose which lie to trust.
+              Let each consumer maintain its own interpretation and watch one
+              command start contradicting itself.
             </GuideStep>
             <GuideStep
               number="05"
-              title="Restore authority"
+              title="Give truth one home"
               action={restoreAuthority}
               actionLabel="Restore from catalog"
             >
-              Clear handwritten overrides atomically, then inspect the same
-              request from selection through result.
+              Restore the catalog, then follow that same authority through
+              selection, validation, authorization, dispatch, and result.
             </GuideStep>
             <GuideStep
               number="06"
-              title="Private context stays private"
+              title="Some inputs should never become public"
               action={() => showSelection(withIdentity, privateContextFactId)}
+              actionLabel="Supply private context"
             >
-              A host-supplied conversation identity reaches the handler without
-              becoming a public argument or result.
+              Conversation identity can shape the right decision without
+              appearing in arguments, help, logs, or results.
             </GuideStep>
             <GuideStep
               number="07"
-              title="Same semantics, another surface"
+              title="One operation, two public call shapes"
               action={() => {
-                dispatch({ type: "profile", profile: "compact" });
-                dispatch({ type: "projection", projection: "mcp" });
+                if (state.mode === "handwritten") {
+                  dispatch({ type: "restore" });
+                }
+                dispatch({ type: "compareMcp", active: !state.compareMcp });
               }}
+              actionLabel={
+                state.compareMcp
+                  ? `Return to ${state.profile === "compact" ? "compact lanes" : "native tool"}`
+                  : "Compare the two tool shapes"
+              }
+              active={state.compareMcp}
+              status={
+                state.compareMcp
+                  ? "Comparison opened in the MCP projection."
+                  : undefined
+              }
             >
-              Compare the compact effect lane with the native operation tool.
-              Their shapes differ; their catalog authority does not.
+              Compact shares a small <code>run*</code> vocabulary and carries
+              the command through <code>command + args</code>. Native exposes{" "}
+              <code>{variant.mcpSurfaceComparison.native.toolName}</code>{" "}
+              with <code>title + body</code>. Both resolve to{" "}
+              <code>{variant.mcpSurfaceComparison.operationId}</code>.
             </GuideStep>
           </nav>
 
@@ -380,27 +417,82 @@ export function App({ evidence }: AppProps) {
                   <code>issues create</code>
                 </h2>
               </div>
-              <div className={styles.authoritySwitch} aria-label="Authority mode">
-                <button
-                  ref={derivedButtonRef}
-                  type="button"
-                  aria-pressed={state.mode === "derived"}
-                  onClick={(event) => restoreAuthority(event.currentTarget)}
-                >
-                  Derived {state.mode === "derived" ? "●" : "○"}
-                </button>
-                <button
-                  ref={handwrittenButtonRef}
-                  type="button"
-                  aria-pressed={state.mode === "handwritten"}
-                  onClick={enterHandwritten}
-                >
-                  Handwritten {state.mode === "handwritten" ? "●" : "○"}
-                </button>
+              <div className={styles.displaySwitches}>
+                <div className={styles.displayControl}>
+                  <span>Authority</span>
+                  <div
+                    className={styles.authoritySwitch}
+                    aria-label="Authority mode"
+                  >
+                    <button
+                      ref={derivedButtonRef}
+                      type="button"
+                      aria-pressed={state.mode === "derived"}
+                      onClick={(event) => restoreAuthority(event.currentTarget)}
+                    >
+                      Derived
+                    </button>
+                    <button
+                      ref={handwrittenButtonRef}
+                      type="button"
+                      aria-pressed={state.mode === "handwritten"}
+                      onClick={enterHandwritten}
+                    >
+                      Handwritten
+                    </button>
+                  </div>
+                </div>
+                <div className={styles.displayControl}>
+                  <span id="mcp-surface-label">MCP tool shape</span>
+                  <div
+                    className={styles.profileSwitch}
+                    role="group"
+                    aria-labelledby="mcp-surface-label"
+                  >
+                    {(["compact", "native"] as ServingProfile[]).map((profile) => (
+                      <button
+                        type="button"
+                        key={profile}
+                        aria-pressed={
+                          !state.compareMcp && state.profile === profile
+                        }
+                        aria-label={
+                          profile === "compact"
+                            ? "Compact shared lanes"
+                            : "Native direct tool"
+                        }
+                        onClick={() => dispatch({ type: "profile", profile })}
+                      >
+                        <span>
+                          {profile === "compact" ? "Compact" : "Native"}
+                        </span>
+                        <small>
+                          {profile === "compact" ? "shared lanes" : "direct tool"}
+                        </small>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.compareSurfaces}
+                    aria-pressed={state.compareMcp}
+                    onClick={() =>
+                      dispatch({
+                        type: "compareMcp",
+                        active: !state.compareMcp,
+                      })
+                    }
+                  >
+                    {state.compareMcp
+                      ? "Close generated comparison"
+                      : "Compare both generated shapes"}
+                  </button>
+                </div>
               </div>
             </header>
 
-            <div className={styles.controls}>
+            <fieldset className={styles.controls}>
+              <legend className="srOnly">Semantic controls</legend>
               {bundle.controls.map((control) => (
                 <label key={control.id}>
                   <span>{control.label}</span>
@@ -424,22 +516,7 @@ export function App({ evidence }: AppProps) {
                   </select>
                 </label>
               ))}
-              <fieldset className={styles.profileSwitch}>
-                <legend>MCP profile</legend>
-                <div>
-                  {(["compact", "native"] as ServingProfile[]).map((profile) => (
-                    <button
-                      type="button"
-                      key={profile}
-                      aria-pressed={state.profile === profile}
-                      onClick={() => dispatch({ type: "profile", profile })}
-                    >
-                      {profile === "compact" ? "Compact" : "Native"}
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-            </div>
+            </fieldset>
 
             <div
               className={`${styles.agreement} ${
@@ -474,40 +551,70 @@ export function App({ evidence }: AppProps) {
 
             <div className={styles.woven} ref={wovenRef}>
               <CausalThreads
-                key={`${variant.id}:${state.profile}`}
+                key={`${variant.id}:${state.profile}:${state.compareMcp}`}
                 containerRef={wovenRef}
                 anchors={variant.semanticAnchors}
-                activeFactId={state.activeFactId}
+                activeFactId={activeFactId}
                 mismatchedTargetIds={driftTargetIds}
               />
               <section className={styles.declaration} aria-labelledby="declaration-title">
                 <header>
                   <div>
-                    <p className={styles.eyebrow}>Authoritative input</p>
-                    <h3 id="declaration-title">Rust declaration</h3>
+                    <p className={styles.eyebrow}>Authoritative Rust</p>
+                    <h3 id="declaration-title">The command, declared once</h3>
                   </div>
                   <CopyButton value={variant.declaration.text} label="Copy Rust" />
                 </header>
-                <pre tabIndex={0}>
-                  <code>{variant.declaration.text}</code>
-                </pre>
+                <p className={styles.sourceCue} aria-live="polite">
+                  <span
+                    className={activeFactIsOmitted ? styles.cueHidden : ""}
+                    aria-hidden={activeFactIsOmitted}
+                  >
+                    Hover or focus a promise to reveal the declaration lines
+                    that produce it.
+                  </span>
+                  {omittedDeclarationFact ? (
+                    <span
+                      className={
+                        activeFactIsOmitted ? "" : styles.cueHidden
+                      }
+                      aria-hidden={!activeFactIsOmitted}
+                      data-code-absence={omittedDeclarationFact.id}
+                      data-visible={activeFactIsOmitted}
+                    >
+                      <strong>{omittedDeclarationFact.label}</strong> is absent
+                      by design: no declaration line is emitted in this variant.
+                    </span>
+                  ) : null}
+                </p>
+                <DeclarationCode
+                  declaration={variant.declaration}
+                  activeFactId={activeFactId}
+                  onHoverFact={(factId) =>
+                    dispatch({ type: "hoverFact", factId })
+                  }
+                />
                 <div className={styles.factList} aria-label="Declaration facts">
                   {variant.declaration.facts.map((fact) => (
                     <button
                       type="button"
                       key={fact.id}
                       data-source-fact={fact.id}
+                      data-active={activeFactId === fact.id}
                       className={
-                        state.activeFactId === fact.id ? styles.factActive : ""
+                        activeFactId === fact.id ? styles.factActive : ""
                       }
                       onFocus={() =>
-                        dispatch({ type: "activateFact", factId: fact.id })
+                        dispatch({ type: "focusFact", factId: fact.id })
                       }
                       onPointerEnter={() =>
-                        dispatch({ type: "activateFact", factId: fact.id })
+                        dispatch({ type: "hoverFact", factId: fact.id })
                       }
                       onPointerLeave={() =>
-                        dispatch({ type: "activateFact", factId: null })
+                        dispatch({ type: "hoverFact", factId: null })
+                      }
+                      onBlur={() =>
+                        dispatch({ type: "focusFact", factId: null })
                       }
                     >
                       <span>{fact.id}</span>
@@ -541,6 +648,11 @@ export function App({ evidence }: AppProps) {
                       role="tab"
                       key={projection}
                       data-tab={projection}
+                      aria-label={
+                        projection === "confirmation"
+                          ? "Confirmation"
+                          : undefined
+                      }
                       aria-selected={state.activeProjection === projection}
                       aria-controls={`panel-${projection}`}
                       tabIndex={state.activeProjection === projection ? 0 : -1}
@@ -551,7 +663,9 @@ export function App({ evidence }: AppProps) {
                         handleProjectionKeys(event, projection)
                       }
                     >
-                      {projection === "mcp"
+                      {projection === "confirmation"
+                        ? "Confirm"
+                        : projection === "mcp"
                         ? "MCP"
                         : projection[0]?.toUpperCase() + projection.slice(1)}
                     </button>
@@ -564,12 +678,16 @@ export function App({ evidence }: AppProps) {
                       projection={projection}
                       variant={variant}
                       profile={state.profile}
+                      compareMcp={state.compareMcp}
                       mode={state.mode}
                       overrides={state.overrides}
-                      activeFactId={state.activeFactId}
+                      activeFactId={activeFactId}
                       mobileActive={state.activeProjection === projection}
-                      onActivateFact={(factId) =>
-                        dispatch({ type: "activateFact", factId })
+                      onHoverFact={(factId) =>
+                        dispatch({ type: "hoverFact", factId })
+                      }
+                      onFocusFact={(factId) =>
+                        dispatch({ type: "focusFact", factId })
                       }
                       onEditOverride={(targetId, value) =>
                         dispatch({ type: "editOverride", targetId, value })
@@ -600,6 +718,7 @@ export function App({ evidence }: AppProps) {
                     type="button"
                     key={step.id}
                     aria-pressed={state.traceIndex === index}
+                    aria-controls="trace-detail"
                     onClick={() => dispatch({ type: "trace", index })}
                   >
                     <span>{index + 1}</span>
@@ -607,10 +726,15 @@ export function App({ evidence }: AppProps) {
                   </button>
                 ))}
               </div>
-              <article className={styles.traceDetail}>
+              <article
+                id="trace-detail"
+                className={styles.traceDetail}
+                aria-live="polite"
+              >
                 <div>
                   <p className={styles.eyebrow}>
-                    {variant.trace[state.traceIndex]?.stage}
+                    Step {state.traceIndex + 1} of {variant.trace.length} ·{" "}
+                    {variant.trace[state.traceIndex]?.label}
                   </p>
                   <p>{variant.trace[state.traceIndex]?.summary}</p>
                 </div>

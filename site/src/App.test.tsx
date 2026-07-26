@@ -1,5 +1,5 @@
 import axe from "axe-core";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { loadTrackedEvidence } from "./evidence/adapter";
@@ -10,7 +10,7 @@ describe("A Command, Woven", () => {
   it("renders one declaration and all five synchronized projections", () => {
     render(<App evidence={evidence} />);
     expect(
-      screen.getByRole("heading", { name: "Rust declaration" }),
+      screen.getByRole("heading", { name: "The command, declared once" }),
     ).toBeInTheDocument();
     for (const name of ["Help", "Schema", "MCP", "Confirmation", "Host"]) {
       expect(screen.getByRole("heading", { name })).toBeInTheDocument();
@@ -53,8 +53,15 @@ describe("A Command, Woven", () => {
   it("switches authentic compact and native MCP projections", async () => {
     const user = userEvent.setup();
     render(<App evidence={evidence} />);
-    const native = screen.getByRole("button", { name: "Native" });
-    const compact = screen.getByRole("button", { name: "Compact" });
+    expect(
+      screen.getByRole("group", { name: "MCP tool shape" }),
+    ).toBeInTheDocument();
+    const native = screen.getByRole("button", {
+      name: "Native direct tool",
+    });
+    const compact = screen.getByRole("button", {
+      name: "Compact shared lanes",
+    });
     expect(native).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.getByRole("button", { name: "Native MCP title constraint" }),
@@ -70,6 +77,168 @@ describe("A Command, Woven", () => {
     expect(
       screen.getByText(/Compact MCP projection selected/),
     ).toBeInTheDocument();
+  });
+
+  it("uses the seventh guide step to compare both MCP profiles", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App evidence={evidence} />);
+    const initialCompare = screen.getByRole("button", {
+      name: "Compare both generated shapes",
+    });
+    const compact = screen.getByRole("button", {
+      name: "Compact shared lanes",
+    });
+    const native = screen.getByRole("button", {
+      name: "Native direct tool",
+    });
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Compare the two tool shapes",
+      }),
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Close generated comparison",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(compact).toHaveAttribute("aria-pressed", "false");
+    expect(native).toHaveAttribute("aria-pressed", "false");
+
+    const panel = container.querySelector<HTMLElement>(
+      '[data-projection-panel="mcp"]',
+    )!;
+    expect(panel).toHaveAttribute("data-mcp-view", "comparison");
+    const comparison = within(
+      screen.getByLabelText("Compact and Native MCP tool comparison"),
+    );
+    expect(
+      comparison.getByText(
+        /“Compact” describes how the tool surface scales across many commands/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      comparison.getByText("Shared effect lanes"),
+    ).toBeInTheDocument();
+    expect(
+      comparison.getByText("Direct operation tool"),
+    ).toBeInTheDocument();
+    expect(comparison.getByText("run-write")).toBeInTheDocument();
+    expect(comparison.getAllByText("issues_create")).not.toHaveLength(0);
+    expect(comparison.getByText("issues.create")).toBeInTheDocument();
+
+    await user.click(native);
+    expect(initialCompare).toHaveAccessibleName("Compare both generated shapes");
+    expect(
+      screen.getByRole("button", {
+        name: "Compare both generated shapes",
+      }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(native).toHaveAttribute("aria-pressed", "true");
+    expect(panel).toHaveAttribute("data-mcp-view", "native");
+    expect(
+      screen.queryByLabelText("Compact and Native MCP tool comparison"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("makes the selected request-microscope step explicit", async () => {
+    const user = userEvent.setup();
+    render(<App evidence={evidence} />);
+    const resultStep = screen.getByRole("button", {
+      name: "7 Result / task",
+    });
+
+    await user.click(resultStep);
+
+    expect(resultStep).toHaveAttribute("aria-pressed", "true");
+    expect(resultStep).toHaveAttribute("aria-controls", "trace-detail");
+    expect(screen.getByText("Step 7 of 7 · Result / task")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This specimen returns immediately; task support remains optional.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("highlights the authoritative Rust from projection hover and focus", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App evidence={evidence} />);
+    const target = screen.getByRole("button", {
+      name: "Native MCP title constraint",
+    });
+    const activeCode = () =>
+      container.querySelectorAll(
+        '[data-code-fact="fact.titleRule"][data-active="true"]',
+      );
+
+    await user.hover(target);
+    expect(activeCode().length).toBeGreaterThan(0);
+    expect(
+      container.querySelectorAll(
+        '[data-code-fact="fact.destination"][data-active="true"]',
+      ),
+    ).toHaveLength(0);
+
+    await user.unhover(target);
+    expect(activeCode()).toHaveLength(0);
+
+    await user.click(target);
+    await user.unhover(target);
+    expect(activeCode().length).toBeGreaterThan(0);
+    await user.tab();
+    expect(activeCode()).toHaveLength(0);
+  });
+
+  it("restores a focused relationship after a different fact is hovered", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App evidence={evidence} />);
+    const focusedTarget = screen.getByRole("button", {
+      name: "Native MCP title constraint",
+    });
+    const hoveredLine = container.querySelector<HTMLElement>(
+      '[data-code-fact="fact.destination"]',
+    )!;
+
+    fireEvent.focus(focusedTarget);
+    expect(
+      container.querySelectorAll(
+        '[data-code-fact="fact.titleRule"][data-active="true"]',
+      ).length,
+    ).toBeGreaterThan(0);
+
+    await user.hover(hoveredLine);
+    expect(
+      container.querySelectorAll(
+        '[data-code-fact="fact.destination"][data-active="true"]',
+      ).length,
+    ).toBeGreaterThan(0);
+
+    await user.unhover(hoveredLine);
+    expect(
+      container.querySelectorAll(
+        '[data-code-fact="fact.titleRule"][data-active="true"]',
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("reveals an omitted source fact without mounting layout-changing content", async () => {
+    const user = userEvent.setup();
+    render(<App evidence={evidence} />);
+    const privateContext = screen.getByRole("button", {
+      name: /fact\.privateContext Private context/,
+    });
+    const absence = document.querySelector<HTMLElement>(
+      '[data-code-absence="fact.privateContext"]',
+    )!;
+
+    expect(absence).toHaveAttribute("aria-hidden", "true");
+    await user.hover(privateContext);
+    expect(absence).toHaveAttribute("aria-hidden", "false");
+    expect(absence).toHaveTextContent(
+      "no declaration line is emitted in this variant",
+    );
+    await user.unhover(privateContext);
+    expect(absence).toHaveAttribute("aria-hidden", "true");
   });
 
   it("supports arrow navigation through the mobile projection tablist", async () => {

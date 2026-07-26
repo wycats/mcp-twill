@@ -95,7 +95,7 @@
     "repository": "wycats/mcp-twill",
     "sourceHashes": {
       "crates/mcp-twill/examples/issues_server.rs": "c6f450ee843937d6c87297155f94f87bdc1b4861a9289a8c31a4c441b12d0096",
-      "crates/mcp-twill/examples/issues_server/site_specimen.rs": "e0f05919e5a239199cc2d4e39b92c82aa31df18ee24a4647c1566034bec7f357",
+      "crates/mcp-twill/examples/issues_server/site_specimen.rs": "ff92ce4b7f761307c261015c34c55e6bedc89f12eec8c90b0d98d5ddcb41eb29",
       "crates/mcp-twill/src/builder.rs": "2ccfc65c5d116d6a7cac6b119be2d5117ab82f83a8184934fdee59325c22a4e6",
       "crates/mcp-twill/src/catalog.rs": "714a54161d35af0db23262f2cf8270db24e3e3b98e5ae071ceb978ba622d13d0",
       "crates/mcp-twill/src/contract.rs": "55c073ec168f2afdee2c8402ba4106b0d7da341b5c77ffb7942a58ceb2ea30a1",
@@ -106,7 +106,7 @@
       "crates/mcp-twill/src/rmcp_adapter.rs": "7940e446653f4c328312786dc03b706c95515d604921842d7c3c729b7d26c5ce",
       "crates/mcp-twill/tests/fixtures/vbl/v0.4.9/manifest.json": "8f891cfdfb1e5d20e968c339e83b04da203d272fce4d6f419346d68101fb44d0",
       "docs/adoption/visible-browser-lab/baseline/catalog-measurement.json": "771d9e0225d64e801ba836d1273d8509a0a72e2bf6b5e711dcae2bf2169519bc",
-      "xtask/src/site_evidence.rs": "99181ef3b729de111095bf1cf83613acb0ab1a04d5409f5b975474eac8bc14b3"
+      "xtask/src/site_evidence.rs": "06330c0320a6aa06c374ee552ced9eb2f605f84d609e7b8090bd152d8b7bcadf"
     }
   },
   "variants": [
@@ -1317,6 +1317,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -1332,6 +1339,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 17,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -1344,6 +1358,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 22,
+                "startLine": 19
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -1364,6 +1385,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 23,
+                "startLine": 23
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -1378,7 +1406,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "c902795a071aea5d9432bf79583103e55754e2886d3f9761df233a298bfc40f7",
@@ -1624,6 +1652,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-local__confirmation-generic__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "c902795a071aea5d9432bf79583103e55754e2886d3f9761df233a298bfc40f7",
@@ -3448,6 +3515,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -3463,6 +3537,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 17,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -3475,6 +3556,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 22,
+                "startLine": 19
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -3495,6 +3583,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -3509,7 +3599,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "65ffc056f2876d924e9f8443d8173eecb4685ecfc57105ba3a8428b8e75ccf26",
@@ -3753,6 +3843,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-local__confirmation-generic__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "65ffc056f2876d924e9f8443d8173eecb4685ecfc57105ba3a8428b8e75ccf26",
@@ -5598,6 +5727,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -5613,6 +5749,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 17,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -5625,6 +5768,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 24,
+                "startLine": 19
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -5645,6 +5795,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 25,
+                "startLine": 25
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -5659,7 +5816,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "b2b49b46e50e814b26b256e5ceca324b6c9d88b0a14a597fd9908cda78095726",
@@ -5925,6 +6082,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-local__confirmation-titleInterpolated__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "b2b49b46e50e814b26b256e5ceca324b6c9d88b0a14a597fd9908cda78095726",
@@ -7779,6 +7975,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -7794,6 +7997,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 17,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -7806,6 +8016,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 24,
+                "startLine": 19
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -7826,6 +8043,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -7840,7 +8059,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "95dfe107c8fb57d0f45d5a62a926fc77f7d16c33eef715eb89670d2b117243aa",
@@ -8104,6 +8323,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-local__confirmation-titleInterpolated__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "95dfe107c8fb57d0f45d5a62a926fc77f7d16c33eef715eb89670d2b117243aa",
@@ -9955,6 +10213,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -9970,6 +10235,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 18,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -9987,6 +10259,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 23,
+                "startLine": 20
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -10007,6 +10286,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 24,
+                "startLine": 24
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -10021,7 +10307,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "e320aa135d372a0fcd597c7c8040908224dfb21b255c6c55248accd462d13cd2",
@@ -10278,6 +10564,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-remote__confirmation-generic__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "e320aa135d372a0fcd597c7c8040908224dfb21b255c6c55248accd462d13cd2",
@@ -12164,6 +12489,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -12179,6 +12511,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 18,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -12196,6 +12535,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 23,
+                "startLine": 20
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -12216,6 +12562,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -12230,7 +12578,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "8c06849ddad56aa3a4037b22f80c07182639c3cc66d302883a40df0125d17752",
@@ -12485,6 +12833,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-remote__confirmation-generic__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "8c06849ddad56aa3a4037b22f80c07182639c3cc66d302883a40df0125d17752",
@@ -14392,6 +14779,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -14407,6 +14801,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 18,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -14424,6 +14825,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 25,
+                "startLine": 20
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -14444,6 +14852,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 26,
+                "startLine": 26
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -14458,7 +14873,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "d110f5a0e3c70fc8b3203ba057fc51950c6b201ae26ed69b840c11db8d193070",
@@ -14735,6 +15150,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-remote__confirmation-titleInterpolated__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "d110f5a0e3c70fc8b3203ba057fc51950c6b201ae26ed69b840c11db8d193070",
@@ -16651,6 +17105,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 12,
+                "startLine": 6
+              }
+            ],
             "displayValue": "Minimum 1 character",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -16666,6 +17127,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 18,
+                "startLine": 17
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -16683,6 +17151,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 25,
+                "startLine": 20
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -16703,6 +17178,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -16717,7 +17194,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    {\n                      \"minLength\": 1,\n                      \"type\": \"string\"\n                    }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "0fa6061614321a194aba2ba8be8953ed8276c310b0e5f2201668e3a9e2339994",
@@ -16992,6 +17469,45 @@
         "title": "Create an issue"
       },
       "id": "title-nonEmpty__destination-remote__confirmation-titleInterpolated__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "0fa6061614321a194aba2ba8be8953ed8276c310b0e5f2201668e3a9e2339994",
@@ -18859,6 +19375,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -18874,6 +19397,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 14,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -18886,6 +19416,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 19,
+                "startLine": 16
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -18906,6 +19443,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 20,
+                "startLine": 20
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -18920,7 +19464,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "9d879c27860aa9efccad0f6464d59363d8af8eb5964493b9fe97bc70bbce1f6b",
@@ -19152,6 +19696,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-local__confirmation-generic__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "9d879c27860aa9efccad0f6464d59363d8af8eb5964493b9fe97bc70bbce1f6b",
@@ -20955,6 +21538,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -20970,6 +21560,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 14,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -20982,6 +21579,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 19,
+                "startLine": 16
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -21002,6 +21606,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -21016,7 +21622,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "1ede674a5ea45156f7f8911af7ec6f0ca5d3757c0e512c42aecc77c9653b730e",
@@ -21246,6 +21852,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-local__confirmation-generic__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "1ede674a5ea45156f7f8911af7ec6f0ca5d3757c0e512c42aecc77c9653b730e",
@@ -23070,6 +23715,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -23085,6 +23737,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 14,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -23097,6 +23756,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 21,
+                "startLine": 16
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -23117,6 +23783,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 22,
+                "startLine": 22
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -23131,7 +23804,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "9b308f627f89b618b997ac2345ddc7ae8b57941cb711fed0ffdc0ed6abda61f4",
@@ -23383,6 +24056,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-local__confirmation-titleInterpolated__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "9b308f627f89b618b997ac2345ddc7ae8b57941cb711fed0ffdc0ed6abda61f4",
@@ -25216,6 +25928,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -25231,6 +25950,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 14,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -25243,6 +25969,13 @@
             "value": "write"
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 21,
+                "startLine": 16
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -25263,6 +25996,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -25277,7 +26012,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "eda62fd257b0e5aa54a9d7906bd80cb693f10668859ae71db8b0b1bc5b6245a5",
@@ -25527,6 +26262,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-local__confirmation-titleInterpolated__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-write"
+          ],
+          "toolName": "run-write"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "eda62fd257b0e5aa54a9d7906bd80cb693f10668859ae71db8b0b1bc5b6245a5",
@@ -27357,6 +28131,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -27372,6 +28153,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 15,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -27389,6 +28177,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 20,
+                "startLine": 17
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -27409,6 +28204,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 21,
+                "startLine": 21
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -27423,7 +28225,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "7c9422a00d17e061e17e1d30b895075c50d8d64f6fe693e8c37a5d5175148099",
@@ -27666,6 +28468,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-remote__confirmation-generic__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "7c9422a00d17e061e17e1d30b895075c50d8d64f6fe693e8c37a5d5175148099",
@@ -29531,6 +30372,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -29546,6 +30394,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 15,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -29563,6 +30418,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 20,
+                "startLine": 17
+              }
+            ],
             "displayValue": "Create this issue?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -29583,6 +30445,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -29597,7 +30461,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "f6c8433b00a20d3b70facde3d361ac6600bfdf906ecc880b500ab2a063967946",
@@ -29838,6 +30702,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-remote__confirmation-generic__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "f6c8433b00a20d3b70facde3d361ac6600bfdf906ecc880b500ab2a063967946",
@@ -31724,6 +32627,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -31739,6 +32649,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 15,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -31756,6 +32673,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 22,
+                "startLine": 17
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -31776,6 +32700,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 23,
+                "startLine": 23
+              }
+            ],
             "displayValue": "Optional host-supplied conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -31790,7 +32721,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "dfa34b549e9c71f42d32efd378154e6cd9b174a81c9de64b0eb042d8cf21b368",
@@ -32053,6 +32984,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-remote__confirmation-titleInterpolated__context-conversationIdentity",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "dfa34b549e9c71f42d32efd378154e6cd9b174a81c9de64b0eb042d8cf21b368",
@@ -33948,6 +34918,13 @@
       "declaration": {
         "facts": [
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 9,
+                "startLine": 6
+              }
+            ],
             "displayValue": "No declared length constraint",
             "id": "fact.titleRule",
             "label": "Title rule",
@@ -33963,6 +34940,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 15,
+                "startLine": 14
+              }
+            ],
             "displayValue": "write + network",
             "id": "fact.destination",
             "label": "Destination and effect",
@@ -33980,6 +34964,13 @@
             }
           },
           {
+            "codePresence": "rendered",
+            "codeRanges": [
+              {
+                "endLine": 22,
+                "startLine": 17
+              }
+            ],
             "displayValue": "Create issue \"Crash on launch\"?",
             "id": "fact.confirmation",
             "label": "Confirmation presentation",
@@ -34000,6 +34991,8 @@
             }
           },
           {
+            "codePresence": "omitted",
+            "codeRanges": [],
             "displayValue": "No private conversation identity",
             "id": "fact.privateContext",
             "label": "Private context",
@@ -34014,7 +35007,7 @@
           }
         ],
         "sourcePath": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
-        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"additionalProperties\": false,\n              \"properties\": {\n                \"body\": {\n                  \"type\": \"string\"\n                },\n                \"id\": {\n                  \"type\": \"integer\"\n                },\n                \"status\": {\n                  \"type\": \"string\"\n                },\n                \"title\": {\n                  \"type\": \"string\"\n                }\n              },\n              \"required\": [\n                \"id\",\n                \"title\",\n                \"body\",\n                \"status\"\n              ],\n              \"type\": \"object\"\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
+        "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
         "catalog": "3e98f261b2c4a4680e7213a8e6429b9d8ea660ad11b8940e31fc037bfca77f52",
@@ -34275,6 +35268,45 @@
         "title": "Create an issue"
       },
       "id": "title-unconstrained__destination-remote__confirmation-titleInterpolated__context-none",
+      "mcpSurfaceComparison": {
+        "compact": {
+          "hasArgumentMap": true,
+          "inputFields": [
+            "approval",
+            "args",
+            "command",
+            "dryRun",
+            "mode",
+            "output",
+            "stdin"
+          ],
+          "requiredInputs": [
+            "command"
+          ],
+          "toolInventory": [
+            "help",
+            "run",
+            "run-network"
+          ],
+          "toolName": "run-network"
+        },
+        "native": {
+          "hasArgumentMap": false,
+          "inputFields": [
+            "body",
+            "title"
+          ],
+          "requiredInputs": [
+            "title",
+            "body"
+          ],
+          "toolInventory": [
+            "issues_create"
+          ],
+          "toolName": "issues_create"
+        },
+        "operationId": "issues.create"
+      },
       "native": {
         "surface": {
           "catalogHash": "3e98f261b2c4a4680e7213a8e6429b9d8ea660ad11b8940e31fc037bfca77f52",

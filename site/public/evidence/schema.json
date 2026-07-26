@@ -150,8 +150,43 @@
       ],
       "type": "object"
     },
+    "DeclarationCodePresence": {
+      "enum": [
+        "rendered",
+        "omitted"
+      ],
+      "type": "string"
+    },
+    "DeclarationCodeRange": {
+      "properties": {
+        "endLine": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "startLine": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "startLine",
+        "endLine"
+      ],
+      "type": "object"
+    },
     "DeclarationFact": {
       "properties": {
+        "codePresence": {
+          "$ref": "#/$defs/DeclarationCodePresence"
+        },
+        "codeRanges": {
+          "items": {
+            "$ref": "#/$defs/DeclarationCodeRange"
+          },
+          "type": "array"
+        },
         "displayValue": {
           "type": "string"
         },
@@ -174,7 +209,9 @@
         "label",
         "value",
         "displayValue",
-        "targetIds"
+        "targetIds",
+        "codePresence",
+        "codeRanges"
       ],
       "type": "object"
     },
@@ -350,6 +387,61 @@
       ],
       "type": "object"
     },
+    "McpSurfaceComparison": {
+      "properties": {
+        "compact": {
+          "$ref": "#/$defs/McpSurfaceFacts"
+        },
+        "native": {
+          "$ref": "#/$defs/McpSurfaceFacts"
+        },
+        "operationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operationId",
+        "compact",
+        "native"
+      ],
+      "type": "object"
+    },
+    "McpSurfaceFacts": {
+      "properties": {
+        "hasArgumentMap": {
+          "type": "boolean"
+        },
+        "inputFields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requiredInputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "toolInventory": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "toolName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolName",
+        "toolInventory",
+        "requiredInputs",
+        "inputFields",
+        "hasArgumentMap"
+      ],
+      "type": "object"
+    },
     "NativeProjection": {
       "properties": {
         "surface": true,
@@ -495,6 +587,9 @@
         "id": {
           "type": "string"
         },
+        "mcpSurfaceComparison": {
+          "$ref": "#/$defs/McpSurfaceComparison"
+        },
         "native": {
           "$ref": "#/$defs/NativeProjection"
         },
@@ -532,6 +627,7 @@
         "argumentSchema",
         "compact",
         "native",
+        "mcpSurfaceComparison",
         "confirmation",
         "hostPreview",
         "plan",

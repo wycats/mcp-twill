@@ -1,0 +1,96 @@
+.frame {
+  border-block: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 97%, var(--ink));
+}
+
+.pre {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0;
+  padding: 0.9rem 0;
+  font-size: 0.76rem;
+  line-height: 1.58;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.pre code {
+  display: block;
+  min-width: max-content;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 2.4rem max-content;
+  width: max-content;
+  min-width: 100%;
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.line::before {
+  content: attr(data-line-number);
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 97%, var(--ink));
+  color: color-mix(in srgb, var(--muted) 65%, transparent);
+  padding-right: 0.55rem;
+  font-size: 0.58rem;
+  text-align: right;
+  user-select: none;
+}
+
+.lineContent {
+  min-height: 1lh;
+  padding: 0 1.25rem 0 0.75rem;
+}
+
+.active {
+  background: color-mix(in srgb, var(--paper) 92%, var(--teal));
+  box-shadow: inset 3px 0 var(--teal);
+}
+
+.active::before {
+  background: color-mix(in srgb, var(--paper) 82%, var(--teal));
+  color: var(--teal);
+}
+
+@media (min-width: 1321px) {
+  .pre {
+    font-size: 0.8rem;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 960px) {
+  .pre {
+    font-size: 0.66rem;
+  }
+}
+
+@media (max-width: 639px) {
+  .pre {
+    font-size: 0.58rem;
+  }
+
+  .line {
+    grid-template-columns: 2rem max-content;
+  }
+
+  .line::before {
+    padding-right: 0.4rem;
+  }
+
+  .lineContent {
+    padding-right: 0.75rem;
+    padding-left: 0.55rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .line {
+    transition: none;
+  }
+}

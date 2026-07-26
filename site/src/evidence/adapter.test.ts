@@ -112,4 +112,103 @@ describe("generated evidence adapter", () => {
       /host/,
     );
   });
+
+  it("fails closed when MCP surface comparison evidence is missing", () => {
+    const invalid = structuredClone(bundleJson);
+    delete (
+      invalid.variants[0] as unknown as Record<string, unknown>
+    ).mcpSurfaceComparison;
+    expect(() => parseEvidence(invalid, schemaJson, manifestJson)).toThrow(
+      /mcpSurfaceComparison|schema/,
+    );
+  });
+
+  it("fails closed when MCP comparison facts disagree", () => {
+    const unpublished = structuredClone(bundleJson);
+    unpublished.variants[0]!.mcpSurfaceComparison.compact.toolName =
+      "not-published";
+    expect(() =>
+      parseEvidence(unpublished, schemaJson, manifestJson),
+    ).toThrow(/unpublished tool/);
+
+    const unknownInput = structuredClone(bundleJson);
+    unknownInput.variants[0]!.mcpSurfaceComparison.native.requiredInputs.push(
+      "missing",
+    );
+    expect(() =>
+      parseEvidence(unknownInput, schemaJson, manifestJson),
+    ).toThrow(/unknown input/);
+
+    const wrongOperation = structuredClone(bundleJson);
+    wrongOperation.variants[0]!.mcpSurfaceComparison.operationId =
+      "other.operation";
+    expect(() =>
+      parseEvidence(wrongOperation, schemaJson, manifestJson),
+    ).toThrow(/wrong catalog operation/);
+  });
+
+  it("fails closed when declaration code ranges are missing", () => {
+    const invalid = structuredClone(bundleJson);
+    const fact = invalid.variants[0]!.declaration
+      .facts[0] as unknown as Record<string, unknown>;
+    delete fact.codeRanges;
+    expect(() => parseEvidence(invalid, schemaJson, manifestJson)).toThrow(
+      /codeRanges|schema/,
+    );
+  });
+
+  it("fails closed on reversed or out-of-bounds declaration code ranges", () => {
+    const reversed = structuredClone(bundleJson);
+    reversed.variants[0]!.declaration.facts[0]!.codeRanges[0] = {
+      startLine: 9,
+      endLine: 4,
+    };
+    expect(() => parseEvidence(reversed, schemaJson, manifestJson)).toThrow(
+      /invalid code range/,
+    );
+
+    const outOfBounds = structuredClone(bundleJson);
+    outOfBounds.variants[0]!.declaration.facts[0]!.codeRanges[0] = {
+      startLine: 1,
+      endLine: 10_000,
+    };
+    expect(() => parseEvidence(outOfBounds, schemaJson, manifestJson)).toThrow(
+      /invalid code range/,
+    );
+  });
+
+  it("fails closed when declaration facts claim the same code line", () => {
+    const invalid = structuredClone(bundleJson);
+    const titleRange =
+      invalid.variants[0]!.declaration.facts.find(
+        (fact) => fact.id === "fact.titleRule",
+      )!.codeRanges[0]!;
+    invalid.variants[0]!.declaration.facts.find(
+      (fact) => fact.id === "fact.destination",
+    )!.codeRanges = [{ ...titleRange }];
+    expect(() => parseEvidence(invalid, schemaJson, manifestJson)).toThrow(
+      /belongs to/,
+    );
+  });
+
+  it("fails closed on duplicate declaration facts", () => {
+    const invalid = structuredClone(bundleJson);
+    const facts = invalid.variants[0]!.declaration
+      .facts as unknown as Array<Record<string, unknown>>;
+    const privateFact = facts.find(
+      (fact) => fact.id === "fact.privateContext",
+    )!;
+    facts.push(structuredClone(privateFact));
+    expect(() => parseEvidence(invalid, schemaJson, manifestJson)).toThrow(
+      /duplicate declaration fact ids/,
+    );
+  });
+
+  it("fails closed when generated code presence disagrees with its ranges", () => {
+    const invalid = structuredClone(bundleJson);
+    invalid.variants[0]!.declaration.facts[0]!.codePresence = "omitted";
+    expect(() => parseEvidence(invalid, schemaJson, manifestJson)).toThrow(
+      /code presence disagrees/,
+    );
+  });
 });

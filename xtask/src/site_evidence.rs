@@ -159,6 +159,7 @@ struct ScenarioVariant {
     argument_schema: Value,
     compact: CompactProjection,
     native: NativeProjection,
+    mcp_surface_comparison: McpSurfaceComparison,
     confirmation: ConfirmationProjection,
     host_preview: HostPreview,
     plan: Value,
@@ -186,6 +187,22 @@ struct DeclarationFact {
     value: Value,
     display_value: String,
     target_ids: Vec<String>,
+    code_presence: DeclarationCodePresence,
+    code_ranges: Vec<DeclarationCodeRange>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum DeclarationCodePresence {
+    Rendered,
+    Omitted,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct DeclarationCodeRange {
+    start_line: u32,
+    end_line: u32,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -212,6 +229,24 @@ struct NativeProjection {
     surface: Value,
     tool: Value,
     surface_identity: Value,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct McpSurfaceComparison {
+    operation_id: String,
+    compact: McpSurfaceFacts,
+    native: McpSurfaceFacts,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct McpSurfaceFacts {
+    tool_name: String,
+    tool_inventory: Vec<String>,
+    required_inputs: Vec<String>,
+    input_fields: Vec<String>,
+    has_argument_map: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -669,6 +704,13 @@ async fn generate_variant(config: specimen::SpecimenConfig) -> Result<ScenarioVa
             .context("native issues_create tool is missing")?,
     )
     .context("serialize native tool")?;
+    let mcp_surface_comparison = mcp_surface_comparison(
+        &operation.id,
+        &compact_tools,
+        &compact_selected_tool,
+        &native_document,
+        &native_tool,
+    )?;
 
     let bridge = Arc::new(BridgeCapture::default());
     let authorizer = Arc::new(AuthorizerCapture::default());
@@ -749,17 +791,18 @@ async fn generate_variant(config: specimen::SpecimenConfig) -> Result<ScenarioVa
         operation: &operation,
     });
     let semantic_anchors = semantic_anchors();
-    let declaration_text = specimen::declaration(&operation).map_err(anyhow::Error::msg)?;
-    validate_declaration_projection(&declaration_text, &operation)?;
+    let rendered_declaration = specimen::declaration(&operation).map_err(anyhow::Error::msg)?;
+    validate_declaration_projection(&rendered_declaration.text, &operation)?;
     let declaration = Declaration {
         source_path: "crates/mcp-twill/examples/issues_server/site_specimen.rs".to_string(),
-        text: declaration_text,
+        text: rendered_declaration.text,
         facts: declaration_facts(
             &operation,
             &argument_schema,
             &confirmation,
             &semantic_anchors,
-        ),
+            &rendered_declaration.fact_ranges,
+        )?,
     };
     let trace = trace(
         &operation,
@@ -797,6 +840,7 @@ async fn generate_variant(config: specimen::SpecimenConfig) -> Result<ScenarioVa
             tool: native_tool,
             surface_identity: native_surface_identity,
         },
+        mcp_surface_comparison,
         confirmation,
         host_preview,
         plan,
@@ -951,6 +995,86 @@ fn confirmation_projection(value: &Value) -> Result<ConfirmationProjection> {
         message: required_string(presentation, "message")?,
         arguments: value["arguments"].clone(),
         invocation_fingerprint: required_string(value, "invocationFingerprint")?,
+    })
+}
+
+fn mcp_surface_comparison(
+    operation_id: &str,
+    compact_tools: &Value,
+    compact_selected_tool: &Value,
+    native_surface: &Value,
+    native_tool: &Value,
+) -> Result<McpSurfaceComparison> {
+    Ok(McpSurfaceComparison {
+        operation_id: operation_id.to_string(),
+        compact: mcp_surface_facts(compact_tools, compact_selected_tool, "compact")?,
+        native: mcp_surface_facts(
+            native_surface
+                .get("tools")
+                .context("native surface is missing its tool inventory")?,
+            native_tool,
+            "native",
+        )?,
+    })
+}
+
+fn mcp_surface_facts(
+    tools: &Value,
+    selected_tool: &Value,
+    surface_name: &str,
+) -> Result<McpSurfaceFacts> {
+    let tool_inventory = tools
+        .as_array()
+        .with_context(|| format!("{surface_name} tool inventory is not an array"))?
+        .iter()
+        .map(|tool| required_string(tool, "name"))
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        !tool_inventory.is_empty(),
+        "{surface_name} tool inventory is empty"
+    );
+    ensure!(
+        tool_inventory.iter().collect::<BTreeSet<_>>().len() == tool_inventory.len(),
+        "{surface_name} tool inventory contains duplicate names"
+    );
+
+    let tool_name = required_string(selected_tool, "name")?;
+    ensure!(
+        tool_inventory.contains(&tool_name),
+        "{surface_name} selected tool `{tool_name}` is absent from its inventory"
+    );
+
+    let required_inputs = selected_tool
+        .pointer("/inputSchema/required")
+        .and_then(Value::as_array)
+        .with_context(|| format!("{surface_name} selected tool is missing inputSchema.required"))?
+        .iter()
+        .map(|input| {
+            input.as_str().map(ToOwned::to_owned).with_context(|| {
+                format!("{surface_name} selected tool has a non-string required input")
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let properties = selected_tool
+        .pointer("/inputSchema/properties")
+        .and_then(Value::as_object)
+        .with_context(|| {
+            format!("{surface_name} selected tool is missing inputSchema.properties")
+        })?;
+    let input_fields = properties.keys().cloned().collect();
+    ensure!(
+        required_inputs
+            .iter()
+            .all(|input| properties.contains_key(input)),
+        "{surface_name} selected tool requires an input absent from inputSchema.properties"
+    );
+
+    Ok(McpSurfaceFacts {
+        tool_name,
+        tool_inventory,
+        required_inputs,
+        input_fields,
+        has_argument_map: properties.contains_key("args"),
     })
 }
 
@@ -1337,7 +1461,8 @@ fn declaration_facts(
     argument_schema: &Value,
     confirmation: &ConfirmationProjection,
     anchors: &[SemanticAnchor],
-) -> Vec<DeclarationFact> {
+    rendered_ranges: &[specimen::DeclarationCodeRange],
+) -> Result<Vec<DeclarationFact>> {
     let title_value = argument_schema
         .pointer("/properties/title")
         .cloned()
@@ -1373,20 +1498,58 @@ fn declaration_facts(
             },
         ),
     ];
+    let known_fact_ids = facts.iter().map(|(id, _, _, _)| *id).collect::<Vec<_>>();
+    validate_rendered_range_fact_ids(rendered_ranges, &known_fact_ids)?;
+
     facts
         .into_iter()
-        .map(|(id, label, value, display_value)| DeclarationFact {
-            id: id.to_string(),
-            label: label.to_string(),
-            value,
-            display_value,
-            target_ids: anchors
+        .map(|(id, label, value, display_value)| {
+            let code_ranges = rendered_ranges
                 .iter()
-                .find(|anchor| anchor.source_fact == id)
-                .map(|anchor| anchor.target_ids.clone())
-                .unwrap_or_default(),
+                .filter(|range| range.fact_id == id)
+                .map(|range| DeclarationCodeRange {
+                    start_line: range.start_line,
+                    end_line: range.end_line,
+                })
+                .collect::<Vec<_>>();
+            ensure!(
+                id == "fact.privateContext" || !code_ranges.is_empty(),
+                "displayed declaration is missing a code range for {id}"
+            );
+            let code_presence = if code_ranges.is_empty() {
+                DeclarationCodePresence::Omitted
+            } else {
+                DeclarationCodePresence::Rendered
+            };
+            Ok(DeclarationFact {
+                id: id.to_string(),
+                label: label.to_string(),
+                value,
+                display_value,
+                target_ids: anchors
+                    .iter()
+                    .find(|anchor| anchor.source_fact == id)
+                    .map(|anchor| anchor.target_ids.clone())
+                    .unwrap_or_default(),
+                code_presence,
+                code_ranges,
+            })
         })
         .collect()
+}
+
+fn validate_rendered_range_fact_ids(
+    rendered_ranges: &[specimen::DeclarationCodeRange],
+    known_fact_ids: &[&str],
+) -> Result<()> {
+    for range in rendered_ranges {
+        ensure!(
+            known_fact_ids.contains(&range.fact_id),
+            "displayed declaration has an unknown code-range fact {}",
+            range.fact_id
+        );
+    }
+    Ok(())
 }
 
 fn effect_display(effect: &Value) -> String {
@@ -1809,13 +1972,7 @@ fn rust_string(value: &str) -> String {
 }
 
 fn indented_json(value: &Value, indentation: usize) -> Result<String> {
-    let rendered = serde_json::to_string_pretty(value).context("render declaration JSON")?;
-    let padding = " ".repeat(indentation);
-    Ok(rendered
-        .lines()
-        .map(|line| format!("{padding}{line}"))
-        .collect::<Vec<_>>()
-        .join("\n"))
+    specimen::render_json(value, indentation).map_err(anyhow::Error::msg)
 }
 
 fn argument_rendering_source(rendering: mcp_twill::ArgumentRendering) -> &'static str {
@@ -2012,6 +2169,8 @@ fn validate_variants(variants: &[ScenarioVariant], controls: &[Control]) -> Resu
         .collect::<BTreeSet<_>>();
     ensure!(ids.len() == 16, "site evidence variant ids are not unique");
     for variant in variants {
+        validate_declaration_code_ranges(variant)?;
+        validate_mcp_surface_comparison(variant)?;
         let facts = variant
             .declaration
             .facts
@@ -2135,8 +2294,170 @@ fn validate_variants(variants: &[ScenarioVariant], controls: &[Control]) -> Resu
                 "{} control `{control}` changed the wrong comparison targets\nexpected: {expected:#?}\nactual: {changed:#?}",
                 variant.id
             );
+            let mut changed_code_facts = BTreeSet::new();
+            for fact in &variant.declaration.facts {
+                let left = declaration_fact_snippet(variant, &fact.id)?;
+                let right = declaration_fact_snippet(paired, &fact.id)?;
+                if left != right {
+                    changed_code_facts.insert(fact.id.as_str());
+                }
+            }
+            let expected_code_fact = format!("fact.{control}");
+            ensure!(
+                changed_code_facts == [expected_code_fact.as_str()].into_iter().collect(),
+                "{} control `{control}` changed the wrong declaration ranges: {changed_code_facts:#?}",
+                variant.id
+            );
         }
     }
+    Ok(())
+}
+
+fn validate_mcp_surface_comparison(variant: &ScenarioVariant) -> Result<()> {
+    let operation_id = required_string(&variant.catalog_operation, "id")?;
+    let expected = mcp_surface_comparison(
+        &operation_id,
+        &variant.compact.tools,
+        &variant.compact.selected_tool,
+        &variant.native.surface,
+        &variant.native.tool,
+    )?;
+    ensure!(
+        variant.mcp_surface_comparison == expected,
+        "{} MCP surface comparison disagrees with its generated projections",
+        variant.id
+    );
+    for (surface_name, facts) in [
+        ("compact", &variant.mcp_surface_comparison.compact),
+        ("native", &variant.mcp_surface_comparison.native),
+    ] {
+        ensure!(
+            !facts.tool_name.is_empty()
+                && !facts.tool_inventory.is_empty()
+                && !facts.required_inputs.is_empty()
+                && !facts.input_fields.is_empty(),
+            "{} {surface_name} MCP surface comparison has empty facts",
+            variant.id
+        );
+    }
+    Ok(())
+}
+
+fn declaration_fact_snippet(variant: &ScenarioVariant, fact_id: &str) -> Result<String> {
+    let fact = variant
+        .declaration
+        .facts
+        .iter()
+        .find(|fact| fact.id == fact_id)
+        .with_context(|| format!("{} is missing declaration fact {fact_id}", variant.id))?;
+    let lines = variant.declaration.text.lines().collect::<Vec<_>>();
+    let mut snippet = String::new();
+    for range in &fact.code_ranges {
+        for line_number in range.start_line..=range.end_line {
+            let line = lines
+                .get((line_number - 1) as usize)
+                .with_context(|| format!("{} has an invalid declaration range", variant.id))?;
+            snippet.push_str(line);
+            snippet.push('\n');
+        }
+    }
+    Ok(snippet)
+}
+
+fn validate_declaration_code_ranges(variant: &ScenarioVariant) -> Result<()> {
+    let lines = variant.declaration.text.lines().collect::<Vec<_>>();
+    let line_count = lines.len() as u32;
+    let mut occupied_lines = BTreeMap::<u32, &str>::new();
+
+    for fact in &variant.declaration.facts {
+        let permits_empty = fact.id == "fact.privateContext"
+            && variant.selection.private_context == PrivateContextId::None;
+        ensure!(
+            permits_empty || !fact.code_ranges.is_empty(),
+            "{} fact {} is missing declaration code ranges",
+            variant.id,
+            fact.id
+        );
+        if fact.id == "fact.privateContext" {
+            ensure!(
+                fact.code_ranges.is_empty() == permits_empty,
+                "{} private-context code range disagrees with its declaration",
+                variant.id
+            );
+        }
+
+        let mut previous_end = 0;
+        let mut snippet = String::new();
+        for range in &fact.code_ranges {
+            ensure!(
+                range.start_line >= 1
+                    && range.start_line <= range.end_line
+                    && range.end_line <= line_count,
+                "{} fact {} has invalid declaration lines {}..={}",
+                variant.id,
+                fact.id,
+                range.start_line,
+                range.end_line
+            );
+            ensure!(
+                range.start_line > previous_end,
+                "{} fact {} has unsorted or overlapping declaration ranges",
+                variant.id,
+                fact.id
+            );
+            previous_end = range.end_line;
+
+            for line_number in range.start_line..=range.end_line {
+                ensure!(
+                    occupied_lines.insert(line_number, &fact.id).is_none(),
+                    "{} declaration line {} belongs to more than one fact",
+                    variant.id,
+                    line_number
+                );
+                let line = lines
+                    .get((line_number - 1) as usize)
+                    .context("validated declaration line is missing")?;
+                snippet.push_str(line);
+                snippet.push('\n');
+            }
+        }
+        ensure!(
+            fact.code_ranges.is_empty() || !snippet.trim().is_empty(),
+            "{} fact {} points only at blank declaration lines",
+            variant.id,
+            fact.id
+        );
+
+        let required_fragment = match fact.id.as_str() {
+            "fact.titleRule" => Some("arg::string(\"title\")"),
+            "fact.destination" => Some(".write("),
+            "fact.confirmation" => Some(".confirmation("),
+            "fact.privateContext" if !fact.code_ranges.is_empty() => {
+                Some(".uses_conversation_identity()")
+            }
+            "fact.privateContext" => None,
+            other => bail!(
+                "{} declaration has an unknown semantic fact {other}",
+                variant.id
+            ),
+        };
+        if let Some(fragment) = required_fragment {
+            ensure!(
+                snippet.contains(fragment),
+                "{} fact {} range omitted its declaration fragment {fragment}",
+                variant.id,
+                fact.id
+            );
+        }
+        if fact.id == "fact.destination" && variant.selection.destination == DestinationId::Remote {
+            ensure!(
+                snippet.contains(".network("),
+                "{} remote destination range omitted its network declaration",
+                variant.id
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -2367,6 +2688,133 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::specimen;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn default_mcp_surface_comparison_matches_generated_tools() {
+        let variant = super::generate_variant(specimen::SpecimenConfig::default())
+            .await
+            .expect("default site evidence variant generates");
+        let comparison = &variant.mcp_surface_comparison;
+
+        assert_eq!(comparison.operation_id, "issues.create");
+        assert_eq!(comparison.compact.tool_name, "run-write");
+        assert_eq!(
+            comparison.compact.tool_inventory,
+            ["help", "run", "run-write"]
+        );
+        assert_eq!(comparison.compact.required_inputs, ["command"]);
+        assert_eq!(
+            comparison.compact.input_fields,
+            [
+                "approval", "args", "command", "dryRun", "mode", "output", "stdin"
+            ]
+        );
+        assert!(comparison.compact.has_argument_map);
+
+        assert_eq!(comparison.native.tool_name, "issues_create");
+        assert_eq!(comparison.native.tool_inventory, ["issues_create"]);
+        assert_eq!(comparison.native.required_inputs, ["title", "body"]);
+        assert_eq!(comparison.native.input_fields, ["body", "title"]);
+        assert!(!comparison.native.has_argument_map);
+    }
+
+    #[tokio::test]
+    async fn every_variant_has_consistent_mcp_surface_comparison() {
+        let mut generated = 0;
+        for title_rule in [
+            specimen::TitleRule::Unconstrained,
+            specimen::TitleRule::NonEmpty,
+        ] {
+            for destination in [specimen::Destination::Local, specimen::Destination::Remote] {
+                for confirmation in [
+                    specimen::ConfirmationKind::Generic,
+                    specimen::ConfirmationKind::TitleInterpolated,
+                ] {
+                    for private_context in [
+                        specimen::PrivateContext::None,
+                        specimen::PrivateContext::ConversationIdentity,
+                    ] {
+                        let variant = super::generate_variant(specimen::SpecimenConfig {
+                            title_rule,
+                            destination,
+                            confirmation,
+                            private_context,
+                        })
+                        .await
+                        .expect("site evidence variant generates");
+                        super::validate_mcp_surface_comparison(&variant)
+                            .expect("MCP comparison remains projection-derived");
+                        generated += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(generated, 16);
+    }
+
+    #[test]
+    fn declaration_json_is_compact_and_schema_ordered() {
+        let rendered = specimen::render_json(
+            &json!({
+                "additionalProperties": false,
+                "properties": {
+                    "body": { "type": "string" },
+                    "id": { "type": "integer" },
+                    "status": { "type": "string" },
+                    "title": { "type": "string" }
+                },
+                "required": ["id", "title", "body", "status"],
+                "type": "object"
+            }),
+            4,
+        )
+        .expect("schema renders");
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "    {\n",
+                "      \"type\": \"object\",\n",
+                "      \"required\": [\"id\", \"title\", \"body\", \"status\"],\n",
+                "      \"properties\": {\n",
+                "        \"id\": { \"type\": \"integer\" },\n",
+                "        \"title\": { \"type\": \"string\" },\n",
+                "        \"body\": { \"type\": \"string\" },\n",
+                "        \"status\": { \"type\": \"string\" }\n",
+                "      },\n",
+                "      \"additionalProperties\": false\n",
+                "    }"
+            )
+        );
+    }
+
+    #[test]
+    fn rendered_declaration_rejects_unknown_range_facts() {
+        let ranges = [specimen::DeclarationCodeRange {
+            fact_id: "fact.typo",
+            start_line: 1,
+            end_line: 1,
+        }];
+        let error = super::validate_rendered_range_fact_ids(
+            &ranges,
+            &[
+                "fact.titleRule",
+                "fact.destination",
+                "fact.confirmation",
+                "fact.privateContext",
+            ],
+        )
+        .expect_err("unknown renderer facts must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown code-range fact fact.typo")
+        );
+    }
+
     #[test]
     fn tracked_site_evidence_is_current() {
         super::export(true).expect("tracked site evidence matches the Twill generator");

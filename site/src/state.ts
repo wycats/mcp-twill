@@ -14,6 +14,9 @@ export interface WorkbenchState {
   mode: AuthorityMode;
   overrides: Readonly<Record<string, string>>;
   activeFactId: string | null;
+  hoverFactId: string | null;
+  focusFactId: string | null;
+  compareMcp: boolean;
   activeProjection: ProjectionName;
   traceIndex: number;
   announcement: string;
@@ -43,7 +46,9 @@ export type WorkbenchAction =
     }
   | { type: "editOverride"; targetId: string; value: string }
   | { type: "restore" }
-  | { type: "activateFact"; factId: string | null }
+  | { type: "hoverFact"; factId: string | null }
+  | { type: "focusFact"; factId: string | null }
+  | { type: "compareMcp"; active: boolean }
   | { type: "projection"; projection: ProjectionName }
   | { type: "trace"; index: number };
 
@@ -57,6 +62,9 @@ export function initialState(
     mode: "derived",
     overrides: {},
     activeFactId: null,
+    hoverFactId: null,
+    focusFactId: null,
+    compareMcp: false,
     activeProjection: "help",
     traceIndex: 0,
     announcement: "Catalog-derived projections are in agreement.",
@@ -91,6 +99,7 @@ export function workbenchReducer(
       return {
         ...state,
         profile: action.profile,
+        compareMcp: false,
         activeProjection: "mcp",
         announcement: `${action.profile === "compact" ? "Compact" : "Native"} MCP projection selected.`,
       };
@@ -99,6 +108,7 @@ export function workbenchReducer(
         ...state,
         mode: "handwritten",
         overrides: Object.freeze({ ...action.overrides }),
+        compareMcp: false,
         activeProjection: "help",
         activeFactId: action.factId,
         announcement: "Handwritten drift introduced. Agreement check failed.",
@@ -119,11 +129,24 @@ export function workbenchReducer(
         mode: "derived",
         overrides: {},
         activeFactId: null,
+        hoverFactId: null,
+        focusFactId: null,
         announcement:
           "Restored from catalog. Workbench agreement check passes.",
       };
-    case "activateFact":
-      return { ...state, activeFactId: action.factId };
+    case "hoverFact":
+      return { ...state, hoverFactId: action.factId };
+    case "focusFact":
+      return { ...state, focusFactId: action.factId };
+    case "compareMcp":
+      return {
+        ...state,
+        compareMcp: action.active,
+        activeProjection: "mcp",
+        announcement: action.active
+          ? "Comparing Compact shared lanes with the Native direct tool."
+          : `${state.profile === "compact" ? "Compact shared-lane" : "Native direct-tool"} projection selected.`,
+      };
     case "projection":
       return { ...state, activeProjection: action.projection };
     case "trace":
@@ -133,6 +156,10 @@ export function workbenchReducer(
         announcement: `Request microscope step ${action.index + 1} selected.`,
       };
   }
+}
+
+export function displayedFactId(state: WorkbenchState): string | null {
+  return state.hoverFactId ?? state.focusFactId ?? state.activeFactId;
 }
 
 export function seedHandwrittenDrift(

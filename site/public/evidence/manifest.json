@@ -1,14 +1,14 @@
 {
   "files": [
     {
-      "bytes": 1133012,
+      "bytes": 1153388,
       "path": "bundle.json",
-      "sha256": "1bd743e8ec3a9e74a75d2c0ea29e124b5cc2e620f11a8c5a833d41fada9b51d8"
+      "sha256": "5e0624ceaf1e53b8d578ac97f5a98870630e6829efc154acb650a4e61bce192d"
     },
     {
-      "bytes": 13986,
+      "bytes": 16039,
       "path": "schema.json",
-      "sha256": "e4fde80362f479802c4d4587d21f72f124a61880b0fab916e5ba8f3d78a4b64d"
+      "sha256": "4e238b108e201c54dd1ac5444cebb86360a50eeed3828f7bd36fb66e1e5b43aa"
     },
     {
       "bytes": 230,
@@ -36,7 +36,7 @@
     {
       "path": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
       "provenance": "Repository source used by the Twill evidence generator.",
-      "sha256": "e0f05919e5a239199cc2d4e39b92c82aa31df18ee24a4647c1566034bec7f357"
+      "sha256": "ff92ce4b7f761307c261015c34c55e6bedc89f12eec8c90b0d98d5ddcb41eb29"
     },
     {
       "path": "crates/mcp-twill/src/builder.rs",
@@ -91,7 +91,7 @@
     {
       "path": "xtask/src/site_evidence.rs",
       "provenance": "Repository source used by the Twill evidence generator.",
-      "sha256": "99181ef3b729de111095bf1cf83613acb0ab1a04d5409f5b975474eac8bc14b3"
+      "sha256": "06330c0320a6aa06c374ee552ced9eb2f605f84d609e7b8090bd152d8b7bcadf"
     }
   ]
 }

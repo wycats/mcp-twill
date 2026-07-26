@@ -1,5 +1,6 @@
 import { loadTrackedEvidence, findVariant } from "./evidence/adapter";
 import {
+  displayedFactId,
   initialState,
   mismatches,
   seedHandwrittenDrift,
@@ -79,7 +80,51 @@ describe("workbench reducer", () => {
     });
     const trace = workbenchReducer(schema, { type: "trace", index: 4 });
     expect(trace.profile).toBe("compact");
+    expect(trace.compareMcp).toBe(false);
     expect(trace.activeProjection).toBe("schema");
     expect(trace.traceIndex).toBe(4);
+  });
+
+  it("compares both MCP shapes without changing the selected serving profile", () => {
+    const initial = initialState(
+      bundle.defaults.selection,
+      bundle.defaults.profile,
+    );
+    const comparison = workbenchReducer(initial, {
+      type: "compareMcp",
+      active: true,
+    });
+    expect(comparison.compareMcp).toBe(true);
+    expect(comparison.profile).toBe(initial.profile);
+    expect(comparison.activeProjection).toBe("mcp");
+
+    const compact = workbenchReducer(comparison, {
+      type: "profile",
+      profile: "compact",
+    });
+    expect(compact.compareMcp).toBe(false);
+  });
+
+  it("gives transient hover priority without erasing keyboard focus", () => {
+    const initial = initialState(
+      bundle.defaults.selection,
+      bundle.defaults.profile,
+    );
+    const focused = workbenchReducer(initial, {
+      type: "focusFact",
+      factId: "fact.titleRule",
+    });
+    const hovered = workbenchReducer(focused, {
+      type: "hoverFact",
+      factId: "fact.destination",
+    });
+    const restored = workbenchReducer(hovered, {
+      type: "hoverFact",
+      factId: null,
+    });
+
+    expect(displayedFactId(focused)).toBe("fact.titleRule");
+    expect(displayedFactId(hovered)).toBe("fact.destination");
+    expect(displayedFactId(restored)).toBe("fact.titleRule");
   });
 });

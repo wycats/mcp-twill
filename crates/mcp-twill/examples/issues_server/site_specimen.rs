@@ -10,7 +10,9 @@ use mcp_twill::{
     ConfirmationSegment, DynamicApplicationResult, OperationSpec, PermissionEffect, Result,
     TaskSupportSpec, arg,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+
+const INLINE_JSON_OBJECT_WIDTH: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleRule {
@@ -89,6 +91,19 @@ impl Default for SpecimenConfig {
             private_context: PrivateContext::None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclarationCodeRange {
+    pub fact_id: &'static str,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedDeclaration {
+    pub text: String,
+    pub fact_ranges: Vec<DeclarationCodeRange>,
 }
 
 #[derive(Debug, Default)]
@@ -212,7 +227,7 @@ pub fn registry(
     )
 }
 
-pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
+pub fn declaration(operation: &OperationSpec) -> StdResult<RenderedDeclaration, String> {
     let use_when = operation
         .use_when
         .as_deref()
@@ -243,6 +258,7 @@ pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
 
     let command_name = operation.path.join(" ");
     let mut output = String::new();
+    let mut fact_ranges = Vec::new();
     writeln!(
         output,
         "server.command({}, |command| {{",
@@ -277,6 +293,7 @@ pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
                 argument.name
             ));
         }
+        let fact_start = (argument.name == "title").then(|| next_line(&output));
         writeln!(output, "        .arg(").expect("writing to String cannot fail");
         writeln!(
             output,
@@ -309,8 +326,16 @@ pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
             }
         }
         writeln!(output, "        )").expect("writing to String cannot fail");
+        if let Some(start_line) = fact_start {
+            fact_ranges.push(DeclarationCodeRange {
+                fact_id: "fact.titleRule",
+                start_line,
+                end_line: current_line(&output),
+            });
+        }
     }
 
+    let effect_start = next_line(&output);
     for permission in &operation.permissions {
         let method = match permission.effect {
             PermissionEffect::Write => "write",
@@ -331,6 +356,13 @@ pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
         )
         .expect("writing to String cannot fail");
     }
+    if current_line(&output) >= effect_start {
+        fact_ranges.push(DeclarationCodeRange {
+            fact_id: "fact.destination",
+            start_line: effect_start,
+            end_line: current_line(&output),
+        });
+    }
 
     writeln!(
         output,
@@ -338,6 +370,7 @@ pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
         rust_string(invocation_message)
     )
     .expect("writing to String cannot fail");
+    let confirmation_start = next_line(&output);
     writeln!(
         output,
         "        .confirmation(ConfirmationPresentation::new("
@@ -372,10 +405,21 @@ pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
         }
     }
     writeln!(output, "        ))").expect("writing to String cannot fail");
+    fact_ranges.push(DeclarationCodeRange {
+        fact_id: "fact.confirmation",
+        start_line: confirmation_start,
+        end_line: current_line(&output),
+    });
 
     if operation.uses_conversation_identity {
+        let start_line = next_line(&output);
         writeln!(output, "        .uses_conversation_identity()")
             .expect("writing to String cannot fail");
+        fact_ranges.push(DeclarationCodeRange {
+            fact_id: "fact.privateContext",
+            start_line,
+            end_line: current_line(&output),
+        });
     }
     if operation.idempotent {
         writeln!(output, "        .idempotent()").expect("writing to String cannot fail");
@@ -424,7 +468,18 @@ pub fn declaration(operation: &OperationSpec) -> StdResult<String, String> {
     writeln!(output, "        .handle_dynamic(create_issue);")
         .expect("writing to String cannot fail");
     write!(output, "}});").expect("writing to String cannot fail");
-    Ok(output)
+    Ok(RenderedDeclaration {
+        text: output,
+        fact_ranges,
+    })
+}
+
+fn next_line(output: &str) -> u32 {
+    current_line(output) + 1
+}
+
+fn current_line(output: &str) -> u32 {
+    output.lines().count() as u32
 }
 
 fn rust_string(value: &str) -> String {
@@ -448,10 +503,183 @@ fn task_support_source(task_support: &TaskSupportSpec) -> &'static str {
 }
 
 fn write_json(output: &mut String, value: &Value, indentation: usize) -> StdResult<(), String> {
-    let rendered = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
-    let padding = " ".repeat(indentation);
+    let rendered = render_json(value, indentation)?;
     for line in rendered.lines() {
-        writeln!(output, "{padding}{line}").expect("writing to String cannot fail");
+        writeln!(output, "{line}").expect("writing to String cannot fail");
     }
     Ok(())
+}
+
+/// Renders JSON embedded in the site-only Rust declaration.
+///
+/// This intentionally favors the way a reader scans a schema over serde_json's
+/// generic pretty-printer: primitive arrays and small leaf objects stay on one
+/// line, while structural objects remain multiline. JSON Schema vocabulary is
+/// presented in semantic order without changing the underlying value.
+pub fn render_json(value: &Value, indentation: usize) -> StdResult<String, String> {
+    Ok(render_json_lines(value, indentation, None)?.join("\n"))
+}
+
+fn render_json_lines(
+    value: &Value,
+    indentation: usize,
+    preferred_keys: Option<&[String]>,
+) -> StdResult<Vec<String>, String> {
+    if let Some(compact) = compact_json(value, preferred_keys)? {
+        return Ok(vec![format!("{}{compact}", " ".repeat(indentation))]);
+    }
+
+    let padding = " ".repeat(indentation);
+    let child_indentation = indentation + 2;
+    match value {
+        Value::Array(values) => {
+            let mut lines = vec![format!("{padding}[")];
+            for (index, value) in values.iter().enumerate() {
+                let mut child = render_json_lines(value, child_indentation, None)?;
+                if index + 1 != values.len() {
+                    child
+                        .last_mut()
+                        .expect("a rendered JSON value always has a line")
+                        .push(',');
+                }
+                lines.extend(child);
+            }
+            lines.push(format!("{padding}]"));
+            Ok(lines)
+        }
+        Value::Object(object) => {
+            let keys = ordered_keys(object, preferred_keys);
+            let property_order = required_property_order(object);
+            let mut lines = vec![format!("{padding}{{")];
+            for (index, key) in keys.iter().enumerate() {
+                let child_preference =
+                    (key.as_str() == "properties").then_some(property_order.as_slice());
+                let mut child = render_json_lines(
+                    object
+                        .get(*key)
+                        .expect("ordered JSON key must remain in its object"),
+                    child_indentation,
+                    child_preference,
+                )?;
+                let child_padding = " ".repeat(child_indentation);
+                let first = child
+                    .first_mut()
+                    .expect("a rendered JSON value always has a line");
+                let value_head = first
+                    .strip_prefix(&child_padding)
+                    .expect("child JSON indentation is deterministic")
+                    .to_string();
+                *first = format!(
+                    "{child_padding}{}: {value_head}",
+                    serde_json::to_string(*key).map_err(|error| error.to_string())?
+                );
+                if index + 1 != keys.len() {
+                    child
+                        .last_mut()
+                        .expect("a rendered JSON value always has a line")
+                        .push(',');
+                }
+                lines.extend(child);
+            }
+            lines.push(format!("{padding}}}"));
+            Ok(lines)
+        }
+        _ => unreachable!("non-container JSON values always have a compact rendering"),
+    }
+}
+
+fn compact_json(
+    value: &Value,
+    preferred_keys: Option<&[String]>,
+) -> StdResult<Option<String>, String> {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+            serde_json::to_string(value)
+                .map(Some)
+                .map_err(|error| error.to_string())
+        }
+        Value::Array(values) if values.iter().all(is_json_primitive) => {
+            let values = values
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<StdResult<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            Ok(Some(format!("[{}]", values.join(", "))))
+        }
+        Value::Object(object) if object.is_empty() => Ok(Some("{}".to_string())),
+        Value::Object(object) if object.values().all(is_json_primitive) => {
+            let entries = ordered_keys(object, preferred_keys)
+                .into_iter()
+                .map(|key| {
+                    Ok(format!(
+                        "{}: {}",
+                        serde_json::to_string(key).map_err(|error| error.to_string())?,
+                        serde_json::to_string(
+                            object
+                                .get(key)
+                                .expect("ordered JSON key must remain in its object")
+                        )
+                        .map_err(|error| error.to_string())?
+                    ))
+                })
+                .collect::<StdResult<Vec<_>, String>>()?;
+            let rendered = format!("{{ {} }}", entries.join(", "));
+            Ok((rendered.len() <= INLINE_JSON_OBJECT_WIDTH).then_some(rendered))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn is_json_primitive(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+    )
+}
+
+fn required_property_order(object: &Map<String, Value>) -> Vec<String> {
+    object
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn ordered_keys<'a>(
+    object: &'a Map<String, Value>,
+    preferred_keys: Option<&[String]>,
+) -> Vec<&'a String> {
+    let mut keys = object.keys().collect::<Vec<_>>();
+    keys.sort_by_key(|key| {
+        let preferred_position = preferred_keys
+            .and_then(|preferred| preferred.iter().position(|candidate| candidate == *key));
+        (
+            preferred_position.is_none(),
+            preferred_position.unwrap_or(usize::MAX),
+            json_schema_key_rank(key),
+            key.as_str(),
+        )
+    });
+    keys
+}
+
+fn json_schema_key_rank(key: &str) -> u8 {
+    match key {
+        "$schema" => 0,
+        "$id" => 1,
+        "$ref" => 2,
+        "type" => 3,
+        "required" => 4,
+        "properties" => 5,
+        "items" => 6,
+        "enum" | "const" => 7,
+        "format" => 8,
+        "minLength" | "minimum" | "minItems" => 9,
+        "maxLength" | "maximum" | "maxItems" => 10,
+        "additionalProperties" => 100,
+        _ => 50,
+    }
 }

@@ -144,7 +144,49 @@ function assertFrontendInvariants(bundle: EvidenceBundle): void {
       fail(`${variant.id} has an unapproved host projection label`);
     }
 
+    const comparison = variant.mcpSurfaceComparison;
+    const catalogOperation = record(
+      variant.catalogOperation,
+      `${variant.id}.catalogOperation`,
+    );
+    if (comparison.operationId !== catalogOperation.id) {
+      fail(`${variant.id} MCP comparison names the wrong catalog operation`);
+    }
+    for (const [profile, surface] of [
+      ["compact", comparison.compact],
+      ["native", comparison.native],
+    ] as const) {
+      if (
+        surface.toolInventory.length === 0 ||
+        !surface.toolInventory.includes(surface.toolName)
+      ) {
+        fail(`${variant.id} ${profile} MCP comparison names an unpublished tool`);
+      }
+      if (
+        new Set(surface.toolInventory).size !== surface.toolInventory.length ||
+        new Set(surface.inputFields).size !== surface.inputFields.length ||
+        new Set(surface.requiredInputs).size !== surface.requiredInputs.length
+      ) {
+        fail(`${variant.id} ${profile} MCP comparison contains duplicate fields`);
+      }
+      if (
+        surface.requiredInputs.some(
+          (required) => !surface.inputFields.includes(required),
+        )
+      ) {
+        fail(`${variant.id} ${profile} MCP comparison requires an unknown input`);
+      }
+      if (surface.hasArgumentMap !== surface.inputFields.includes("args")) {
+        fail(`${variant.id} ${profile} MCP comparison misstates argument placement`);
+      }
+    }
+
     const facts = new Set(variant.declaration.facts.map((fact) => fact.id));
+    if (facts.size !== variant.declaration.facts.length) {
+      fail(`${variant.id} has duplicate declaration fact ids`);
+    }
+    const declarationLines = variant.declaration.text.split("\n");
+    const occupiedCodeLines = new Map<number, string>();
     for (const control of bundle.controls) {
       if (!facts.has(control.factId)) {
         fail(`${variant.id} is missing control fact ${control.factId}`);
@@ -185,6 +227,48 @@ function assertFrontendInvariants(bundle: EvidenceBundle): void {
     for (const fact of variant.declaration.facts) {
       if (fact.displayValue.length === 0) {
         fail(`${variant.id} declaration fact ${fact.id} has no display value`);
+      }
+      const expectsRanges = fact.codePresence === "rendered";
+      if (expectsRanges !== (fact.codeRanges.length > 0)) {
+        fail(
+          `${variant.id} declaration fact ${fact.id} code presence disagrees with its ranges`,
+        );
+      }
+
+      let previousEnd = 0;
+      for (const [index, range] of fact.codeRanges.entries()) {
+        if (
+          !Number.isSafeInteger(range.startLine) ||
+          !Number.isSafeInteger(range.endLine) ||
+          range.startLine < 1 ||
+          range.startLine > range.endLine ||
+          range.endLine > declarationLines.length
+        ) {
+          fail(`${variant.id} declaration fact ${fact.id} has invalid code range ${index}`);
+        }
+        if (range.startLine <= previousEnd) {
+          fail(`${variant.id} declaration fact ${fact.id} has overlapping code ranges`);
+        }
+        previousEnd = range.endLine;
+        const snippet = declarationLines
+          .slice(range.startLine - 1, range.endLine)
+          .join("\n");
+        if (snippet.trim() === "") {
+          fail(`${variant.id} declaration fact ${fact.id} points only at blank lines`);
+        }
+        for (
+          let lineNumber = range.startLine;
+          lineNumber <= range.endLine;
+          lineNumber += 1
+        ) {
+          const owner = occupiedCodeLines.get(lineNumber);
+          if (owner) {
+            fail(
+              `${variant.id} declaration line ${lineNumber} belongs to ${owner} and ${fact.id}`,
+            );
+          }
+          occupiedCodeLines.set(lineNumber, fact.id);
+        }
       }
     }
     for (const anchor of variant.semanticAnchors) {

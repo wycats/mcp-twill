@@ -7,8 +7,8 @@
   --teal: #1f6d68;
   --error: #a12b2b;
   --success: #315d41;
-  --line: color-mix(in srgb, var(--ink) 18%, transparent);
-  --line-strong: color-mix(in srgb, var(--ink) 38%, transparent);
+  --line: color-mix(in srgb, var(--ink) 12%, transparent);
+  --line-strong: color-mix(in srgb, var(--ink) 28%, transparent);
   --font-editorial: Iowan Old Style, Palatino Linotype, Book Antiqua, Palatino,
     Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
@@ -30,10 +30,7 @@ html {
 body {
   min-width: 320px;
   margin: 0;
-  background:
-    linear-gradient(to right, transparent 0, transparent calc(100% - 1px), var(--line) 100%)
-      0 0 / 25% 100%,
-    var(--paper);
+  background: var(--paper);
   color: var(--ink);
 }
 

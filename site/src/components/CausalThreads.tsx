@@ -55,18 +55,41 @@ export function CausalThreads({
           const target = targets.get(targetId);
           if (!target || target.offsetParent === null) continue;
           const targetBounds = target.getBoundingClientRect();
-          const startX = sourceBounds.right - bounds.left;
-          const startY =
-            sourceBounds.top + sourceBounds.height / 2 - bounds.top;
-          const endX = targetBounds.left - bounds.left;
-          const endY =
-            targetBounds.top + targetBounds.height / 2 - bounds.top;
-          const bend = Math.max(28, Math.abs(endX - startX) * 0.42);
+          const targetIsRight = targetBounds.left >= sourceBounds.right;
+          const targetIsBelow =
+            !targetIsRight && targetBounds.top >= sourceBounds.bottom;
+          const startX = targetIsBelow
+            ? sourceBounds.left + sourceBounds.width / 2 - bounds.left
+            : sourceBounds.right - bounds.left;
+          const startY = targetIsBelow
+            ? sourceBounds.bottom - bounds.top
+            : sourceBounds.top + sourceBounds.height / 2 - bounds.top;
+          const endX = targetIsBelow
+            ? targetBounds.left + targetBounds.width / 2 - bounds.left
+            : targetBounds.left - bounds.left;
+          const endY = targetIsBelow
+            ? targetBounds.top - bounds.top
+            : targetBounds.top + targetBounds.height / 2 - bounds.top;
+          const d = targetIsBelow
+            ? (() => {
+                const bend = Math.max(
+                  28,
+                  Math.abs(endY - startY) * 0.42,
+                );
+                return `M ${startX} ${startY} C ${startX} ${startY + bend}, ${endX} ${endY - bend}, ${endX} ${endY}`;
+              })()
+            : (() => {
+                const bend = Math.max(
+                  28,
+                  Math.abs(endX - startX) * 0.42,
+                );
+                return `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`;
+              })();
           paths.push({
             id: `${anchor.id}:${targetId}`,
             factId: anchor.sourceFact,
             targetId,
-            d: `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`,
+            d,
           });
         }
       }

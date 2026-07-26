@@ -29,6 +29,13 @@ export interface GeneratedFact {
   value: JsonValue;
   displayValue: string;
   targetIds: string[];
+  codePresence: "rendered" | "omitted";
+  codeRanges: DeclarationCodeRange[];
+}
+
+export interface DeclarationCodeRange {
+  startLine: number;
+  endLine: number;
 }
 
 export interface DeclarationEvidence {
@@ -117,6 +124,20 @@ export interface Fingerprints {
   invocation: string;
 }
 
+export interface McpSurfaceFacts {
+  toolName: string;
+  toolInventory: string[];
+  requiredInputs: string[];
+  inputFields: string[];
+  hasArgumentMap: boolean;
+}
+
+export interface McpSurfaceComparison {
+  operationId: string;
+  compact: McpSurfaceFacts;
+  native: McpSurfaceFacts;
+}
+
 export interface EvidenceVariant {
   id: string;
   selection: VariantSelection;
@@ -135,6 +156,7 @@ export interface EvidenceVariant {
     tool: JsonValue;
     surfaceIdentity: JsonValue;
   };
+  mcpSurfaceComparison: McpSurfaceComparison;
   confirmation: JsonValue;
   hostPreview: HostPreview;
   plan: JsonValue;
