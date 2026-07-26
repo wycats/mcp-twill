@@ -7,6 +7,7 @@ import type {
 } from "./evidence/types";
 
 export type AuthorityMode = "derived" | "handwritten";
+export type GuideStepId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface WorkbenchState {
   selection: VariantSelection;
@@ -17,6 +18,7 @@ export interface WorkbenchState {
   hoverFactId: string | null;
   focusFactId: string | null;
   compareMcp: boolean;
+  guideStep: GuideStepId | null;
   activeProjection: ProjectionName;
   traceIndex: number;
   announcement: string;
@@ -37,6 +39,7 @@ export type WorkbenchAction =
       type: "replaceSelection";
       selection: VariantSelection;
       factId: string | null;
+      guideStep: GuideStepId;
     }
   | { type: "profile"; profile: ServingProfile }
   | {
@@ -65,6 +68,7 @@ export function initialState(
     hoverFactId: null,
     focusFactId: null,
     compareMcp: false,
+    guideStep: null,
     activeProjection: "help",
     traceIndex: 0,
     announcement: "Catalog-derived projections are in agreement.",
@@ -85,6 +89,7 @@ export function workbenchReducer(
           [action.control]: action.value,
         } as VariantSelection,
         activeFactId: action.factId,
+        guideStep: null,
         announcement: `Selected generated ${action.control} variant.`,
       };
     case "replaceSelection":
@@ -93,6 +98,8 @@ export function workbenchReducer(
         ...state,
         selection: action.selection,
         activeFactId: action.factId,
+        compareMcp: false,
+        guideStep: action.guideStep,
         announcement: "Guided state loaded from generated evidence.",
       };
     case "profile":
@@ -100,6 +107,7 @@ export function workbenchReducer(
         ...state,
         profile: action.profile,
         compareMcp: false,
+        guideStep: null,
         activeProjection: "mcp",
         announcement: `${action.profile === "compact" ? "Compact" : "Native"} MCP projection selected.`,
       };
@@ -109,6 +117,7 @@ export function workbenchReducer(
         mode: "handwritten",
         overrides: Object.freeze({ ...action.overrides }),
         compareMcp: false,
+        guideStep: 4,
         activeProjection: "help",
         activeFactId: action.factId,
         announcement: "Handwritten drift introduced. Agreement check failed.",
@@ -131,6 +140,8 @@ export function workbenchReducer(
         activeFactId: null,
         hoverFactId: null,
         focusFactId: null,
+        compareMcp: false,
+        guideStep: 5,
         announcement:
           "Restored from catalog. Workbench agreement check passes.",
       };
@@ -142,6 +153,7 @@ export function workbenchReducer(
       return {
         ...state,
         compareMcp: action.active,
+        guideStep: action.active ? 7 : null,
         activeProjection: "mcp",
         announcement: action.active
           ? "Comparing Compact shared lanes with the Native direct tool."

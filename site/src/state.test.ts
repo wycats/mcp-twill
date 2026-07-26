@@ -27,6 +27,24 @@ describe("workbench reducer", () => {
     expect(
       findVariant(bundle.variants, next.selection).selection.titleRule,
     ).toBe("nonEmpty");
+    expect(next.guideStep).toBeNull();
+  });
+
+  it("distinguishes an untouched specimen from the first guided proof", () => {
+    const initial = initialState(
+      bundle.defaults.selection,
+      bundle.defaults.profile,
+    );
+    const guided = workbenchReducer(initial, {
+      type: "replaceSelection",
+      selection: bundle.defaults.selection,
+      factId: null,
+      guideStep: 1,
+    });
+
+    expect(guided.selection).toEqual(initial.selection);
+    expect(guided.guideStep).toBe(1);
+    expect(guided.announcement).toMatch(/Guided state/);
   });
 
   it("keeps generated evidence immutable while handwritten leaves drift", () => {
@@ -38,6 +56,7 @@ describe("workbench reducer", () => {
     );
 
     expect(mismatches(variant, handwritten.overrides)).toHaveLength(3);
+    expect(handwritten.guideStep).toBe(4);
     expect(variant.comparisonTargets).toEqual(canonical);
     expect(Object.isFrozen(handwritten.overrides)).toBe(true);
   });
@@ -61,6 +80,7 @@ describe("workbench reducer", () => {
 
     const restored = workbenchReducer(handwritten, { type: "restore" });
     expect(restored.mode).toBe("derived");
+    expect(restored.guideStep).toBe(5);
     expect(restored.overrides).toEqual({});
     expect(restored.announcement).toMatch(/passes/);
   });
@@ -81,6 +101,7 @@ describe("workbench reducer", () => {
     const trace = workbenchReducer(schema, { type: "trace", index: 4 });
     expect(trace.profile).toBe("compact");
     expect(trace.compareMcp).toBe(false);
+    expect(trace.guideStep).toBeNull();
     expect(trace.activeProjection).toBe("schema");
     expect(trace.traceIndex).toBe(4);
   });
@@ -97,6 +118,23 @@ describe("workbench reducer", () => {
     expect(comparison.compareMcp).toBe(true);
     expect(comparison.profile).toBe(initial.profile);
     expect(comparison.activeProjection).toBe("mcp");
+    expect(comparison.guideStep).toBe(7);
+
+    const guided = workbenchReducer(comparison, {
+      type: "replaceSelection",
+      selection: {
+        ...bundle.defaults.selection,
+        titleRule: "nonEmpty",
+      },
+      factId: "fact.titleRule",
+      guideStep: 2,
+    });
+    expect(guided.compareMcp).toBe(false);
+    expect(guided.guideStep).toBe(2);
+
+    const restored = workbenchReducer(comparison, { type: "restore" });
+    expect(restored.compareMcp).toBe(false);
+    expect(restored.guideStep).toBe(5);
 
     const compact = workbenchReducer(comparison, {
       type: "profile",

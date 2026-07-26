@@ -205,6 +205,10 @@
   border-color: var(--teal);
 }
 
+.active label {
+  color: var(--ink);
+}
+
 .drifted {
   background: color-mix(in srgb, var(--paper) 86%, var(--error));
   border-color: var(--error);

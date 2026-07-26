@@ -79,6 +79,10 @@
   box-shadow: inset 3px 0 var(--teal);
 }
 
+.guideStepActive p:not(.eyebrow) {
+  color: var(--ink);
+}
+
 .guideStep h2 {
   margin: 0.5rem 0 0.4rem;
   font-size: 1.16rem;
@@ -94,10 +98,15 @@
 }
 
 .guideStep .guideStatus {
+  min-height: 1.95rem;
   margin-top: -0.15rem;
   color: var(--teal);
   font-family: var(--font-mono);
   font-size: 0.65rem;
+}
+
+.guideStep .guideStatus[data-visible="false"] {
+  visibility: hidden;
 }
 
 .authoritySwitch button,
@@ -156,6 +165,7 @@
 
 .workbenchHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 2rem;
@@ -168,8 +178,22 @@
   font-weight: 400;
 }
 
+.workbenchDefinition {
+  max-width: 34rem;
+  margin: 0.55rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.workbenchDefinition strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .displaySwitches {
   display: flex;
+  min-width: 0;
   align-items: start;
   justify-content: flex-end;
   gap: 1.25rem;
@@ -291,6 +315,18 @@
 .compareSurfaces[aria-pressed="true"] {
   border-bottom-color: var(--teal);
   color: var(--teal);
+}
+
+.displayHint {
+  max-width: 15rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.56rem;
+  line-height: 1.35;
+}
+
+.displayHint code {
+  font-size: inherit;
 }
 
 .agreement {
@@ -423,6 +459,10 @@
 .factList .factActive {
   border-color: var(--teal);
   background: color-mix(in srgb, var(--paper) 88%, var(--teal));
+}
+
+.factList .factActive code {
+  color: var(--ink);
 }
 
 .declarationProvenance,
@@ -663,6 +703,12 @@
   padding: clamp(4rem, 8vw, 8rem) clamp(1.1rem, 4vw, 4rem);
 }
 
+.fieldStudyEvidence {
+  display: grid;
+  gap: 2rem;
+  min-width: 0;
+}
+
 .fieldStudy h2 {
   max-width: 8ch;
   margin: 0.5rem 0 1rem;
@@ -677,6 +723,43 @@
   color: var(--muted);
   font-size: 1.08rem;
   line-height: 1.55;
+}
+
+.ownershipMatrix {
+  margin: 0.55rem 0 0;
+}
+
+.ownershipMatrix > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.42fr) minmax(0, 1.58fr);
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.ownershipMatrix dt {
+  color: var(--rust);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
+.ownershipMatrix dd {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.ownershipMatrix dd strong {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.ownershipMatrix dd span {
+  color: var(--muted);
+  font-size: 0.73rem;
+  line-height: 1.45;
 }
 
 .provenanceColumns {
@@ -725,7 +808,6 @@
 }
 
 .ownershipNote {
-  grid-column: 2;
   margin: 0;
   padding-top: 1rem;
   border-top: 1px solid var(--line);
@@ -768,10 +850,15 @@
 @media (max-width: 1100px) {
   .experience {
     display: block;
+    width: 100%;
+    min-width: 0;
   }
 
   .narrative {
     display: flex;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
     overscroll-behavior-x: contain;
     scroll-snap-type: x proximity;
@@ -809,10 +896,6 @@
 
   .fieldStudy {
     grid-template-columns: 1fr;
-  }
-
-  .ownershipNote {
-    grid-column: 1;
   }
 }
 
@@ -935,6 +1018,11 @@
   .privateContext,
   .provenanceColumns {
     grid-template-columns: 1fr;
+  }
+
+  .ownershipMatrix > div {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
   }
 
   .siteFooter {

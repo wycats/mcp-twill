@@ -2,7 +2,7 @@ import axe from "axe-core";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
-import { loadTrackedEvidence } from "./evidence/adapter";
+import { findVariant, loadTrackedEvidence } from "./evidence/adapter";
 
 const evidence = loadTrackedEvidence();
 
@@ -20,6 +20,69 @@ describe("A Command, Woven", () => {
         "Illustrative host rendering — layout is site-owned; values are Twill-generated.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Confirmation presentation"),
+    ).toBeInTheDocument();
+  });
+
+  it("stages generated causes and consequences for the guided journey", async () => {
+    const user = userEvent.setup();
+    render(<App evidence={evidence} />);
+    const proof = screen.getByRole("region", { name: "Guided proof" });
+    const first = screen.getByRole("button", {
+      name: "See the five promises",
+    });
+    const title = screen.getByRole("button", {
+      name: "Change the title rule",
+    });
+
+    expect(proof).toHaveAttribute("data-guide-step", "none");
+    await user.click(first);
+    expect(first).toHaveAttribute("aria-current", "step");
+    expect(first).toHaveAttribute("aria-controls", "guided-proof");
+    expect(proof).toHaveAttribute("data-guide-step", "1");
+    expect(
+      proof.querySelectorAll("[data-proof-projection]"),
+    ).toHaveLength(5);
+
+    await user.click(title);
+    expect(first).not.toHaveAttribute("aria-current");
+    expect(title).toHaveAttribute("aria-current", "step");
+    expect(proof).toHaveAttribute("data-guide-step", "2");
+    expect(
+      proof.querySelector('[data-proof-fact="fact.titleRule"]'),
+    ).not.toBeNull();
+
+    const selected = findVariant(evidence.bundle.variants, {
+      ...evidence.bundle.defaults.selection,
+      titleRule: "nonEmpty",
+    });
+    const anchor = selected.semanticAnchors.find(
+      (candidate) => candidate.sourceFact === "fact.titleRule",
+    )!;
+    const generatedTargets = anchor.targetIds.filter((targetId) =>
+      selected.comparisonTargets
+        .find((target) => target.id === targetId)!
+        .profiles.includes("native"),
+    );
+    const renderedTargets = Array.from(
+      proof.querySelectorAll<HTMLElement>("[data-proof-target]"),
+      (target) => target.dataset.proofTarget,
+    );
+    expect(renderedTargets).toEqual(generatedTargets);
+    expect(
+      within(proof).getAllByText("Minimum 1 character"),
+    ).not.toHaveLength(0);
+
+    await user.click(
+      screen.getByRole("button", { name: "Supply private context" }),
+    );
+    expect(proof).toHaveAttribute("data-guide-step", "6");
+    expect(
+      within(proof).getByText("Raw identity serialized"),
+    ).toBeInTheDocument();
+    expect(within(proof).getByText("no")).toBeInTheDocument();
+    expect(within(proof).getAllByText("yes")).toHaveLength(2);
   });
 
   it("introduces exact handwritten mismatches and restores atomically", async () => {
@@ -28,20 +91,65 @@ describe("A Command, Woven", () => {
     await user.click(screen.getByRole("button", { name: /Handwritten/ }));
 
     const check = screen.getByRole("status");
+    const proof = screen.getByRole("region", { name: "Guided proof" });
     expect(check).toHaveTextContent("3 mismatches found");
-    expect(within(check).getByText(/help/)).toBeInTheDocument();
-    expect(within(check).getByText(/schema/)).toBeInTheDocument();
-    expect(within(check).getByText(/host/)).toBeInTheDocument();
+    expect(within(proof).getByText("Help")).toBeInTheDocument();
+    expect(within(proof).getByText("Schema")).toBeInTheDocument();
+    expect(within(proof).getByText("Host")).toBeInTheDocument();
     for (const select of screen.getAllByRole("combobox")) {
       expect(select).toBeDisabled();
     }
 
+    const variant = findVariant(
+      evidence.bundle.variants,
+      evidence.bundle.defaults.selection,
+    );
+    const canonical = new Map(
+      variant.comparisonTargets
+        .filter((target) => target.editable)
+        .map((target) => [target.label, target.displayValue] as const),
+    );
+    fireEvent.change(screen.getByLabelText("Help title constraint"), {
+      target: { value: canonical.get("Help title constraint") },
+    });
+    expect(check).toHaveTextContent("2 mismatches found");
+    expect(proof).toHaveTextContent(
+      "2 handwritten promises contradict the catalog.",
+    );
+
+    for (const label of [
+      "Schema title constraint",
+      "Host title constraint",
+    ]) {
+      fireEvent.change(screen.getByLabelText(label), {
+        target: { value: canonical.get(label) },
+      });
+    }
+    expect(check).toHaveTextContent(
+      "all generated comparison targets agree",
+    );
+    expect(proof).toHaveTextContent(
+      "Handwritten values match—but authority remains split.",
+    );
+    expect(proof).toHaveTextContent(
+      "The copies match again, but each still owns an editable truth.",
+    );
+
     await user.click(
-      within(check).getByRole("button", { name: "Restore from catalog" }),
+      within(proof).getByRole("button", { name: "Restore from catalog" }),
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "all evidence-declared comparison targets agree",
+      "all generated comparison targets agree",
     );
+    expect(proof).toHaveAttribute("data-guide-step", "5");
+    expect(
+      within(proof).getByText(
+        "Authority restored—and checked before this site ships.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(proof).getByText(/regenerates and byte-compares/),
+    ).toBeInTheDocument();
     for (const select of screen.getAllByRole("combobox")) {
       expect(select).toBeEnabled();
     }
@@ -126,6 +234,15 @@ describe("A Command, Woven", () => {
     expect(comparison.getByText("run-write")).toBeInTheDocument();
     expect(comparison.getAllByText("issues_create")).not.toHaveLength(0);
     expect(comparison.getByText("issues.create")).toBeInTheDocument();
+    const proof = within(
+      screen.getByRole("region", { name: "Guided proof" }),
+    );
+    expect(
+      proof.getByText("One catalog operation. Two public call shapes."),
+    ).toBeInTheDocument();
+    expect(proof.getByText("run-write")).toBeInTheDocument();
+    expect(proof.getByText("issues_create")).toBeInTheDocument();
+    expect(proof.getByText("issues.create")).toBeInTheDocument();
 
     await user.click(native);
     expect(initialCompare).toHaveAccessibleName("Compare both generated shapes");
@@ -139,6 +256,39 @@ describe("A Command, Woven", () => {
     expect(
       screen.queryByLabelText("Compact and Native MCP tool comparison"),
     ).not.toBeInTheDocument();
+  });
+
+  it("closes the MCP comparison when another guide chapter is selected", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<App evidence={evidence} />);
+    const proof = screen.getByRole("region", { name: "Guided proof" });
+    const panel = container.querySelector<HTMLElement>(
+      '[data-projection-panel="mcp"]',
+    )!;
+    const compare = screen.getByRole("button", {
+      name: "Compare the two tool shapes",
+    });
+
+    await user.click(compare);
+    expect(panel).toHaveAttribute("data-mcp-view", "comparison");
+
+    await user.click(
+      screen.getByRole("button", { name: "Change the title rule" }),
+    );
+    expect(proof).toHaveAttribute("data-guide-step", "2");
+    expect(proof).toHaveTextContent("One source fact. Every affected promise.");
+    expect(panel).toHaveAttribute("data-mcp-view", "native");
+
+    await user.click(compare);
+    expect(panel).toHaveAttribute("data-mcp-view", "comparison");
+    await user.click(
+      screen.getByRole("button", { name: "Restore from catalog" }),
+    );
+    expect(proof).toHaveAttribute("data-guide-step", "5");
+    expect(proof).toHaveTextContent(
+      "Authority restored—and checked before this site ships.",
+    );
+    expect(panel).toHaveAttribute("data-mcp-view", "native");
   });
 
   it("makes the selected request-microscope step explicit", async () => {

@@ -2101,7 +2101,7 @@ fn controls() -> Vec<Control> {
         control(
             "confirmation",
             "fact.confirmation",
-            "Confirmation",
+            "Confirmation presentation",
             &[
                 ("generic", "Generic"),
                 ("titleInterpolated", "Title-interpolated"),

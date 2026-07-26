@@ -1,9 +1,9 @@
 {
   "files": [
     {
-      "bytes": 1153388,
+      "bytes": 1153401,
       "path": "bundle.json",
-      "sha256": "d0557413b4a67165ececefa252e6d22e655183a609df04b074759f00120953c3"
+      "sha256": "551b0f1243bd73d6dbcdbe5526220fbc37b11a8bb946f410b878197fc5d2d5ff"
     },
     {
       "bytes": 16039,
@@ -91,7 +91,7 @@
     {
       "path": "xtask/src/site_evidence.rs",
       "provenance": "Repository source used by the Twill evidence generator.",
-      "sha256": "06330c0320a6aa06c374ee552ced9eb2f605f84d609e7b8090bd152d8b7bcadf"
+      "sha256": "b20aff6a281f92f6e27ecd6ccc395b9f7cc2f69b0e3d6675df215c5ce24fb3df"
     }
   ]
 }
