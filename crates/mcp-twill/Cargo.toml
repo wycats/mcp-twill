@@ -1,9 +1,18 @@
 [package]
 name = "mcp-twill"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "A Rust MCP framework for CLI-shaped command templates over typed values."
+documentation = "https://docs.rs/mcp-twill"
+readme = "README.md"
+keywords = ["mcp", "ai", "server", "framework", "protocol"]
+categories = ["development-tools", "asynchronous"]
+publish = ["crates-io"]
+exclude = ["tests/host_adapters.rs", "tests/support/vbl_host.rs"]
 
 [dependencies]
 async-trait = "0.1"
@@ -11,7 +20,7 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 http = "1"
 http-body = "1"
-mcp-workspace-resolver = { path = "../mcp-workspace-resolver", features = ["rmcp"] }
+mcp-workspace-resolver = { version = "0.1.0", path = "../mcp-workspace-resolver", features = ["rmcp"] }
 rand = "0.8"
 rmcp = { version = "1.7.0", features = ["client", "transport-io"] }
 schemars = { version = "1", features = ["derive"] }
@@ -25,6 +34,8 @@ tower-service = "0.3"
 [dev-dependencies]
 anyhow = "1"
 futures = "0.3"
+# Repository-only cross-crate acceptance. The path-only development dependency
+# is intentionally omitted from the published core archive.
 mcp-twill-host = { path = "../mcp-twill-host" }
 
 [lib]

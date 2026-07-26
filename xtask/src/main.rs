@@ -76,9 +76,15 @@ fn main() -> Result<()> {
             }
             xtask::site_evidence::export(check)
         }
+        Some("verify-release-archives") => {
+            if let Some(other) = args.next() {
+                bail!("unknown verify-release-archives argument `{other}`");
+            }
+            xtask::release::verify_archives()
+        }
         Some(other) => bail!("unknown xtask command `{other}`"),
         None => bail!(
-            "usage: cargo xtask <export-site-evidence|import-vbl-fixture|import-mcp-task-fixture|validate-mcp-task-release> ..."
+            "usage: cargo xtask <export-site-evidence|import-vbl-fixture|import-mcp-task-fixture|validate-mcp-task-release|verify-release-archives> ..."
         ),
     }
 }

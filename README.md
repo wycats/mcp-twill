@@ -2,6 +2,28 @@
 
 This repository implements a Rust framework for MCP servers that expose a compact, CLI-shaped command surface without using shell syntax.
 
+Explore how one declaration becomes schemas, help, native MCP tools, previews,
+results, and generated host adapters at
+[A Command, Woven](https://command-woven.vercel.app).
+
+## Crates
+
+| Crate | Purpose |
+| --- | --- |
+| [`mcp-twill`](https://docs.rs/mcp-twill) | Authoritative catalog, builders, planning, execution, native MCP surfaces, resources, results, presentation, and tasks |
+| [`mcp-workspace-resolver`](https://docs.rs/mcp-workspace-resolver) | Deterministic workspace-root resolution from MCP, Codex, trusted-host, and declared observations |
+| [`mcp-twill-host`](https://docs.rs/mcp-twill-host) | Canonical host profiles, bounded transports, and generated VS Code adapters |
+
+Add the framework to a server:
+
+```sh
+cargo add mcp-twill@0.1.0
+```
+
+Applications that embed the reusable resolver or generate host integrations can
+also add `mcp-workspace-resolver` or `mcp-twill-host` at the same version.
+Version 0.1.0 requires Rust 1.88 or newer.
+
 Project values:
 
 - The command string is a template over typed values, not a shell program.
@@ -33,6 +55,11 @@ Agents helping write Twill servers should keep the command declaration and handl
 
 - [Research and protocol notes](docs/research.md)
 - [Draft RFCs](docs/rfcs/README.md)
+- [Release history](CHANGELOG.md)
+- [Maintainer release process](RELEASING.md)
+
+The 0.1 series is the first public API line. Twill follows semantic versioning,
+but pre-1.0 minor releases may intentionally revise public contracts.
 
 ## Example
 
@@ -56,3 +83,7 @@ Run the example stdio MCP server:
 ```powershell
 cargo run --example issues_server
 ```
+
+## License
+
+Apache-2.0.

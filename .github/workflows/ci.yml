@@ -40,6 +40,29 @@ jobs:
       - run: npm test
         working-directory: crates/mcp-twill-host/tests/typescript
 
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/mcp-twill-host/tests/typescript/package-lock.json
+      - run: cargo publish --workspace --dry-run
+      - run: cargo xtask verify-release-archives
+      - run: npm ci
+        working-directory: target/package/release-verification/mcp-twill-host-0.1.0/tests/typescript
+      - run: npm test
+        working-directory: target/package/release-verification/mcp-twill-host-0.1.0/tests/typescript
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.88.0 --profile minimal
+      - run: cargo +1.88.0 check --workspace --all-targets
+
   clippy-and-evidence:
     runs-on: ubuntu-latest
     steps:
@@ -47,6 +70,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
       - run: cargo xtask export-site-evidence --check
 
   site:
