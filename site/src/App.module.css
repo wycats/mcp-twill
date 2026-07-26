@@ -67,7 +67,7 @@
 }
 
 .guideStep:has(button:hover) {
-  background: color-mix(in srgb, var(--paper) 94%, var(--teal));
+  background: color-mix(in srgb, var(--paper) 97%, var(--teal));
 }
 
 .guideStep:has(button:focus-visible) {
