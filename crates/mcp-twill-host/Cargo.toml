@@ -3,7 +3,7 @@ name = "mcp-twill-host"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Runtime host for mcp-twill servers: process-level identity and effect-aware retry policy."
+description = "Compiled host profiles, generated adapters, and runtime policy for mcp-twill servers."
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = [
@@ -11,7 +11,20 @@ chrono = { version = "0.4", default-features = false, features = [
   "std",
 ] }
 mcp-twill = { path = "../mcp-twill" }
+schemars = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value", "unbounded_depth"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 anyhow = "1"
-serde_json = "1"
+futures = "0.3"

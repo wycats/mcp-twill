@@ -782,6 +782,38 @@ impl CommandRegistry {
             })
     }
 
+    pub(crate) fn prepare_native_host_confirmation(
+        &self,
+        plan: &InvocationPlan,
+        defaults: &crate::SurfacePresentationDefaults,
+        declared_only: bool,
+    ) -> Result<Option<crate::PreparedConfirmation>> {
+        let command = self.commands.get(&plan.command_path).ok_or_else(|| {
+            FrameworkError::Build(format!(
+                "planned command `{}` is missing from the registry",
+                plan.command_path.join(" ")
+            ))
+        })?;
+        let arguments = plan
+            .bound_args
+            .iter()
+            .map(|(name, argument)| (name.clone(), argument.value.clone()))
+            .collect();
+        Ok(command
+            .spec
+            .prepare_validated_presentation(
+                defaults,
+                &plan.operation_id,
+                &arguments,
+                if declared_only {
+                    crate::presentation::ConfirmationPresentationRequest::DeclaredOnly
+                } else {
+                    crate::presentation::ConfirmationPresentationRequest::DeclaredOrSurfaceDefault
+                },
+            )
+            .confirmation)
+    }
+
     pub(crate) fn check_plan_policy(&self, plan: &InvocationPlan) -> Result<()> {
         self.policy.check(&plan.permissions)
     }

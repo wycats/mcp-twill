@@ -52,6 +52,7 @@ pub use response::*;
 pub use results::*;
 pub use rmcp_adapter::{
     CliMcpServer, CliMcpServerConfig, ConversationIdentityCompatibility,
+    HostNativeConfirmationMode, HostNativeExecution, HostNativeExecutionOutcome,
     WorkspaceMetadataCompatibility,
 };
 pub use runtime::RuntimeIdentity;

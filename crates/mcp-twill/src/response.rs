@@ -66,6 +66,14 @@ pub enum ErrorCode {
     ApplicationError,
     ResultContractViolation,
     ArgumentContractViolation,
+    /// A generated host artifact, profile, or private envelope did not
+    /// match the compiled host contract.
+    HostContractMismatch,
+    /// A generated host call or result crossed its profile-declared byte
+    /// bound.
+    HostPayloadTooLarge,
+    /// The selected host context cannot support the requested operation.
+    UnsupportedHost,
 }
 
 impl ErrorCode {

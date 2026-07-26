@@ -418,6 +418,7 @@ dependencies = [
  "futures",
  "http",
  "http-body",
+ "mcp-twill-host",
  "mcp-workspace-resolver",
  "rand",
  "rmcp",
@@ -436,8 +437,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures",
  "mcp-twill",
+ "schemars",
+ "serde",
  "serde_json",
+ "sha2",
+ "tokio",
+ "windows-sys",
 ]
 
 [[package]]

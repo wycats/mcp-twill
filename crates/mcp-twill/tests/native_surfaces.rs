@@ -36,6 +36,8 @@ use serde_json::{Value, json};
 
 #[path = "support/vbl.rs"]
 mod vbl;
+#[path = "support/vbl_host.rs"]
+mod vbl_host;
 #[path = "support/vbl_native.rs"]
 mod vbl_native;
 
@@ -2021,6 +2023,11 @@ fn vbl_v049_compiles_the_63_operation_27_tool_mapping() -> anyhow::Result<()> {
             .iter()
             .all(|tool| tool["inputSchema"]["properties"].is_object())
     );
+    let host_registry = vbl_native::host_registry(&baseline, &observed, vbl::PREAMBLE);
+    let host_surface = vbl_native::host_surface(&host_registry, &observed)?;
+    let host_profile = vbl_host::vscode_host_profile(host_surface.snapshot())?;
+    assert_eq!(host_profile.snapshot().profile_id(), "vbl-vscode-host");
+    assert_eq!(host_surface.snapshot().tools().len(), 27);
     assert!(
         tools
             .as_array()

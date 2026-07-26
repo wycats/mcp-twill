@@ -25,6 +25,7 @@ tower-service = "0.3"
 [dev-dependencies]
 anyhow = "1"
 futures = "0.3"
+mcp-twill-host = { path = "../mcp-twill-host" }
 
 [lib]
 name = "mcp_twill"

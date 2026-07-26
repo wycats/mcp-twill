@@ -62,6 +62,73 @@ pub enum WorkspaceMetadataCompatibility {
     TrustedCodexSandboxState,
 }
 
+/// Internal host-adapter confirmation composition selected by a compiled
+/// RFC 0019 profile.
+///
+/// This is exported only so the sibling `mcp-twill-host` crate can bind a
+/// finalized server without reconstructing native planning or authorization.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostNativeConfirmationMode {
+    ServerOnly,
+    TrustedEffectDefault,
+    TrustedDeclaredPresentation,
+}
+
+/// Result of the sealed host-to-native dispatch bridge.
+///
+/// The sibling host crate consumes this value immediately and projects it
+/// into its closed versioned result envelope.
+#[doc(hidden)]
+pub struct HostNativeExecution {
+    operation_id: Option<String>,
+    native_tool: Option<String>,
+    outcome: HostNativeExecutionOutcome,
+}
+
+#[doc(hidden)]
+pub enum HostNativeExecutionOutcome {
+    Command(Box<crate::Result<crate::CommandExecutionOutcome>>),
+    FrameworkHelp(Value),
+}
+
+impl HostNativeExecutionOutcome {
+    fn command(outcome: crate::Result<crate::CommandExecutionOutcome>) -> Self {
+        Self::Command(Box::new(outcome))
+    }
+}
+
+impl HostNativeExecution {
+    pub fn operation_id(&self) -> Option<&str> {
+        self.operation_id.as_deref()
+    }
+
+    pub fn native_tool(&self) -> Option<&str> {
+        self.native_tool.as_deref()
+    }
+
+    pub fn into_outcome(self) -> HostNativeExecutionOutcome {
+        self.outcome
+    }
+}
+
+impl fmt::Debug for HostNativeExecution {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HostNativeExecution")
+            .field("operation_id", &self.operation_id)
+            .field("native_tool", &self.native_tool)
+            .field("outcome", &"<redacted>")
+            .finish()
+    }
+}
+
+impl fmt::Debug for HostNativeExecutionOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("HostNativeExecutionOutcome(<redacted>)")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliMcpServerConfig {
     pub execution_tool_name: String,
@@ -904,6 +971,280 @@ impl CliMcpServer {
     /// Every tool the server advertises through MCP list_tools.
     pub fn generated_tools(&self) -> Vec<Tool> {
         self.tools()
+    }
+
+    /// Sealed sibling-crate bridge for an RFC 0019 host adapter.
+    ///
+    /// It deliberately accepts a finalized server and typed private context,
+    /// then reuses the native surface's route, planning, hard policy,
+    /// authorizer, ambient binders, and ordinary dispatch path. It creates no
+    /// MCP request or retained task.
+    #[doc(hidden)]
+    pub async fn execute_host_native_call(
+        &self,
+        tool_name: &str,
+        arguments: rmcp::model::JsonObject,
+        invocation_context: InvocationContext,
+        confirmation_mode: HostNativeConfirmationMode,
+    ) -> HostNativeExecution {
+        let surface = match &self.surface {
+            McpToolSurface::Native(surface) => surface,
+            McpToolSurface::EffectLanes(_) => {
+                return HostNativeExecution {
+                    operation_id: None,
+                    native_tool: None,
+                    outcome: HostNativeExecutionOutcome::command(Err(FrameworkError::Build(
+                        "host adapter requires a native tool surface".to_string(),
+                    ))),
+                };
+            }
+        };
+        if matches!(
+            &surface.declaration().framework_help,
+            crate::FrameworkHelpProjection::Tool { name } if name == tool_name
+        ) {
+            let request = match serde_json::from_value::<HelpRequest>(Value::Object(arguments)) {
+                Ok(request) => request,
+                Err(_) => {
+                    return HostNativeExecution {
+                        operation_id: None,
+                        native_tool: Some(tool_name.to_string()),
+                        outcome: HostNativeExecutionOutcome::command(Err(
+                            FrameworkError::InvalidArgumentType(
+                                "help".to_string(),
+                                "a valid help request",
+                            ),
+                        )),
+                    };
+                }
+            };
+            return HostNativeExecution {
+                operation_id: None,
+                native_tool: Some(tool_name.to_string()),
+                outcome: HostNativeExecutionOutcome::FrameworkHelp(
+                    serde_json::to_value(surface.help(request)).unwrap_or_else(|_| {
+                        json!({
+                            "title": "Help error",
+                            "text": "Help unavailable",
+                            "structured": {},
+                        })
+                    }),
+                ),
+            };
+        }
+        let selected = match surface.resolve_call(tool_name, arguments) {
+            Ok(selected) => selected,
+            Err(error) => {
+                return HostNativeExecution {
+                    operation_id: None,
+                    native_tool: None,
+                    outcome: HostNativeExecutionOutcome::command(Err(error)),
+                };
+            }
+        };
+        let (operation_id, selected_arguments) = selected;
+        let native_tool = surface
+            .snapshot()
+            .operation(&operation_id)
+            .map(|operation| operation.call().tool().to_string());
+        let identity = match surface.identity() {
+            Ok(identity) => identity,
+            Err(error) => {
+                return HostNativeExecution {
+                    operation_id: Some(operation_id),
+                    native_tool,
+                    outcome: HostNativeExecutionOutcome::command(Err(error)),
+                };
+            }
+        };
+        let mut observations = self.registry.declared_observations();
+        if let Some(host_roots) = invocation_context.host_workspace_roots() {
+            observations = observations.with_host_roots(host_roots.clone());
+        }
+        let resolved = self.registry.resolve_workspaces(&observations);
+        let prepared = match self.registry.build_native_operation_plan(
+            &operation_id,
+            selected_arguments.clone(),
+            &resolved,
+            &invocation_context,
+            identity,
+            surface,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                return HostNativeExecution {
+                    operation_id: Some(operation_id),
+                    native_tool,
+                    outcome: HostNativeExecutionOutcome::command(Err(error)),
+                };
+            }
+        };
+        let plan = prepared.plan().clone();
+        if let Some(availability) = self.registry.binding_availability(&prepared) {
+            return HostNativeExecution {
+                operation_id: Some(operation_id),
+                native_tool,
+                outcome: HostNativeExecutionOutcome::command(availability),
+            };
+        }
+        if let Err(error) = self.registry.check_plan_policy(&plan) {
+            return HostNativeExecution {
+                operation_id: Some(operation_id),
+                native_tool,
+                outcome: HostNativeExecutionOutcome::command(Err(error)),
+            };
+        }
+
+        match self.authorizer.decide(&plan) {
+            PermissionDecision::Allow => {}
+            PermissionDecision::Deny { reason } => {
+                return HostNativeExecution {
+                    operation_id: Some(operation_id),
+                    native_tool,
+                    outcome: HostNativeExecutionOutcome::command(Err(
+                        FrameworkError::PermissionDenied {
+                            effect: effect_label(&plan.effect),
+                            scope: reason,
+                        },
+                    )),
+                };
+            }
+            PermissionDecision::RequireConfirmation => {
+                let trusted = match confirmation_mode {
+                    HostNativeConfirmationMode::ServerOnly => false,
+                    HostNativeConfirmationMode::TrustedEffectDefault
+                    | HostNativeConfirmationMode::TrustedDeclaredPresentation => {
+                        let Some(defaults) = surface.presentation_defaults(&operation_id) else {
+                            return HostNativeExecution {
+                                operation_id: Some(operation_id),
+                                native_tool,
+                                outcome: HostNativeExecutionOutcome::command(Err(
+                                    FrameworkError::Build(
+                                        "native surface has no presentation defaults for host call"
+                                            .to_string(),
+                                    ),
+                                )),
+                            };
+                        };
+                        match self.registry.prepare_native_host_confirmation(
+                            &plan,
+                            defaults,
+                            matches!(
+                                confirmation_mode,
+                                HostNativeConfirmationMode::TrustedDeclaredPresentation
+                            ),
+                        ) {
+                            Ok(confirmation) => confirmation.is_some(),
+                            Err(error) => {
+                                return HostNativeExecution {
+                                    operation_id: Some(operation_id),
+                                    native_tool,
+                                    outcome: HostNativeExecutionOutcome::command(Err(error)),
+                                };
+                            }
+                        }
+                    }
+                };
+                if !trusted {
+                    if matches!(
+                        surface.confirmation_route(),
+                        NativeConfirmationRoute::Unavailable
+                    ) {
+                        return HostNativeExecution {
+                            operation_id: Some(operation_id),
+                            native_tool,
+                            outcome: HostNativeExecutionOutcome::command(Err(
+                                FrameworkError::ConfirmationUnavailable {
+                                    operation_id: plan.operation_id.clone(),
+                                },
+                            )),
+                        };
+                    }
+                    let Some(defaults) = surface.presentation_defaults(&operation_id) else {
+                        return HostNativeExecution {
+                            operation_id: Some(operation_id),
+                            native_tool,
+                            outcome: HostNativeExecutionOutcome::command(Err(
+                                FrameworkError::Build(
+                                    "native surface has no presentation defaults for host call"
+                                        .to_string(),
+                                ),
+                            )),
+                        };
+                    };
+                    let confirmation =
+                        match self.registry.prepare_native_confirmation(&plan, defaults) {
+                            Ok(confirmation) => confirmation,
+                            Err(error) => {
+                                return HostNativeExecution {
+                                    operation_id: Some(operation_id),
+                                    native_tool,
+                                    outcome: HostNativeExecutionOutcome::command(Err(error)),
+                                };
+                            }
+                        };
+                    let bridge_request = NativeConfirmationRequest::new(
+                        crate::response::permission_preview(&plan, true, Some(confirmation)),
+                        selected_arguments
+                            .iter()
+                            .map(|(name, value)| (name.clone(), value.clone()))
+                            .collect(),
+                        plan.invocation_fingerprint.clone(),
+                    );
+                    let bridge = self
+                        .native_confirmation_bridge
+                        .as_ref()
+                        .expect("native confirmation route was validated at server construction");
+                    match bridge.confirm(bridge_request).await {
+                        Ok(NativeConfirmationDecision::Allow) => {}
+                        Ok(NativeConfirmationDecision::Deny) => {
+                            return HostNativeExecution {
+                                operation_id: Some(operation_id),
+                                native_tool,
+                                outcome: HostNativeExecutionOutcome::command(Err(
+                                    FrameworkError::PermissionDenied {
+                                        effect: effect_label(&plan.effect),
+                                        scope: "native confirmation denied".to_string(),
+                                    },
+                                )),
+                            };
+                        }
+                        Ok(NativeConfirmationDecision::Canceled) => {
+                            return HostNativeExecution {
+                                operation_id: Some(operation_id),
+                                native_tool,
+                                outcome: HostNativeExecutionOutcome::command(Err(
+                                    FrameworkError::ConfirmationCanceled {
+                                        operation_id: plan.operation_id.clone(),
+                                    },
+                                )),
+                            };
+                        }
+                        Err(_) => {
+                            return HostNativeExecution {
+                                operation_id: Some(operation_id),
+                                native_tool,
+                                outcome: HostNativeExecutionOutcome::command(Err(
+                                    FrameworkError::ConfirmationFailed {
+                                        operation_id: plan.operation_id.clone(),
+                                    },
+                                )),
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        HostNativeExecution {
+            operation_id: Some(operation_id),
+            native_tool,
+            outcome: HostNativeExecutionOutcome::command(
+                self.registry
+                    .dispatch_prepared_operation(selected_arguments, prepared)
+                    .await,
+            ),
+        }
     }
 
     async fn notify_progress(
