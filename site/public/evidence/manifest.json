@@ -1,0 +1,97 @@
+{
+  "files": [
+    {
+      "bytes": 1153388,
+      "path": "bundle.json",
+      "sha256": "d0557413b4a67165ececefa252e6d22e655183a609df04b074759f00120953c3"
+    },
+    {
+      "bytes": 16039,
+      "path": "schema.json",
+      "sha256": "4e238b108e201c54dd1ac5444cebb86360a50eeed3828f7bd36fb66e1e5b43aa"
+    },
+    {
+      "bytes": 230,
+      "path": "vbl/catalog-measurement.json",
+      "sha256": "771d9e0225d64e801ba836d1273d8509a0a72e2bf6b5e711dcae2bf2169519bc"
+    },
+    {
+      "bytes": 2583,
+      "path": "vbl/v0.4.9-manifest.json",
+      "sha256": "8f891cfdfb1e5d20e968c339e83b04da203d272fce4d6f419346d68101fb44d0"
+    }
+  ],
+  "formatVersion": 1,
+  "generator": {
+    "command": "cargo xtask export-site-evidence",
+    "name": "cargo xtask export-site-evidence",
+    "version": 1
+  },
+  "sources": [
+    {
+      "path": "crates/mcp-twill/examples/issues_server.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "c6f450ee843937d6c87297155f94f87bdc1b4861a9289a8c31a4c441b12d0096"
+    },
+    {
+      "path": "crates/mcp-twill/examples/issues_server/site_specimen.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "ff92ce4b7f761307c261015c34c55e6bedc89f12eec8c90b0d98d5ddcb41eb29"
+    },
+    {
+      "path": "crates/mcp-twill/src/builder.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "2ccfc65c5d116d6a7cac6b119be2d5117ab82f83a8184934fdee59325c22a4e6"
+    },
+    {
+      "path": "crates/mcp-twill/src/catalog.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "714a54161d35af0db23262f2cf8270db24e3e3b98e5ae071ceb978ba622d13d0"
+    },
+    {
+      "path": "crates/mcp-twill/src/contract.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "55c073ec168f2afdee2c8402ba4106b0d7da341b5c77ffb7942a58ceb2ea30a1"
+    },
+    {
+      "path": "crates/mcp-twill/src/conversation_identity.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "1c73fea3ce8303bf18fbe6efb70784b854b2c2fe52fd3d2090d4aa15aff1bd0a"
+    },
+    {
+      "path": "crates/mcp-twill/src/native_surfaces.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "d332bf976cc0e688eb2266582321c4afba02fca28e33a2d6b64935841828ff8a"
+    },
+    {
+      "path": "crates/mcp-twill/src/presentation.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "2801d82f725d7b693e623725eb6add8b6d55a62bb6b6eea6ba2b5986e03c1ad4"
+    },
+    {
+      "path": "crates/mcp-twill/src/registry.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "dac43f29a498b64f02d868b48c43ca2aa2d7203d161f5acf3bf1c1c7f9dffd89"
+    },
+    {
+      "path": "crates/mcp-twill/src/rmcp_adapter.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "6de42f09571041daced35440369f14c1de5840cefc1b732d77f2ae39b3bc1c78"
+    },
+    {
+      "path": "crates/mcp-twill/tests/fixtures/vbl/v0.4.9/manifest.json",
+      "provenance": "Frozen VBL v0.4.9 fixture manifest; copied byte-for-byte.",
+      "sha256": "8f891cfdfb1e5d20e968c339e83b04da203d272fce4d6f419346d68101fb44d0"
+    },
+    {
+      "path": "docs/adoption/visible-browser-lab/baseline/catalog-measurement.json",
+      "provenance": "Frozen pre-port VBL catalog measurement; copied byte-for-byte.",
+      "sha256": "771d9e0225d64e801ba836d1273d8509a0a72e2bf6b5e711dcae2bf2169519bc"
+    },
+    {
+      "path": "xtask/src/site_evidence.rs",
+      "provenance": "Repository source used by the Twill evidence generator.",
+      "sha256": "06330c0320a6aa06c374ee552ced9eb2f605f84d609e7b8090bd152d8b7bcadf"
+    }
+  ]
+}

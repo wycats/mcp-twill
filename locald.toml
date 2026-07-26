@@ -1,0 +1,8 @@
+[project]
+name = "command-woven"
+domain = "command-woven.localhost"
+
+# Build explicitly with `pnpm --dir site build`; locald serves that validated artifact.
+[services.web]
+type = "site"
+path = "site/dist"

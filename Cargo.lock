@@ -1029,11 +1029,16 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "mcp-twill",
+ "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "sha2",
  "tar",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

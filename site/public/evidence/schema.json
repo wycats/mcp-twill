@@ -1,0 +1,804 @@
+{
+  "$defs": {
+    "CompactProjection": {
+      "properties": {
+        "selectedTool": true,
+        "surfaceIdentity": true,
+        "tools": true
+      },
+      "required": [
+        "tools",
+        "selectedTool",
+        "surfaceIdentity"
+      ],
+      "type": "object"
+    },
+    "ComparisonTarget": {
+      "properties": {
+        "displayValue": {
+          "type": "string"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "factId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "profiles": {
+          "items": {
+            "$ref": "#/$defs/ProfileId"
+          },
+          "type": "array"
+        },
+        "projection": {
+          "$ref": "#/$defs/ProjectionId"
+        },
+        "value": true
+      },
+      "required": [
+        "id",
+        "factId",
+        "projection",
+        "label",
+        "value",
+        "displayValue",
+        "editable",
+        "profiles"
+      ],
+      "type": "object"
+    },
+    "ConfirmationId": {
+      "enum": [
+        "generic",
+        "titleInterpolated"
+      ],
+      "type": "string"
+    },
+    "ConfirmationProjection": {
+      "properties": {
+        "arguments": true,
+        "branch": true,
+        "invocationFingerprint": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operationId",
+        "branch",
+        "title",
+        "message",
+        "arguments",
+        "invocationFingerprint"
+      ],
+      "type": "object"
+    },
+    "Control": {
+      "properties": {
+        "factId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ControlOption"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "factId",
+        "label",
+        "options"
+      ],
+      "type": "object"
+    },
+    "ControlOption": {
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ],
+      "type": "object"
+    },
+    "Declaration": {
+      "properties": {
+        "facts": {
+          "items": {
+            "$ref": "#/$defs/DeclarationFact"
+          },
+          "type": "array"
+        },
+        "sourcePath": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourcePath",
+        "text",
+        "facts"
+      ],
+      "type": "object"
+    },
+    "DeclarationCodePresence": {
+      "enum": [
+        "rendered",
+        "omitted"
+      ],
+      "type": "string"
+    },
+    "DeclarationCodeRange": {
+      "properties": {
+        "endLine": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "startLine": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "startLine",
+        "endLine"
+      ],
+      "type": "object"
+    },
+    "DeclarationFact": {
+      "properties": {
+        "codePresence": {
+          "$ref": "#/$defs/DeclarationCodePresence"
+        },
+        "codeRanges": {
+          "items": {
+            "$ref": "#/$defs/DeclarationCodeRange"
+          },
+          "type": "array"
+        },
+        "displayValue": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "targetIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "value": true
+      },
+      "required": [
+        "id",
+        "label",
+        "value",
+        "displayValue",
+        "targetIds",
+        "codePresence",
+        "codeRanges"
+      ],
+      "type": "object"
+    },
+    "Defaults": {
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "selection": {
+          "$ref": "#/$defs/Selection"
+        }
+      },
+      "required": [
+        "selection",
+        "profile"
+      ],
+      "type": "object"
+    },
+    "DestinationId": {
+      "enum": [
+        "local",
+        "remote"
+      ],
+      "type": "string"
+    },
+    "Fingerprints": {
+      "properties": {
+        "catalog": {
+          "type": "string"
+        },
+        "compactSurface": {
+          "type": "string"
+        },
+        "helpSchema": {
+          "type": "string"
+        },
+        "invocation": {
+          "type": "string"
+        },
+        "nativeSurface": {
+          "type": "string"
+        },
+        "runSchema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "catalog",
+        "runSchema",
+        "helpSchema",
+        "compactSurface",
+        "nativeSurface",
+        "invocation"
+      ],
+      "type": "object"
+    },
+    "Generator": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "command"
+      ],
+      "type": "object"
+    },
+    "HostArgumentField": {
+      "properties": {
+        "constraint": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "required",
+        "constraint"
+      ],
+      "type": "object"
+    },
+    "HostConfirmation": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "message"
+      ],
+      "type": "object"
+    },
+    "HostPreview": {
+      "properties": {
+        "argumentFields": {
+          "items": {
+            "$ref": "#/$defs/HostArgumentField"
+          },
+          "type": "array"
+        },
+        "confirmation": {
+          "$ref": "#/$defs/HostConfirmation"
+        },
+        "description": {
+          "type": "string"
+        },
+        "effectBadges": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        },
+        "privateContext": {
+          "$ref": "#/$defs/HostPrivateContext"
+        },
+        "taskSupport": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "title",
+        "description",
+        "argumentFields",
+        "effectBadges",
+        "confirmation",
+        "taskSupport",
+        "privateContext"
+      ],
+      "type": "object"
+    },
+    "HostPrivateContext": {
+      "properties": {
+        "declared": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "declared",
+        "label"
+      ],
+      "type": "object"
+    },
+    "McpSurfaceComparison": {
+      "properties": {
+        "compact": {
+          "$ref": "#/$defs/McpSurfaceFacts"
+        },
+        "native": {
+          "$ref": "#/$defs/McpSurfaceFacts"
+        },
+        "operationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operationId",
+        "compact",
+        "native"
+      ],
+      "type": "object"
+    },
+    "McpSurfaceFacts": {
+      "properties": {
+        "hasArgumentMap": {
+          "type": "boolean"
+        },
+        "inputFields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requiredInputs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "toolInventory": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "toolName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolName",
+        "toolInventory",
+        "requiredInputs",
+        "inputFields",
+        "hasArgumentMap"
+      ],
+      "type": "object"
+    },
+    "NativeProjection": {
+      "properties": {
+        "surface": true,
+        "surfaceIdentity": true,
+        "tool": true
+      },
+      "required": [
+        "surface",
+        "tool",
+        "surfaceIdentity"
+      ],
+      "type": "object"
+    },
+    "PrivacyCheck": {
+      "properties": {
+        "absent": {
+          "type": "boolean"
+        },
+        "surface": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface",
+        "absent"
+      ],
+      "type": "object"
+    },
+    "PrivacyEvidence": {
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/PrivacyCheck"
+          },
+          "type": "array"
+        },
+        "declared": {
+          "type": "boolean"
+        },
+        "handlerObserved": {
+          "type": "boolean"
+        },
+        "rawIdentitySerialized": {
+          "type": "boolean"
+        },
+        "redactedSummary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "declared",
+        "handlerObserved",
+        "rawIdentitySerialized",
+        "redactedSummary",
+        "checks"
+      ],
+      "type": "object"
+    },
+    "PrivateContextId": {
+      "enum": [
+        "none",
+        "conversationIdentity"
+      ],
+      "type": "string"
+    },
+    "ProfileId": {
+      "enum": [
+        "compact",
+        "native"
+      ],
+      "type": "string"
+    },
+    "ProjectionId": {
+      "enum": [
+        "help",
+        "schema",
+        "mcp",
+        "confirmation",
+        "host"
+      ],
+      "type": "string"
+    },
+    "RustConfiguration": {
+      "properties": {
+        "confirmationKind": {
+          "$ref": "#/$defs/ConfirmationId"
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "taskSupport": {
+          "type": "string"
+        },
+        "titleMinLength": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "usesConversationIdentity": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "permissions",
+        "confirmationKind",
+        "usesConversationIdentity",
+        "taskSupport"
+      ],
+      "type": "object"
+    },
+    "ScenarioVariant": {
+      "properties": {
+        "argumentSchema": true,
+        "catalogOperation": true,
+        "compact": {
+          "$ref": "#/$defs/CompactProjection"
+        },
+        "comparisonTargets": {
+          "items": {
+            "$ref": "#/$defs/ComparisonTarget"
+          },
+          "type": "array"
+        },
+        "confirmation": {
+          "$ref": "#/$defs/ConfirmationProjection"
+        },
+        "declaration": {
+          "$ref": "#/$defs/Declaration"
+        },
+        "fingerprints": {
+          "$ref": "#/$defs/Fingerprints"
+        },
+        "help": true,
+        "hostPreview": {
+          "$ref": "#/$defs/HostPreview"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mcpSurfaceComparison": {
+          "$ref": "#/$defs/McpSurfaceComparison"
+        },
+        "native": {
+          "$ref": "#/$defs/NativeProjection"
+        },
+        "plan": true,
+        "privacy": {
+          "$ref": "#/$defs/PrivacyEvidence"
+        },
+        "result": true,
+        "rustConfiguration": {
+          "$ref": "#/$defs/RustConfiguration"
+        },
+        "selection": {
+          "$ref": "#/$defs/Selection"
+        },
+        "semanticAnchors": {
+          "items": {
+            "$ref": "#/$defs/SemanticAnchor"
+          },
+          "type": "array"
+        },
+        "trace": {
+          "items": {
+            "$ref": "#/$defs/TraceStep"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "selection",
+        "declaration",
+        "rustConfiguration",
+        "catalogOperation",
+        "help",
+        "argumentSchema",
+        "compact",
+        "native",
+        "mcpSurfaceComparison",
+        "confirmation",
+        "hostPreview",
+        "plan",
+        "trace",
+        "result",
+        "fingerprints",
+        "semanticAnchors",
+        "comparisonTargets",
+        "privacy"
+      ],
+      "type": "object"
+    },
+    "Selection": {
+      "properties": {
+        "confirmation": {
+          "$ref": "#/$defs/ConfirmationId"
+        },
+        "destination": {
+          "$ref": "#/$defs/DestinationId"
+        },
+        "privateContext": {
+          "$ref": "#/$defs/PrivateContextId"
+        },
+        "titleRule": {
+          "$ref": "#/$defs/TitleRuleId"
+        }
+      },
+      "required": [
+        "titleRule",
+        "destination",
+        "confirmation",
+        "privateContext"
+      ],
+      "type": "object"
+    },
+    "SemanticAnchor": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "sourceFact": {
+          "type": "string"
+        },
+        "targetIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "sourceFact",
+        "targetIds"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "properties": {
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "sourceHashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "repository",
+        "paths",
+        "sourceHashes"
+      ],
+      "type": "object"
+    },
+    "TitleRuleId": {
+      "enum": [
+        "unconstrained",
+        "nonEmpty"
+      ],
+      "type": "string"
+    },
+    "TraceStage": {
+      "enum": [
+        "select",
+        "bind",
+        "validate",
+        "authorize",
+        "realize",
+        "dispatch",
+        "resultTask"
+      ],
+      "type": "string"
+    },
+    "TraceStep": {
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "payload": true,
+        "stage": {
+          "$ref": "#/$defs/TraceStage"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "label",
+        "authority",
+        "summary",
+        "payload"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "controls": {
+      "items": {
+        "$ref": "#/$defs/Control"
+      },
+      "type": "array"
+    },
+    "defaults": {
+      "$ref": "#/$defs/Defaults"
+    },
+    "formatVersion": {
+      "const": 1,
+      "type": "integer"
+    },
+    "generatedBy": {
+      "$ref": "#/$defs/Generator"
+    },
+    "source": {
+      "$ref": "#/$defs/Source"
+    },
+    "variants": {
+      "items": {
+        "$ref": "#/$defs/ScenarioVariant"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "formatVersion",
+    "generatedBy",
+    "source",
+    "defaults",
+    "controls",
+    "variants"
+  ],
+  "title": "EvidenceBundle",
+  "type": "object"
+}

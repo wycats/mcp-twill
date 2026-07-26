@@ -66,9 +66,19 @@ fn main() -> Result<()> {
             let reference = reference.context("--ref is required")?;
             xtask::vbl_fixture::import(&repository, &reference, check)
         }
+        Some("export-site-evidence") => {
+            let mut check = false;
+            for argument in args {
+                match argument.as_str() {
+                    "--check" => check = true,
+                    other => bail!("unknown export-site-evidence argument `{other}`"),
+                }
+            }
+            xtask::site_evidence::export(check)
+        }
         Some(other) => bail!("unknown xtask command `{other}`"),
         None => bail!(
-            "usage: cargo xtask <import-vbl-fixture|import-mcp-task-fixture|validate-mcp-task-release> ..."
+            "usage: cargo xtask <export-site-evidence|import-vbl-fixture|import-mcp-task-fixture|validate-mcp-task-release> ..."
         ),
     }
 }
