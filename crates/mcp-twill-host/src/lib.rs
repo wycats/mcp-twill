@@ -1,17 +1,27 @@
-//! Runtime host for mcp-twill servers.
+//! Compiled host adapters and runtime policy for mcp-twill servers.
 //!
-//! The core framework constructs [`RuntimeIdentity`] from what a bare
-//! registry knows: name, version, and contract hashes. This crate owns the
-//! facts only a process-level host can supply — the process id and start
-//! time — and the retry policy a supervisor needs when it considers
-//! re-issuing a call.
+//! RFC 0019 host profiles compile an immutable native tool-surface snapshot
+//! into a separately hashed host snapshot. That snapshot drives generated
+//! VS Code artifacts and either the closed process-envelope router or the
+//! typed in-process bridge. This crate also owns process-level runtime
+//! identity and the effect-aware retry policy a supervisor needs when it
+//! considers re-issuing a call.
 //!
 //! Hot-replacement detection (noticing the server binary was swapped under
 //! a live connection) is planned follow-up work in this crate; nothing here
 //! populates `executable_hash` yet.
 
+mod canonical;
+mod profile;
+mod transport;
+mod vscode;
+
 use chrono::Utc;
 use mcp_twill::{CliMcpServer, EffectSpec, InvocationPlan, RuntimeIdentity};
+
+pub use profile::*;
+pub use transport::*;
+pub use vscode::*;
 
 /// Wraps a server with the identity facts a process-level host can observe.
 ///

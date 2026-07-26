@@ -838,6 +838,7 @@ pub struct NativeToolSurfaceSnapshot {
     server_instructions: String,
     tools: Vec<Tool>,
     operations: Vec<NativeSurfaceOperation>,
+    resource_carriers: BTreeMap<String, String>,
     document: Value,
     canonical_json: Box<[u8]>,
 }
@@ -908,6 +909,16 @@ impl NativeToolSurfaceSnapshot {
         self.operations
             .iter()
             .find(|operation| operation.spec.id == operation_id)
+    }
+
+    /// Returns the catalog-owned carrier name for one resource.
+    ///
+    /// This sealed accessor lets sibling compiler crates validate projections
+    /// against the authoritative resource declaration without parsing the
+    /// snapshot document or accepting a registry as a second authority.
+    #[doc(hidden)]
+    pub fn resource_carrier(&self, resource: &str) -> Option<&str> {
+        self.resource_carriers.get(resource).map(String::as_str)
     }
 }
 
@@ -1415,6 +1426,10 @@ fn compile_native_surface(
         server_instructions,
         tools,
         operations,
+        resource_carriers: registry
+            .resource_decls()
+            .map(|resource| (resource.name.clone(), resource.carrier_name()))
+            .collect(),
         document,
         canonical_json: canonical_json.into_boxed_slice(),
     };

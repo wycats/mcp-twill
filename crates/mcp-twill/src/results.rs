@@ -1482,6 +1482,17 @@ pub(crate) fn validate_application_error(
     })
 }
 
+/// Returns whether a compiled application-error details contract accepts the
+/// framework-owned empty object.
+///
+/// This sealed compiler bridge lets sibling projection crates validate
+/// structural emitters without maintaining a second JSON Schema evaluator.
+#[doc(hidden)]
+pub fn application_error_accepts_empty_details(spec: &ApplicationErrorSpec) -> bool {
+    let empty = Value::Object(serde_json::Map::new());
+    value_matches_schema(&empty, &spec.details_schema, &spec.details_schema)
+}
+
 fn select_recoveries(
     spec: &ApplicationErrorSpec,
     selection: ApplicationRecoverySelection,

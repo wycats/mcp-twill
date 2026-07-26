@@ -1,0 +1,12 @@
+{
+  "name": "mcp-twill-host-generated-typescript-tests",
+  "private": true,
+  "scripts": {
+    "test": "node typecheck.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.13",
+    "@types/vscode": "1.120.0",
+    "typescript": "5.9.3"
+  }
+}
