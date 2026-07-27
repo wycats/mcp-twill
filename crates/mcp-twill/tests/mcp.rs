@@ -150,9 +150,9 @@ struct RootsClient {
 impl ClientHandler for RootsClient {
     fn get_info(&self) -> rmcp::model::ClientInfo {
         let mut info = rmcp::model::ClientInfo::default();
-        info.capabilities = rmcp::model::ClientCapabilities::builder()
-            .enable_roots()
-            .build();
+        let mut capabilities = rmcp::model::ClientCapabilities::default();
+        capabilities.roots = Some(rmcp::model::RootsCapabilities::default());
+        info.capabilities = capabilities;
         info
     }
 

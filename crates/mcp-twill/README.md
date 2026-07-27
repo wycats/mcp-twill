@@ -14,7 +14,7 @@ are outside the command language.
 
 ```toml
 [dependencies]
-mcp-twill = "0.1.0"
+mcp-twill = "0.1.1"
 ```
 
 See the repository’s
