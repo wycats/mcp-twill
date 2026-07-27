@@ -22,15 +22,19 @@ import {
   mismatches,
   seedHandwrittenDrift,
   workbenchReducer,
+  type GuideStepId,
 } from "./state";
 import { CausalThreads } from "./components/CausalThreads";
 import { CopyButton } from "./components/CopyButton";
 import { DeclarationCode } from "./components/DeclarationCode";
+import { GuidedProof } from "./components/GuidedProof";
 import { ProjectionPanel } from "./components/ProjectionPanel";
 import styles from "./App.module.css";
 
-const repositorySource =
-  "https://github.com/wycats/mcp-twill/blob/main/";
+const repository = "https://github.com/wycats/mcp-twill";
+const repositorySource = `${repository}/blob/main/`;
+const frozenEvidenceRevision =
+  "ab18ad46727b41210c542cbb7c950f174c739d2d";
 
 interface AppProps {
   evidence: LoadedEvidence;
@@ -115,17 +119,36 @@ function GuideStep({
       <p className={styles.eyebrow}>{number}</p>
       <h2>{title}</h2>
       <p>{children}</p>
-      {status ? <p className={styles.guideStatus}>{status}</p> : null}
-      <button type="button" onClick={(event) => action(event.currentTarget)}>
+      <p
+        className={styles.guideStatus}
+        data-visible={Boolean(status)}
+        aria-hidden={!status}
+      >
+        {status ?? "\u00a0"}
+      </p>
+      <button
+        type="button"
+        aria-controls="guided-proof"
+        aria-current={active ? "step" : undefined}
+        onClick={(event) => action(event.currentTarget)}
+      >
         {actionLabel}
       </button>
     </section>
   );
 }
 
-function SourceLink({ path, children }: { path: string; children: React.ReactNode }) {
+function SourceLink({
+  path,
+  revision = "main",
+  children,
+}: {
+  path: string;
+  revision?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <a href={`${repositorySource}${path}`}>
+    <a href={`${repository}/blob/${revision}/${path}`}>
       {children}
     </a>
   );
@@ -151,67 +174,114 @@ function VblFieldStudy({ evidence }: AppProps) {
           application policy.
         </p>
       </div>
-      <div className={styles.provenanceColumns}>
-        <article>
-          <p className={styles.provenanceKind}>Historical measurement</p>
-          <h3>Pre-port observation</h3>
-          <p>
-            A measured catalog snapshot with its own acquisition context. It is
-            evidence of the starting point, not a newly pinned baseline.
-          </p>
-          <p className={styles.hashLine}>
-            {historical
-              ? `${historical.bytes} bytes · ${shortHash(historical.sha256)}`
-              : "Evidence copy unavailable"}
-          </p>
-          <SourceLink path="docs/adoption/visible-browser-lab/baseline/catalog-measurement.json">
-            Inspect historical source
-          </SourceLink>
-          <details className={styles.fieldEvidence}>
-            <summary>Frozen evidence copy</summary>
-            <CopyButton
-              value={prettyJson(evidence.vbl.historicalMeasurement)}
-              label="Copy measurement JSON"
-            />
-            <pre tabIndex={0}>
-              <code>{prettyJson(evidence.vbl.historicalMeasurement)}</code>
-            </pre>
-          </details>
-        </article>
-        <article>
-          <p className={styles.provenanceKind}>Frozen release fixture</p>
-          <h3>VBL v0.4.9 contract evidence</h3>
-          <p>
-            A byte-for-byte fixture used by Twill’s contract tests. Its release
-            identity remains separate from the earlier measurement.
-          </p>
-          <p className={styles.hashLine}>
-            {fixture
-              ? `${fixture.bytes} bytes · ${shortHash(fixture.sha256)}`
-              : "Evidence copy unavailable"}
-          </p>
-          <SourceLink path="crates/mcp-twill/tests/fixtures/vbl/v0.4.9/manifest.json">
-            Inspect frozen fixture
-          </SourceLink>
-          <details className={styles.fieldEvidence}>
-            <summary>Frozen evidence copy</summary>
-            <CopyButton
-              value={evidence.vbl.frozenFixtureManifestRaw}
-              label="Copy fixture JSON"
-            />
-            <pre tabIndex={0}>
-              <code>{evidence.vbl.frozenFixtureManifestRaw}</code>
-            </pre>
-          </details>
-        </article>
+      <div className={styles.fieldStudyEvidence}>
+        <div>
+          <p className={styles.provenanceKind}>Ownership outcome · essay explanation</p>
+          <dl className={styles.ownershipMatrix}>
+            <div>
+              <dt>Moved to Twill</dt>
+              <dd>
+                <strong>Catalog-derived agreement</strong>
+                <span>
+                  Help, schemas, tool surfaces, and presentation values now
+                  share one authority.
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>Stayed in VBL</dt>
+              <dd>
+                <strong>Application behavior and policy</strong>
+                <span>
+                  The broker, leases, browser operations, and product policy
+                  remain VBL-owned.
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>Verified by</dt>
+              <dd>
+                <strong>Frozen evidence plus contract support</strong>
+                <span>
+                  The measurement and release fixture below stay distinct;{" "}
+                  <SourceLink
+                    path="crates/mcp-twill/tests/native_surfaces.rs#L1966-L2025"
+                    revision={frozenEvidenceRevision}
+                  >
+                    Twill’s VBL projection contract test
+                  </SourceLink>{" "}
+                  checks the boundary.
+                </span>
+              </dd>
+            </div>
+          </dl>
+        </div>
+        <div className={styles.provenanceColumns}>
+          <article>
+            <p className={styles.provenanceKind}>Historical measurement</p>
+            <h3>Pre-port observation</h3>
+            <p>
+              A measured catalog snapshot with its own acquisition context. It is
+              evidence of the starting point, not a newly pinned baseline.
+            </p>
+            <p className={styles.hashLine}>
+              {historical
+                ? `${historical.bytes} bytes · ${shortHash(historical.sha256)}`
+                : "Evidence copy unavailable"}
+            </p>
+            <SourceLink
+              path="docs/adoption/visible-browser-lab/baseline/catalog-measurement.json"
+              revision={frozenEvidenceRevision}
+            >
+              Inspect immutable historical source
+            </SourceLink>
+            <details className={styles.fieldEvidence}>
+              <summary>Frozen evidence copy</summary>
+              <CopyButton
+                value={prettyJson(evidence.vbl.historicalMeasurement)}
+                label="Copy measurement JSON"
+              />
+              <pre tabIndex={0}>
+                <code>{prettyJson(evidence.vbl.historicalMeasurement)}</code>
+              </pre>
+            </details>
+          </article>
+          <article>
+            <p className={styles.provenanceKind}>Frozen release fixture</p>
+            <h3>VBL v0.4.9 contract evidence</h3>
+            <p>
+              A byte-for-byte fixture used by Twill’s contract tests. Its release
+              identity remains separate from the earlier measurement.
+            </p>
+            <p className={styles.hashLine}>
+              {fixture
+                ? `${fixture.bytes} bytes · ${shortHash(fixture.sha256)}`
+                : "Evidence copy unavailable"}
+            </p>
+            <SourceLink
+              path="crates/mcp-twill/tests/fixtures/vbl/v0.4.9/manifest.json"
+              revision={frozenEvidenceRevision}
+            >
+              Inspect immutable frozen fixture
+            </SourceLink>
+            <details className={styles.fieldEvidence}>
+              <summary>Frozen evidence copy</summary>
+              <CopyButton
+                value={evidence.vbl.frozenFixtureManifestRaw}
+                label="Copy fixture JSON"
+              />
+              <pre tabIndex={0}>
+                <code>{evidence.vbl.frozenFixtureManifestRaw}</code>
+              </pre>
+            </details>
+          </article>
+        </div>
+        <p className={styles.ownershipNote}>
+          These links resolve to the reviewed commit whose bytes match the two
+          tracked evidence hashes. The older gap map is not used as current
+          implementation authority.
+        </p>
       </div>
-      <p className={styles.ownershipNote}>
-        Ownership is enforced in{" "}
-        <SourceLink path="crates/mcp-twill/tests/support/vbl.rs">
-          the VBL test support
-        </SourceLink>
-        . The older gap map is not used as current implementation authority.
-      </p>
     </section>
   );
 }
@@ -255,9 +325,10 @@ export function App({ evidence }: AppProps) {
   function showSelection(
     selection: VariantSelection,
     factId: string | null,
+    guideStep: GuideStepId,
   ) {
     if (state.mode === "handwritten") dispatch({ type: "restore" });
-    dispatch({ type: "replaceSelection", selection, factId });
+    dispatch({ type: "replaceSelection", selection, factId, guideStep });
   }
 
   function enterHandwritten() {
@@ -329,17 +400,30 @@ export function App({ evidence }: AppProps) {
             <GuideStep
               number="01"
               title="One command makes five promises"
-              action={() => showSelection(defaults, null)}
+              action={() => showSelection(defaults, null, 1)}
               actionLabel="See the five promises"
+              active={state.guideStep === 1}
+              status={
+                state.guideStep === 1
+                  ? "Five projections staged below."
+                  : undefined
+              }
             >
-              <code>issues create</code> is described to people, agents, the
-              runtime, confirmation UI, and host UI. Today, they agree.
+              <code>issues create</code> becomes Help for people, Schema for
+              runtime validation, an MCP tool for agents, Confirmation
+              presentation, and Host rendering.
             </GuideStep>
             <GuideStep
               number="02"
               title="Change the rule once"
-              action={() => showSelection(withTitleLimit, titleFactId)}
+              action={() => showSelection(withTitleLimit, titleFactId, 2)}
               actionLabel="Change the title rule"
+              active={state.guideStep === 2}
+              status={
+                state.guideStep === 2
+                  ? "Title consequences staged below."
+                  : undefined
+              }
             >
               Require a non-empty title. Every promise should now tell the same
               new truth: <code>minLength: 1</code>.
@@ -347,8 +431,14 @@ export function App({ evidence }: AppProps) {
             <GuideStep
               number="03"
               title="Behavior is part of the promise"
-              action={() => showSelection(withRemote, destinationFactId)}
+              action={() => showSelection(withRemote, destinationFactId, 3)}
               actionLabel="Add network access"
+              active={state.guideStep === 3}
+              status={
+                state.guideStep === 3
+                  ? "Effect consequences staged below."
+                  : undefined
+              }
             >
               Add network access. Permissions, authorization, annotations, and
               host warnings must change together.
@@ -358,6 +448,12 @@ export function App({ evidence }: AppProps) {
               title="Handwritten copies eventually disagree"
               action={enterHandwritten}
               actionLabel="Introduce drift"
+              active={state.guideStep === 4}
+              status={
+                state.guideStep === 4
+                  ? `${drift.length} contradictions staged below.`
+                  : undefined
+              }
             >
               Let each consumer maintain its own interpretation and watch one
               command start contradicting itself.
@@ -367,6 +463,12 @@ export function App({ evidence }: AppProps) {
               title="Give truth one home"
               action={restoreAuthority}
               actionLabel="Restore from catalog"
+              active={state.guideStep === 5}
+              status={
+                state.guideStep === 5
+                  ? "Authority and build gates restored."
+                  : undefined
+              }
             >
               Restore the catalog, then follow that same authority through
               selection, validation, authorization, dispatch, and result.
@@ -374,8 +476,14 @@ export function App({ evidence }: AppProps) {
             <GuideStep
               number="06"
               title="Some inputs should never become public"
-              action={() => showSelection(withIdentity, privateContextFactId)}
+              action={() => showSelection(withIdentity, privateContextFactId, 6)}
               actionLabel="Supply private context"
+              active={state.guideStep === 6}
+              status={
+                state.guideStep === 6
+                  ? "Private-context proof staged below."
+                  : undefined
+              }
             >
               Conversation identity can shape the right decision without
               appearing in arguments, help, logs, or results.
@@ -394,10 +502,10 @@ export function App({ evidence }: AppProps) {
                   ? `Return to ${state.profile === "compact" ? "compact lanes" : "native tool"}`
                   : "Compare the two tool shapes"
               }
-              active={state.compareMcp}
+              active={state.guideStep === 7}
               status={
                 state.compareMcp
-                  ? "Comparison opened in the MCP projection."
+                  ? "MCP comparison staged below."
                   : undefined
               }
             >
@@ -416,6 +524,10 @@ export function App({ evidence }: AppProps) {
                 <h2 id="workbench-title">
                   <code>issues create</code>
                 </h2>
+                <p className={styles.workbenchDefinition}>
+                  <strong>Catalog</strong>: Twill’s authoritative runtime model.
+                  Semantic values come from it; host layout is site-owned.
+                </p>
               </div>
               <div className={styles.displaySwitches}>
                 <div className={styles.displayControl}>
@@ -487,6 +599,11 @@ export function App({ evidence }: AppProps) {
                       ? "Close generated comparison"
                       : "Compare both generated shapes"}
                   </button>
+                  <p className={styles.displayHint}>
+                    Display only · both shapes select{" "}
+                    <code>{variant.mcpSurfaceComparison.operationId}</code>. The
+                    request microscope remains a Native capture.
+                  </p>
                 </div>
               </div>
             </header>
@@ -518,36 +635,19 @@ export function App({ evidence }: AppProps) {
               ))}
             </fieldset>
 
-            <div
-              className={`${styles.agreement} ${
-                drift.length ? styles.agreementFailed : styles.agreementPassed
-              }`}
-              role="status"
-            >
-              <strong>Workbench agreement check:</strong>{" "}
-              {drift.length
-                ? `${drift.length} mismatches found.`
-                : "all evidence-declared comparison targets agree."}
-              {drift.length ? (
-                <ul>
-                  {drift.map((target) => (
-                    <li key={target.id}>
-                      {target.projection} · {target.label}: expected{" "}
-                      <code>{target.displayValue}</code>, received{" "}
-                      <code>{state.overrides[target.id]}</code>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {state.mode === "handwritten" ? (
-                <button
-                  type="button"
-                  onClick={() => restoreAuthority(null)}
-                >
-                  Restore from catalog
-                </button>
-              ) : null}
-            </div>
+            <GuidedProof
+              variant={variant}
+              generatorCommand={manifest.generator.command}
+              mode={state.mode}
+              guideStep={state.guideStep}
+              activeFactId={state.activeFactId}
+              profile={state.profile}
+              compareMcp={state.compareMcp}
+              overrides={state.overrides}
+              drift={drift}
+              repositorySource={repositorySource}
+              onRestore={() => restoreAuthority(null)}
+            />
 
             <div className={styles.woven} ref={wovenRef}>
               <CausalThreads

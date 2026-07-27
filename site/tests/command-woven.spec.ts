@@ -11,6 +11,11 @@ test("completes the guided 90-second journey", async ({ page, context }) => {
   await expect(
     page.getByRole("heading", { name: "The command, declared once" }),
   ).toBeVisible();
+  const proof = page.getByRole("region", { name: "Guided proof" });
+
+  await page.getByRole("button", { name: "See the five promises" }).click();
+  await expect(proof).toHaveAttribute("data-guide-step", "1");
+  await expect(proof.locator("[data-proof-projection]")).toHaveCount(5);
 
   await page
     .getByRole("heading", { name: "Change the rule once" })
@@ -18,6 +23,10 @@ test("completes the guided 90-second journey", async ({ page, context }) => {
     .getByRole("button", { name: "Change the title rule" })
     .click();
   await expect(page.getByLabel("Title rule")).toHaveValue("nonEmpty");
+  await expect(proof).toHaveAttribute("data-guide-step", "2");
+  await expect(
+    proof.locator('[data-proof-target="schema.titleRule"]'),
+  ).toBeVisible();
 
   await page
     .getByRole("heading", { name: "Behavior is part of the promise" })
@@ -25,6 +34,8 @@ test("completes the guided 90-second journey", async ({ page, context }) => {
     .getByRole("button", { name: "Add network access" })
     .click();
   await expect(page.getByLabel("Destination")).toHaveValue("remote");
+  await expect(proof).toHaveAttribute("data-guide-step", "3");
+  await expect(proof).toContainText("openWorldHint: true");
 
   await page
     .getByRole("heading", { name: "Handwritten copies eventually disagree" })
@@ -32,15 +43,29 @@ test("completes the guided 90-second journey", async ({ page, context }) => {
     .getByRole("button", { name: "Introduce drift" })
     .click();
   await expect(page.getByRole("status")).toContainText("3 mismatches found");
+  await expect(proof).toHaveAttribute("data-guide-step", "4");
+  await expect(proof.locator("[data-proof-target]")).toHaveCount(3);
+
+  await proof.getByRole("button", { name: "Restore from catalog" }).click();
+  await expect(page.getByRole("status")).toContainText(
+    "all generated comparison targets agree",
+  );
+  await expect(proof).toHaveAttribute("data-guide-step", "5");
+  await expect(proof).toContainText("regenerates and byte-compares");
+  await expect(page.getByRole("button", { name: /Derived/ })).toBeFocused();
+
+  await page.getByRole("button", { name: "Supply private context" }).click();
+  await expect(proof).toHaveAttribute("data-guide-step", "6");
+  await expect(proof).toContainText("Raw identity serialized");
+  await expect(proof).toContainText("Handler observed");
 
   await page
-    .getByRole("status")
-    .getByRole("button", { name: "Restore from catalog" })
+    .getByRole("button", { name: "Compare the two tool shapes" })
     .click();
-  await expect(page.getByRole("status")).toContainText(
-    "all evidence-declared comparison targets agree",
-  );
-  await expect(page.getByRole("button", { name: /Derived/ })).toBeFocused();
+  await expect(proof).toHaveAttribute("data-guide-step", "7");
+  await expect(proof).toContainText("run-network");
+  await expect(proof).toContainText("issues_create");
+  await expect(proof).toContainText("issues.create");
 
   await page.getByRole("button", { name: "Compact shared lanes" }).click();
   await expect(
@@ -109,6 +134,78 @@ test("has no page-level overflow at supported breakpoints", async ({ page }) => 
   ).toBeLessThanOrEqual(dimensions.client);
 });
 
+test("guided actions keep their generated proof in the reader's viewport", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop guided-proof geometry");
+  await page.setViewportSize({ width: 1280, height: 813 });
+  await page.goto("/");
+
+  const proof = page.getByRole("region", { name: "Guided proof" });
+  const guide = page.getByRole("navigation", { name: "Guided essay" });
+  const journey = [
+    {
+      name: "See the five promises",
+      title: "One command makes five promises",
+      step: "1",
+      evidence: proof.locator('[data-proof-projection="host"]'),
+    },
+    {
+      name: "Change the title rule",
+      title: "Change the rule once",
+      step: "2",
+      evidence: proof.locator('[data-proof-target="schema.titleRule"]'),
+    },
+    {
+      name: "Add network access",
+      title: "Behavior is part of the promise",
+      step: "3",
+      evidence: proof.locator(
+        '[data-proof-target="mcp.native.destination"]',
+      ),
+    },
+    {
+      name: "Introduce drift",
+      title: "Handwritten copies eventually disagree",
+      step: "4",
+      evidence: proof.getByText("3 mismatches found."),
+    },
+    {
+      name: "Restore from catalog",
+      title: "Give truth one home",
+      step: "5",
+      evidence: proof.getByRole("link", { name: "Inspect the CI gate" }),
+    },
+    {
+      name: "Supply private context",
+      title: "Some inputs should never become public",
+      step: "6",
+      evidence: proof.locator('[data-proof-target="mcp.privateContext"]'),
+    },
+    {
+      name: "Compare the two tool shapes",
+      title: "One operation, two public call shapes",
+      step: "7",
+      evidence: proof.getByText("issues.create"),
+    },
+  ];
+
+  for (const chapter of journey) {
+    const action = guide
+      .getByRole("heading", { name: chapter.title })
+      .locator("..")
+      .getByRole("button");
+    await expect(action).toHaveAccessibleName(new RegExp(chapter.name));
+    await action.scrollIntoViewIfNeeded();
+    await action.click();
+    await expect(action).toHaveAttribute("aria-current", "step");
+    await expect(proof).toHaveAttribute("data-guide-step", chapter.step);
+    await expect(action).toBeInViewport({ ratio: 0.75 });
+    await expect(proof).toBeInViewport({ ratio: 0.7 });
+    await expect(chapter.evidence).toBeInViewport({ ratio: 0.5 });
+  }
+});
+
 test("header switches share one spacing rhythm", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop header geometry");
   await page.goto("/");
@@ -168,11 +265,24 @@ test("has no page-level overflow near the projection-grid breakpoint", async ({
     const dimensions = await page.evaluate(() => ({
       client: document.documentElement.clientWidth,
       scroll: document.documentElement.scrollWidth,
+      offenders: Array.from(document.querySelectorAll<HTMLElement>("body *"))
+        .map((element) => {
+          const bounds = element.getBoundingClientRect();
+          return {
+            tag: element.tagName.toLowerCase(),
+            className: element.className,
+            text: element.textContent?.slice(0, 80) ?? "",
+            right: Math.round(bounds.right),
+            width: Math.round(bounds.width),
+          };
+        })
+        .filter(({ right }) => right > document.documentElement.clientWidth + 1)
+        .slice(0, 8),
     }));
 
     expect(
       dimensions.scroll,
-      `page overflowed at ${width}px`,
+      `page overflowed at ${width}px: ${JSON.stringify(dimensions.offenders)}`,
     ).toBeLessThanOrEqual(dimensions.client);
   }
 });
