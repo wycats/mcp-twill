@@ -7,6 +7,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bytes::Bytes;
 use http::{HeaderMap, Method, Request, Response, StatusCode, header::CONTENT_TYPE};
 use http_body::{Body, Frame, SizeHint};
@@ -20,6 +21,11 @@ use rmcp::model::Extensions;
 
 const PROTOCOL_VERSION: &str = "2026-07-28";
 const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = None;
+const HEADER_MISMATCH: i32 = -32020;
+const MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021;
+const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
+const BASE64_HEADER_PREFIX: &str = "=?base64?";
+const BASE64_HEADER_SUFFIX: &str = "?=";
 
 pub struct StatelessMcpService {
     server: CliMcpServer,
@@ -479,7 +485,7 @@ fn preflight(
             return Err(response(
                 StatusCode::BAD_REQUEST,
                 Value::Null,
-                -32001,
+                HEADER_MISMATCH,
                 "Header mismatch",
                 None,
             ));
@@ -501,49 +507,21 @@ fn preflight(
             }
         })?;
     let id = request.id.clone();
-    if !request.known_method {
-        let observed_version = unknown_method_protocol_version(&request.params).map_err(|()| {
-            response(
-                StatusCode::BAD_REQUEST,
-                id.clone(),
-                -32602,
-                "Invalid params",
-                None,
-            )
-        })?;
+    if !request.has_id {
         if let Some(headers) = headers
-            && (exact_header(
-                headers,
-                "mcp-protocol-version",
-                observed_version.unwrap_or(PROTOCOL_VERSION),
-            )
-            .is_err()
-                || exact_header(headers, "mcp-method", &request.method).is_err())
+            && exact_header(headers, "mcp-protocol-version", PROTOCOL_VERSION).is_err()
         {
             return Err(response(
                 StatusCode::BAD_REQUEST,
                 id,
-                -32001,
+                HEADER_MISMATCH,
                 "Header mismatch",
                 None,
             ));
         }
-        if let Some(observed_version) = observed_version
-            && observed_version != PROTOCOL_VERSION
-        {
-            return Err(response(
-                StatusCode::BAD_REQUEST,
-                id,
-                -32004,
-                "Unsupported protocol version",
-                Some(json!({
-                    "supported": [PROTOCOL_VERSION],
-                    "requested": observed_version,
-                })),
-            ));
-        }
         return Ok(request);
     }
+
     let observed_version = validate_request_meta(&request.params).map_err(|_| {
         response(
             StatusCode::BAD_REQUEST,
@@ -554,19 +532,42 @@ fn preflight(
         )
     })?;
 
+    if !request.known_method {
+        if let Some(headers) = headers
+            && validate_http_headers(headers, &request.method, &request.params, observed_version)
+                .is_err()
+        {
+            return Err(response(
+                StatusCode::BAD_REQUEST,
+                id,
+                HEADER_MISMATCH,
+                "Header mismatch",
+                None,
+            ));
+        }
+        if observed_version != PROTOCOL_VERSION {
+            return Err(response(
+                StatusCode::BAD_REQUEST,
+                id,
+                UNSUPPORTED_PROTOCOL_VERSION,
+                "Unsupported protocol version",
+                Some(json!({
+                    "supported": [PROTOCOL_VERSION],
+                    "requested": observed_version,
+                })),
+            ));
+        }
+        return Ok(request);
+    }
+
     if let Some(headers) = headers
-        && validate_http_headers(
-            headers,
-            &request.method,
-            &request.params,
-            Some(observed_version),
-        )
-        .is_err()
+        && validate_http_headers(headers, &request.method, &request.params, observed_version)
+            .is_err()
     {
         return Err(response(
             StatusCode::BAD_REQUEST,
             id,
-            -32001,
+            HEADER_MISMATCH,
             "Header mismatch",
             None,
         ));
@@ -575,7 +576,7 @@ fn preflight(
         return Err(response(
             StatusCode::BAD_REQUEST,
             id,
-            -32004,
+            UNSUPPORTED_PROTOCOL_VERSION,
             "Unsupported protocol version",
             Some(json!({
                 "supported": [PROTOCOL_VERSION],
@@ -586,17 +587,33 @@ fn preflight(
     Ok(request)
 }
 
-fn unknown_method_protocol_version(
-    params: &Map<String, Value>,
-) -> std::result::Result<Option<&str>, ()> {
-    let Some(meta) = params.get("_meta") else {
-        return Ok(None);
-    };
-    let meta = meta.as_object().ok_or(())?;
-    match meta.get("io.modelcontextprotocol/protocolVersion") {
-        Some(version) => version.as_str().map(Some).ok_or(()),
-        None => Ok(None),
+fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<&str, ()> {
+    let meta = params.get("_meta").and_then(Value::as_object).ok_or(())?;
+    meta.get("io.modelcontextprotocol/clientCapabilities")
+        .and_then(Value::as_object)
+        .ok_or(())?;
+    if let Some(client_info) = meta.get("io.modelcontextprotocol/clientInfo") {
+        let client_info = client_info.as_object().ok_or(())?;
+        client_info.get("name").and_then(Value::as_str).ok_or(())?;
+        client_info
+            .get("version")
+            .and_then(Value::as_str)
+            .ok_or(())?;
     }
+    meta.get("io.modelcontextprotocol/protocolVersion")
+        .and_then(Value::as_str)
+        .ok_or(())
+}
+
+fn decoded_header_value(value: &str) -> std::result::Result<String, ()> {
+    let Some(encoded) = value
+        .strip_prefix(BASE64_HEADER_PREFIX)
+        .and_then(|value| value.strip_suffix(BASE64_HEADER_SUFFIX))
+    else {
+        return Ok(value.to_string());
+    };
+    let decoded = BASE64_STANDARD.decode(encoded).map_err(|_| ())?;
+    String::from_utf8(decoded).map_err(|_| ())
 }
 
 fn validated_response_id(body: &[u8]) -> Value {
@@ -605,25 +622,6 @@ fn validated_response_id(body: &[u8]) -> Value {
         .and_then(|value| value.get("id").cloned())
         .filter(crate::stateless_wire::valid_request_id)
         .unwrap_or(Value::Null)
-}
-
-fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<&str, ()> {
-    let meta = params.get("_meta").and_then(Value::as_object).ok_or(())?;
-    meta.get("io.modelcontextprotocol/clientCapabilities")
-        .and_then(Value::as_object)
-        .ok_or(())?;
-    let client_info = meta
-        .get("io.modelcontextprotocol/clientInfo")
-        .and_then(Value::as_object)
-        .ok_or(())?;
-    client_info.get("name").and_then(Value::as_str).ok_or(())?;
-    client_info
-        .get("version")
-        .and_then(Value::as_str)
-        .ok_or(())?;
-    meta.get("io.modelcontextprotocol/protocolVersion")
-        .and_then(Value::as_str)
-        .ok_or(())
 }
 
 fn accepts_json_and_sse(headers: &HeaderMap) -> bool {
@@ -707,22 +705,39 @@ async fn dispatch_request(
         .await
     {
         Ok(mut result) => {
-            if let Some(result) = result.as_object_mut() {
-                result
-                    .entry("resultType".to_string())
-                    .or_insert_with(|| Value::String("complete".to_string()));
-            }
+            prepare_success_result(&mut result, server.stateless_server_info());
             success(id, result)
         }
         Err(error) => {
-            let status = if error.code == -32601 {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::OK
+            let status = match error.code {
+                -32601 => StatusCode::NOT_FOUND,
+                MISSING_REQUIRED_CLIENT_CAPABILITY => StatusCode::BAD_REQUEST,
+                _ => StatusCode::OK,
             };
             response(status, id, error.code, error.message, error.data)
         }
     }
+}
+
+fn prepare_success_result(result: &mut Value, server_info: Value) {
+    let Some(result) = result.as_object_mut() else {
+        return;
+    };
+    result
+        .entry("resultType".to_string())
+        .or_insert_with(|| Value::String("complete".to_string()));
+    let meta = result
+        .entry("_meta".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !meta.is_object() {
+        *meta = Value::Object(Map::new());
+    }
+    meta.as_object_mut()
+        .expect("result metadata is an object")
+        .insert(
+            "io.modelcontextprotocol/serverInfo".to_string(),
+            server_info,
+        );
 }
 
 fn sse_message(body: Bytes) -> Bytes {
@@ -743,9 +758,9 @@ fn validate_http_headers(
     headers: &HeaderMap,
     method: &str,
     params: &Map<String, Value>,
-    observed_version: Option<&str>,
+    observed_version: &str,
 ) -> std::result::Result<(), ()> {
-    exact_header(headers, "mcp-protocol-version", observed_version.ok_or(())?)?;
+    exact_header(headers, "mcp-protocol-version", observed_version)?;
     exact_header(headers, "mcp-method", method)?;
     let routed_name = match method {
         "tools/call" | "prompts/get" => params.get("name").and_then(Value::as_str),
@@ -756,7 +771,7 @@ fn validate_http_headers(
         _ => None,
     };
     if let Some(routed_name) = routed_name {
-        exact_header(headers, "mcp-name", routed_name)?;
+        exact_name_header(headers, routed_name)?;
     }
     Ok(())
 }
@@ -765,6 +780,16 @@ fn exact_header(headers: &HeaderMap, name: &str, expected: &str) -> std::result:
     let mut values = headers.get_all(name).iter();
     let value = values.next().ok_or(())?;
     if values.next().is_some() || value.to_str().map_err(|_| ())? != expected {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn exact_name_header(headers: &HeaderMap, expected: &str) -> std::result::Result<(), ()> {
+    let mut values = headers.get_all("mcp-name").iter();
+    let value = values.next().ok_or(())?;
+    if values.next().is_some() || decoded_header_value(value.to_str().map_err(|_| ())?)? != expected
+    {
         return Err(());
     }
     Ok(())
@@ -856,7 +881,7 @@ impl StatelessDispatchError {
 
     pub(crate) fn missing_capability() -> Self {
         Self {
-            code: -32003,
+            code: MISSING_REQUIRED_CLIENT_CAPABILITY,
             message: "Missing required client capability",
             data: Some(json!({
                 "requiredCapabilities": {
@@ -905,6 +930,36 @@ mod tests {
         CommandRegistry::new("tasks", "Tasks").register_dynamic(spec, |_| async {
             Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
         })
+    }
+
+    #[test]
+    fn success_metadata_preserves_application_keys_and_replaces_reserved_server_info() {
+        let mut result = json!({
+            "value": true,
+            "_meta": {
+                "application.example/trace": "kept",
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "spoofed"
+                }
+            }
+        });
+        prepare_success_result(
+            &mut result,
+            json!({
+                "name": "tasks",
+                "version": "0.1.1"
+            }),
+        );
+
+        assert_eq!(result["resultType"], "complete");
+        assert_eq!(result["_meta"]["application.example/trace"], "kept");
+        assert_eq!(
+            result["_meta"]["io.modelcontextprotocol/serverInfo"],
+            json!({
+                "name": "tasks",
+                "version": "0.1.1"
+            })
+        );
     }
 
     fn service(support: TaskSupportSpec) -> StatelessMcpHttpService {
@@ -1096,6 +1151,67 @@ mod tests {
             value["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/tasks"],
             json!({})
         );
+        assert!(value["result"].get("serverInfo").is_none());
+        assert_eq!(
+            value["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            "tasks"
+        );
+
+        let mut encoded_name = request(
+            14,
+            "tools/call",
+            Some("work"),
+            json!({
+                "_meta": meta(false),
+                "name": "work",
+                "arguments": {}
+            }),
+        );
+        encoded_name.headers_mut().insert(
+            "Mcp-Name",
+            "=?base64?d29yaw==?=".parse().expect("encoded header"),
+        );
+        let (status, value) = response_value(service.call(encoded_name).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["result"]["isError"], false);
+
+        let mut invalid_encoded_name = request(
+            15,
+            "tools/call",
+            Some("work"),
+            json!({
+                "_meta": meta(false),
+                "name": "work",
+                "arguments": {}
+            }),
+        );
+        invalid_encoded_name.headers_mut().insert(
+            "Mcp-Name",
+            "=?base64?not-base64!?=".parse().expect("invalid encoding"),
+        );
+        let (status, value) =
+            response_value(service.call(invalid_encoded_name).await.unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], HEADER_MISMATCH);
+
+        let mut non_utf8_encoded_name = request(
+            16,
+            "tools/call",
+            Some("work"),
+            json!({
+                "_meta": meta(false),
+                "name": "work",
+                "arguments": {}
+            }),
+        );
+        non_utf8_encoded_name.headers_mut().insert(
+            "Mcp-Name",
+            "=?base64?/w==?=".parse().expect("non-UTF-8 encoding"),
+        );
+        let (status, value) =
+            response_value(service.call(non_utf8_encoded_name).await.unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], HEADER_MISMATCH);
 
         let bad = Request::builder()
             .method(Method::POST)
@@ -1115,7 +1231,7 @@ mod tests {
             .unwrap();
         let (status, value) = response_value(service.call(bad).await.unwrap()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(value["error"]["code"], -32001);
+        assert_eq!(value["error"]["code"], HEADER_MISMATCH);
 
         let with_origin = Request::builder()
             .method(Method::POST)
@@ -1158,14 +1274,25 @@ mod tests {
             .header("Accept", "application/json, text/event-stream")
             .header("MCP-Protocol-Version", "2099-01-01")
             .header("Mcp-Method", "unknown/method")
-            .body(Bytes::from_static(
-                br#"{"jsonrpc":"2.0","id":5,"method":"unknown/method","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}"#,
+            .body(Bytes::from(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "unknown/method",
+                    "params": {
+                        "_meta": {
+                            "io.modelcontextprotocol/clientCapabilities": {},
+                            "io.modelcontextprotocol/protocolVersion": "2099-01-01"
+                        }
+                    }
+                }))
+                .unwrap(),
             ))
             .unwrap();
         let (status, value) =
             response_value(service.call(unknown_unsupported_version).await.unwrap()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(value["error"]["code"], -32004);
+        assert_eq!(value["error"]["code"], UNSUPPORTED_PROTOCOL_VERSION);
 
         let unknown_without_params = Request::builder()
             .method(Method::POST)
@@ -1179,8 +1306,8 @@ mod tests {
             .unwrap();
         let (status, value) =
             response_value(service.call(unknown_without_params).await.unwrap()).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(value["error"]["code"], -32601);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], -32602);
     }
 
     #[tokio::test]
@@ -1191,7 +1318,6 @@ mod tests {
             .header(CONTENT_TYPE, "application/json")
             .header("Accept", "application/json, text/event-stream")
             .header("MCP-Protocol-Version", PROTOCOL_VERSION)
-            .header("Mcp-Method", "tools/list")
             .body(Bytes::from(
                 serde_json::to_vec(&json!({
                     "jsonrpc": "2.0",
@@ -1206,6 +1332,23 @@ mod tests {
         let (status, bytes) = response_bytes(response).await;
         assert_eq!(status, StatusCode::ACCEPTED);
         assert!(bytes.is_empty());
+
+        let missing_protocol = Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .body(Bytes::from(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": { "_meta": meta(false) }
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let (status, value) = response_value(service.call(missing_protocol).await.unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], HEADER_MISMATCH);
     }
 
     #[tokio::test]
@@ -1235,8 +1378,6 @@ mod tests {
             .header(CONTENT_TYPE, "application/json")
             .header("Accept", "application/json, text/event-stream")
             .header("MCP-Protocol-Version", PROTOCOL_VERSION)
-            .header("Mcp-Method", "tools/call")
-            .header("Mcp-Name", "work")
             .body(Bytes::from(
                 serde_json::to_vec(&json!({
                     "jsonrpc": "2.0",
@@ -1292,14 +1433,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_stateless_request_requires_complete_client_metadata() {
+    async fn every_stateless_request_requires_protocol_and_capability_metadata() {
         let invalid = [
             json!({
                 "io.modelcontextprotocol/clientInfo": { "name": "test", "version": "1" },
-                "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION
-            }),
-            json!({
-                "io.modelcontextprotocol/clientCapabilities": {},
                 "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION
             }),
             json!({
@@ -1325,6 +1462,27 @@ mod tests {
             assert_eq!(value["error"]["code"], -32602);
             assert_eq!(value["error"]["message"], "Invalid params");
         }
+
+        let mut service = service(TaskSupportSpec::Optional);
+        let (status, value) = response_value(
+            service
+                .call(request(
+                    2,
+                    "tools/list",
+                    None,
+                    json!({
+                        "_meta": {
+                            "io.modelcontextprotocol/clientCapabilities": {},
+                            "io.modelcontextprotocol/protocolVersion": PROTOCOL_VERSION
+                        }
+                    }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["result"]["tools"].is_array());
     }
 
     #[tokio::test]
@@ -1445,7 +1603,7 @@ mod tests {
     #[tokio::test]
     async fn required_extension_capability_fails_before_task_creation() {
         let mut service = service(TaskSupportSpec::Required);
-        let (_, value) = response_value(
+        let (status, value) = response_value(
             service
                 .call(request(
                     1,
@@ -1461,7 +1619,8 @@ mod tests {
                 .unwrap(),
         )
         .await;
-        assert_eq!(value["error"]["code"], -32003);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], MISSING_REQUIRED_CLIENT_CAPABILITY);
     }
 
     #[tokio::test]
@@ -1640,9 +1799,10 @@ mod tests {
                     .unwrap(),
             )
             .await;
+            assert_eq!(acknowledgement["result"]["resultType"], "complete");
             assert_eq!(
-                acknowledgement["result"],
-                json!({ "resultType": "complete" })
+                acknowledgement["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+                "tasks"
             );
         }
 

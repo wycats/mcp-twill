@@ -14,7 +14,7 @@ fn fixture(name: &str) -> Value {
 #[test]
 fn manifest_pins_each_external_authority_and_allows_only_a_canonical_release_seal() {
     let manifest = fixture("manifest.json");
-    assert_eq!(manifest["formatVersion"], 1);
+    assert_eq!(manifest["formatVersion"], 2);
     assert_eq!(manifest["protocolRevision"], "2026-07-28");
     assert_eq!(manifest["extensionId"], "io.modelcontextprotocol/tasks");
     if let Some(release) = manifest.get("finalRelease") {
@@ -43,8 +43,8 @@ fn manifest_pins_each_external_authority_and_allows_only_a_canonical_release_sea
         sources,
         BTreeSet::from([
             (
-                "core-2026-07-28-rc",
-                "9d700ed62dcf86cb77475c9b81930611a9182f46"
+                "core-2026-07-28-candidate",
+                "31eefec6b979b09ab2092490e2271c0eb38ccd38"
             ),
             (
                 "legacy-2025-11-25",
@@ -99,6 +99,9 @@ fn reviewed_vectors_keep_the_task_dialects_distinct() {
         case["request"]["method"] == "tasks/cancel"
             && case["response"]["result"]["resultType"] == "complete"
     }));
+    assert!(extension_cases.iter().any(|case| {
+        case["name"] == "missing-required-capability" && case["response"]["error"]["code"] == -32021
+    }));
     assert!(legacy_cases.iter().any(|case| {
         case["request"]["method"] == "tasks/cancel" && case["response"]["error"]["code"] == -32602
     }));
@@ -122,16 +125,18 @@ fn current_protocol_vectors_carry_complete_request_local_metadata() {
             "{} protocol version",
             case["name"]
         );
-        assert_eq!(
-            metadata["io.modelcontextprotocol/clientInfo"]["name"], "mcp-twill-fixture-client",
-            "{} client name",
-            case["name"]
-        );
-        assert_eq!(
-            metadata["io.modelcontextprotocol/clientInfo"]["version"], "1.0.0",
-            "{} client version",
-            case["name"]
-        );
+        if let Some(client_info) = metadata.get("io.modelcontextprotocol/clientInfo") {
+            assert_eq!(
+                client_info["name"], "mcp-twill-fixture-client",
+                "{} client name",
+                case["name"]
+            );
+            assert_eq!(
+                client_info["version"], "1.0.0",
+                "{} client version",
+                case["name"]
+            );
+        }
         assert!(
             metadata
                 .get("io.modelcontextprotocol/clientCapabilities")
@@ -156,7 +161,7 @@ fn current_protocol_vectors_carry_complete_request_local_metadata() {
 }
 
 #[test]
-fn core_vectors_freeze_the_locked_rc_transport_failures() {
+fn core_vectors_freeze_the_pre_tag_final_contract() {
     let core = fixture("core-wire-vectors.json");
     let cases = core["cases"].as_array().expect("core cases");
     let error = |name: &str| {
@@ -169,16 +174,25 @@ fn core_vectors_freeze_the_locked_rc_transport_failures() {
     assert_eq!(error("header-mismatch")["httpStatus"], 400);
     assert_eq!(
         error("header-mismatch")["response"]["error"]["code"],
-        -32001
+        -32020
     );
     assert_eq!(error("unsupported-protocol-version")["httpStatus"], 400);
     assert_eq!(
         error("unsupported-protocol-version")["response"]["error"]["code"],
-        -32004
+        -32022
     );
     assert_eq!(error("unsupported-method")["httpStatus"], 404);
     assert_eq!(
         error("unsupported-method")["response"]["error"]["code"],
         -32601
+    );
+    assert_eq!(
+        error("optional-client-info")["response"]["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]
+            ["name"],
+        "mcp-twill-fixture-server"
+    );
+    assert_eq!(
+        error("base64-tool-routing")["headers"]["Mcp-Name"],
+        "=?base64?cmVwb3J0X2dlbmVyYXRl?="
     );
 }

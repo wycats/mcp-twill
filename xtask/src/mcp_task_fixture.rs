@@ -13,90 +13,134 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 pub const LEGACY_COMMIT: &str = "38c84e9f93ad191d9eb26d92b945d17bd0efcaf3";
-pub const CORE_RC_COMMIT: &str = "9d700ed62dcf86cb77475c9b81930611a9182f46";
+pub const CORE_CANDIDATE_COMMIT: &str = "31eefec6b979b09ab2092490e2271c0eb38ccd38";
 pub const EXTENSION_COMMIT: &str = "8966bea9c4f4e6d71060cc8284a539086e9e234f";
 pub const CORE_REPOSITORY: &str = "https://github.com/modelcontextprotocol/modelcontextprotocol";
-pub const EXTENSION_REPOSITORY: &str =
-    "https://github.com/modelcontextprotocol/experimental-ext-tasks";
+pub const EXTENSION_REPOSITORY: &str = "https://github.com/modelcontextprotocol/ext-tasks";
 pub const PROTOCOL_REVISION: &str = "2026-07-28";
 pub const EXTENSION_ID: &str = "io.modelcontextprotocol/tasks";
 pub const FINAL_RELEASE_TAG: &str = "2026-07-28";
 pub const IMPORT_COMMAND: &str = "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> [--final-ref 2026-07-28]";
 
 const EXPECTED_MANIFEST_SHA256: &str =
-    "58e4d1665946dbf1d8630b06c6c0e9cdfe3be0df2f4b1b5df469ffb3b31e6b4c";
+    "a58c94ed2ce7f435e14aa26efc4cde8dae5580e5dfbdf5e528c7cc0609666f18";
 const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = None;
 
-const SOURCE_COPIES: [SourceCopy; 8] = [
+const SOURCE_COPIES: [SourceCopy; 11] = [
     SourceCopy {
         destination: "core-schema.json",
-        source_id: "core-2026-07-28-rc",
+        source_id: "core-2026-07-28-candidate",
         source_path: "schema/draft/schema.json",
+        final_source_path: Some("schema/2026-07-28/schema.json"),
     },
     SourceCopy {
-        destination: "core-transports.mdx",
-        source_id: "core-2026-07-28-rc",
-        source_path: "docs/specification/draft/basic/transports.mdx",
+        destination: "core-basic.mdx",
+        source_id: "core-2026-07-28-candidate",
+        source_path: "docs/specification/draft/basic/index.mdx",
+        final_source_path: Some("docs/specification/2026-07-28/basic/index.mdx"),
+    },
+    SourceCopy {
+        destination: "core-transports-index.mdx",
+        source_id: "core-2026-07-28-candidate",
+        source_path: "docs/specification/draft/basic/transports/index.mdx",
+        final_source_path: Some("docs/specification/2026-07-28/basic/transports/index.mdx"),
+    },
+    SourceCopy {
+        destination: "core-stdio.mdx",
+        source_id: "core-2026-07-28-candidate",
+        source_path: "docs/specification/draft/basic/transports/stdio.mdx",
+        final_source_path: Some("docs/specification/2026-07-28/basic/transports/stdio.mdx"),
+    },
+    SourceCopy {
+        destination: "core-streamable-http.mdx",
+        source_id: "core-2026-07-28-candidate",
+        source_path: "docs/specification/draft/basic/transports/streamable-http.mdx",
+        final_source_path: Some(
+            "docs/specification/2026-07-28/basic/transports/streamable-http.mdx",
+        ),
     },
     SourceCopy {
         destination: "extension-schema.json",
         source_id: "tasks-extension",
         source_path: "schema/draft/schema.json",
+        final_source_path: None,
     },
     SourceCopy {
         destination: "extension-sep-2663.md",
         source_id: "tasks-extension",
         source_path: "seps/2663-tasks-extension.md",
+        final_source_path: None,
     },
     SourceCopy {
         destination: "extension-tasks.md",
         source_id: "tasks-extension",
         source_path: "specification/draft/tasks.md",
+        final_source_path: None,
     },
     SourceCopy {
         destination: "legacy-progress.mdx",
         source_id: "legacy-2025-11-25",
         source_path: "docs/specification/2025-11-25/basic/utilities/progress.mdx",
+        final_source_path: None,
     },
     SourceCopy {
         destination: "legacy-schema.json",
         source_id: "legacy-2025-11-25",
         source_path: "schema/2025-11-25/schema.json",
+        final_source_path: None,
     },
     SourceCopy {
         destination: "legacy-tasks.mdx",
         source_id: "legacy-2025-11-25",
         source_path: "docs/specification/2025-11-25/basic/utilities/tasks.mdx",
+        final_source_path: None,
     },
 ];
 
 const REVIEWED_VECTORS: [ReviewedVector; 3] = [
     ReviewedVector {
         destination: "core-wire-vectors.json",
-        source_id: "core-2026-07-28-rc",
-        source_paths: &[
-            "docs/specification/draft/basic/transports.mdx",
-            "schema/draft/schema.json",
-        ],
+        sources: &[ReviewedSource {
+            source_id: "core-2026-07-28-candidate",
+            source_paths: &[
+                "docs/specification/draft/basic/index.mdx",
+                "docs/specification/draft/basic/transports/index.mdx",
+                "docs/specification/draft/basic/transports/streamable-http.mdx",
+                "schema/draft/schema.json",
+            ],
+        }],
         value: core_vectors,
     },
     ReviewedVector {
         destination: "extension-wire-vectors.json",
-        source_id: "tasks-extension",
-        source_paths: &[
-            "schema/draft/schema.json",
-            "seps/2663-tasks-extension.md",
-            "specification/draft/tasks.md",
+        sources: &[
+            ReviewedSource {
+                source_id: "core-2026-07-28-candidate",
+                source_paths: &[
+                    "docs/specification/draft/basic/index.mdx",
+                    "schema/draft/schema.json",
+                ],
+            },
+            ReviewedSource {
+                source_id: "tasks-extension",
+                source_paths: &[
+                    "schema/draft/schema.json",
+                    "seps/2663-tasks-extension.md",
+                    "specification/draft/tasks.md",
+                ],
+            },
         ],
         value: extension_vectors,
     },
     ReviewedVector {
         destination: "legacy-wire-vectors.json",
-        source_id: "legacy-2025-11-25",
-        source_paths: &[
-            "docs/specification/2025-11-25/basic/utilities/tasks.mdx",
-            "schema/2025-11-25/schema.json",
-        ],
+        sources: &[ReviewedSource {
+            source_id: "legacy-2025-11-25",
+            source_paths: &[
+                "docs/specification/2025-11-25/basic/utilities/tasks.mdx",
+                "schema/2025-11-25/schema.json",
+            ],
+        }],
         value: legacy_vectors,
     },
 ];
@@ -105,12 +149,17 @@ struct SourceCopy {
     destination: &'static str,
     source_id: &'static str,
     source_path: &'static str,
+    final_source_path: Option<&'static str>,
+}
+
+struct ReviewedSource {
+    source_id: &'static str,
+    source_paths: &'static [&'static str],
 }
 
 struct ReviewedVector {
     destination: &'static str,
-    source_id: &'static str,
-    source_paths: &'static [&'static str],
+    sources: &'static [ReviewedSource],
     value: fn() -> Value,
 }
 
@@ -153,9 +202,15 @@ pub struct FinalRelease {
 pub struct FileEntry {
     pub path: String,
     pub sha256: String,
-    pub source_id: String,
     pub derivation: Derivation,
-    pub source_paths: Vec<String>,
+    pub sources: Vec<FileSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSource {
+    pub source_id: String,
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,11 +229,11 @@ pub fn import(
     ensure_repository(core_repository, "core")?;
     ensure_repository(extension_repository, "extension")?;
     verify_commit(core_repository, LEGACY_COMMIT)?;
-    verify_commit(core_repository, CORE_RC_COMMIT)?;
+    verify_commit(core_repository, CORE_CANDIDATE_COMMIT)?;
     verify_commit(extension_repository, EXTENSION_COMMIT)?;
 
     let legacy = archive(core_repository, LEGACY_COMMIT)?;
-    let core = archive(core_repository, CORE_RC_COMMIT)?;
+    let core = archive(core_repository, CORE_CANDIDATE_COMMIT)?;
     let extension = archive(extension_repository, EXTENSION_COMMIT)?;
     let final_release = if let Some(reference) = final_reference {
         ensure!(
@@ -210,7 +265,7 @@ pub fn import(
         validate_bundle(&destination)?;
         compare_directories(generated.path(), &destination)?;
         println!(
-            "MCP task fixture matches legacy {LEGACY_COMMIT}, core {CORE_RC_COMMIT}, and extension {EXTENSION_COMMIT}"
+            "MCP task fixture matches legacy {LEGACY_COMMIT}, core {CORE_CANDIDATE_COMMIT}, and extension {EXTENSION_COMMIT}"
         );
     } else {
         replace_directory(generated.path(), &destination)?;
@@ -295,7 +350,7 @@ fn generate_bundle(
 ) -> Result<()> {
     let archives = BTreeMap::from([
         ("legacy-2025-11-25", legacy),
-        ("core-2026-07-28-rc", core),
+        ("core-2026-07-28-candidate", core),
         ("tasks-extension", extension),
     ]);
     let mut files = Vec::new();
@@ -308,9 +363,11 @@ fn generate_bundle(
         files.push(FileEntry {
             path: copy.destination.to_string(),
             sha256: sha256(&bytes),
-            source_id: copy.source_id.to_string(),
             derivation: Derivation::SourceCopy,
-            source_paths: vec![copy.source_path.to_string()],
+            sources: vec![FileSource {
+                source_id: copy.source_id.to_string(),
+                paths: vec![copy.source_path.to_string()],
+            }],
         });
     }
 
@@ -321,24 +378,30 @@ fn generate_bundle(
         files.push(FileEntry {
             path: vector.destination.to_string(),
             sha256: sha256(&bytes),
-            source_id: vector.source_id.to_string(),
             derivation: Derivation::ReviewedVector,
-            source_paths: vector
-                .source_paths
+            sources: vector
+                .sources
                 .iter()
-                .map(|path| (*path).to_string())
+                .map(|source| FileSource {
+                    source_id: source.source_id.to_string(),
+                    paths: source
+                        .source_paths
+                        .iter()
+                        .map(|path| (*path).to_string())
+                        .collect(),
+                })
                 .collect(),
         });
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
 
     let manifest = Manifest {
-        format_version: 1,
+        format_version: 2,
         protocol_revision: PROTOCOL_REVISION.to_string(),
         extension_id: EXTENSION_ID.to_string(),
         sources: expected_sources(),
         importer: ImporterIdentity {
-            version: 1,
+            version: 2,
             command: IMPORT_COMMAND.to_string(),
         },
         final_release,
@@ -355,12 +418,15 @@ fn generate_bundle(
 fn verify_final_core_inputs(locked_core: &Path, final_core: &Path) -> Result<()> {
     for copy in SOURCE_COPIES
         .iter()
-        .filter(|copy| copy.source_id == "core-2026-07-28-rc")
+        .filter(|copy| copy.source_id == "core-2026-07-28-candidate")
     {
+        let final_source_path = copy
+            .final_source_path
+            .expect("candidate core inputs have final source paths");
         let locked = fs::read(locked_core.join(copy.source_path))
             .with_context(|| format!("read locked core input {}", copy.source_path))?;
-        let final_bytes = fs::read(final_core.join(copy.source_path))
-            .with_context(|| format!("read final core input {}", copy.source_path))?;
+        let final_bytes = fs::read(final_core.join(final_source_path))
+            .with_context(|| format!("read final core input {final_source_path}"))?;
         ensure!(
             locked == final_bytes,
             "final MCP release changes normative input {}",
@@ -373,10 +439,10 @@ fn verify_final_core_inputs(locked_core: &Path, final_core: &Path) -> Result<()>
 fn expected_sources() -> Vec<SourceIdentity> {
     vec![
         SourceIdentity {
-            id: "core-2026-07-28-rc".to_string(),
+            id: "core-2026-07-28-candidate".to_string(),
             repository: CORE_REPOSITORY.to_string(),
-            revision: "2026-07-28-RC".to_string(),
-            commit: CORE_RC_COMMIT.to_string(),
+            revision: "2026-07-28-pre-tag".to_string(),
+            commit: CORE_CANDIDATE_COMMIT.to_string(),
         },
         SourceIdentity {
             id: "legacy-2025-11-25".to_string(),
@@ -463,7 +529,7 @@ fn validate_bundle_structure(directory: &Path) -> Result<()> {
 
 fn validate_manifest(manifest: &Manifest) -> Result<()> {
     ensure!(
-        manifest.format_version == 1,
+        manifest.format_version == 2,
         "unsupported fixture format version"
     );
     ensure!(
@@ -481,7 +547,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
     ensure!(
         manifest.importer
             == (ImporterIdentity {
-                version: 1,
+                version: 2,
                 command: IMPORT_COMMAND.to_string(),
             }),
         "fixture importer identity is not canonical"
@@ -489,11 +555,36 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
 
     let expected_paths = SOURCE_COPIES
         .iter()
-        .map(|copy| (copy.destination, (Derivation::SourceCopy, copy.source_id)))
+        .map(|copy| {
+            (
+                copy.destination,
+                (
+                    Derivation::SourceCopy,
+                    vec![FileSource {
+                        source_id: copy.source_id.to_string(),
+                        paths: vec![copy.source_path.to_string()],
+                    }],
+                ),
+            )
+        })
         .chain(REVIEWED_VECTORS.iter().map(|vector| {
             (
                 vector.destination,
-                (Derivation::ReviewedVector, vector.source_id),
+                (
+                    Derivation::ReviewedVector,
+                    vector
+                        .sources
+                        .iter()
+                        .map(|source| FileSource {
+                            source_id: source.source_id.to_string(),
+                            paths: source
+                                .source_paths
+                                .iter()
+                                .map(|path| (*path).to_string())
+                                .collect(),
+                        })
+                        .collect(),
+                ),
             )
         }))
         .collect::<BTreeMap<_, _>>();
@@ -520,7 +611,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
     for entry in &manifest.files {
         validate_relative_path(&entry.path)?;
         validate_hash(&entry.sha256, &entry.path)?;
-        let Some((derivation, source_id)) = expected_paths.get(entry.path.as_str()) else {
+        let Some((derivation, sources)) = expected_paths.get(entry.path.as_str()) else {
             bail!("manifest contains unexpected payload {}", entry.path);
         };
         ensure!(
@@ -529,29 +620,49 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
             entry.path
         );
         ensure!(
-            entry.source_id == *source_id,
-            "{} has an unexpected source",
+            entry.sources == *sources,
+            "{} has unexpected source provenance",
+            entry.path
+        );
+        ensure!(!entry.sources.is_empty(), "{} has no sources", entry.path);
+        let source_ids = entry
+            .sources
+            .iter()
+            .map(|source| source.source_id.as_str())
+            .collect::<Vec<_>>();
+        let mut sorted_sources = source_ids.clone();
+        sorted_sources.sort_unstable();
+        ensure!(
+            source_ids == sorted_sources,
+            "{} sources are not sorted",
             entry.path
         );
         ensure!(
-            !entry.source_paths.is_empty(),
-            "{} has no source paths",
+            source_ids.windows(2).all(|pair| pair[0] != pair[1]),
+            "{} contains duplicate sources",
             entry.path
         );
-        let mut sorted_sources = entry.source_paths.clone();
-        sorted_sources.sort();
-        ensure!(
-            entry.source_paths == sorted_sources,
-            "{} source paths are not sorted",
-            entry.path
-        );
-        ensure!(
-            entry.source_paths.windows(2).all(|pair| pair[0] != pair[1]),
-            "{} contains duplicate source paths",
-            entry.path
-        );
-        for path in &entry.source_paths {
-            validate_relative_path(path)?;
+        for source in &entry.sources {
+            ensure!(
+                !source.paths.is_empty(),
+                "{} has no source paths",
+                entry.path
+            );
+            let mut sorted_paths = source.paths.clone();
+            sorted_paths.sort();
+            ensure!(
+                source.paths == sorted_paths,
+                "{} source paths are not sorted",
+                entry.path
+            );
+            ensure!(
+                source.paths.windows(2).all(|pair| pair[0] != pair[1]),
+                "{} contains duplicate source paths",
+                entry.path
+            );
+            for path in &source.paths {
+                validate_relative_path(path)?;
+            }
         }
     }
 
@@ -808,14 +919,26 @@ fn core_vectors() -> Value {
                 "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":request_metadata(false),"name":"report_generate","arguments":{}}}
             },
             {
+                "name": "base64-tool-routing",
+                "httpStatus": 200,
+                "headers": {"MCP-Protocol-Version":PROTOCOL_REVISION,"Mcp-Method":"tools/call","Mcp-Name":"=?base64?cmVwb3J0X2dlbmVyYXRl?="},
+                "request": {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"_meta":request_metadata(false),"name":"report_generate","arguments":{}}}
+            },
+            {
+                "name": "optional-client-info",
+                "httpStatus": 200,
+                "request": {"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/protocolVersion":PROTOCOL_REVISION}}},
+                "response": {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-twill-fixture-server","version":"1.0.0"}}}}
+            },
+            {
                 "name": "header-mismatch",
                 "httpStatus": 400,
-                "response": {"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"Header mismatch"}}
+                "response": {"jsonrpc":"2.0","id":1,"error":{"code":-32020,"message":"Header mismatch"}}
             },
             {
                 "name": "unsupported-protocol-version",
                 "httpStatus": 400,
-                "response": {"jsonrpc":"2.0","id":1,"error":{"code":-32004,"message":"Unsupported protocol version","data":{"supported":[PROTOCOL_REVISION],"requested":"2099-01-01"}}}
+                "response": {"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":[PROTOCOL_REVISION],"requested":"2099-01-01"}}}
             },
             {
                 "name": "unsupported-method",
@@ -853,7 +976,7 @@ fn extension_vectors() -> Value {
             {
                 "name": "missing-required-capability",
                 "request": {"jsonrpc":"2.0","id":5,"method":"tasks/get","params":{"_meta":request_metadata(false),"taskId":"task-example"}},
-                "response": {"jsonrpc":"2.0","id":5,"error":{"code":-32003,"message":"Missing required client capability","data":{"requiredCapabilities":{"extensions":{EXTENSION_ID:{}}}}}}
+                "response": {"jsonrpc":"2.0","id":5,"error":{"code":-32021,"message":"Missing required client capability","data":{"requiredCapabilities":{"extensions":{EXTENSION_ID:{}}}}}}
             }
         ]
     })
@@ -979,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn rc_bundle_fails_the_release_seal_gate() -> Result<()> {
+    fn pre_tag_bundle_fails_the_release_seal_gate() -> Result<()> {
         let manifest = read_manifest(&fixture_directory())?;
         assert!(manifest.final_release.is_none());
         assert!(
@@ -1029,10 +1152,13 @@ mod tests {
         let final_core = TempDir::new()?;
         for copy in SOURCE_COPIES
             .iter()
-            .filter(|copy| copy.source_id == "core-2026-07-28-rc")
+            .filter(|copy| copy.source_id == "core-2026-07-28-candidate")
         {
             let locked_path = locked.path().join(copy.source_path);
-            let final_path = final_core.path().join(copy.source_path);
+            let final_path = final_core.path().join(
+                copy.final_source_path
+                    .expect("candidate core input has a final path"),
+            );
             fs::create_dir_all(locked_path.parent().expect("source has parent"))?;
             fs::create_dir_all(final_path.parent().expect("source has parent"))?;
             fs::write(&locked_path, copy.source_path.as_bytes())?;
@@ -1040,7 +1166,7 @@ mod tests {
         }
         verify_final_core_inputs(locked.path(), final_core.path())?;
         fs::write(
-            final_core.path().join("schema/draft/schema.json"),
+            final_core.path().join("schema/2026-07-28/schema.json"),
             b"normative delta",
         )?;
         assert!(

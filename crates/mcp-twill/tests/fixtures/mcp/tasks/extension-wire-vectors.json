@@ -168,7 +168,7 @@
       },
       "response": {
         "error": {
-          "code": -32003,
+          "code": -32021,
           "data": {
             "requiredCapabilities": {
               "extensions": {

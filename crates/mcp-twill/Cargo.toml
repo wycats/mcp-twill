@@ -16,6 +16,7 @@ exclude = ["tests/host_adapters.rs", "tests/support/vbl_host.rs"]
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 http = "1"

@@ -3,120 +3,212 @@
   "files": [
     {
       "derivation": "sourceCopy",
-      "path": "core-schema.json",
-      "sha256": "bd19a7a9e6ee3a7394aec816cd0660a0156864e828a348129baccdb83457d234",
-      "sourceId": "core-2026-07-28-rc",
-      "sourcePaths": [
-        "schema/draft/schema.json"
+      "path": "core-basic.mdx",
+      "sha256": "24014ae75bed0fbb28ef42612cd86d8165cedd802c2e6417f6bc85e768697e16",
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/draft/basic/index.mdx"
+          ],
+          "sourceId": "core-2026-07-28-candidate"
+        }
       ]
     },
     {
       "derivation": "sourceCopy",
-      "path": "core-transports.mdx",
-      "sha256": "27dd863605075471c7aad76334646c7470aa6dd6b7671fdaf3d42847d2336d18",
-      "sourceId": "core-2026-07-28-rc",
-      "sourcePaths": [
-        "docs/specification/draft/basic/transports.mdx"
+      "path": "core-schema.json",
+      "sha256": "9281c4890630e2d1e61792fa23b4084c4ea360cd58519610cd050545ab7b8708",
+      "sources": [
+        {
+          "paths": [
+            "schema/draft/schema.json"
+          ],
+          "sourceId": "core-2026-07-28-candidate"
+        }
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "core-stdio.mdx",
+      "sha256": "0e2b9315a1adc04107539ab9eed6591c9ac1861e543b2127f4716cffec22ced1",
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/draft/basic/transports/stdio.mdx"
+          ],
+          "sourceId": "core-2026-07-28-candidate"
+        }
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "core-streamable-http.mdx",
+      "sha256": "dd6a6255abab9207007d3aca525e5ee235fd6f66a22c240698831b3cc61d9034",
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/draft/basic/transports/streamable-http.mdx"
+          ],
+          "sourceId": "core-2026-07-28-candidate"
+        }
+      ]
+    },
+    {
+      "derivation": "sourceCopy",
+      "path": "core-transports-index.mdx",
+      "sha256": "23ef5932869304b6f6d18ebe7e50ab98b2cecdece4ea5c2cd4320b15ccba937d",
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/draft/basic/transports/index.mdx"
+          ],
+          "sourceId": "core-2026-07-28-candidate"
+        }
       ]
     },
     {
       "derivation": "reviewedVector",
       "path": "core-wire-vectors.json",
-      "sha256": "16be967599374c9561abc0fa1631807c27060f51fcba8a72ddcfefb25bfb4dfd",
-      "sourceId": "core-2026-07-28-rc",
-      "sourcePaths": [
-        "docs/specification/draft/basic/transports.mdx",
-        "schema/draft/schema.json"
+      "sha256": "01f1a8a3681551084f4b19d72de9899f1a17049af2109f02935da669b02f0009",
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/draft/basic/index.mdx",
+            "docs/specification/draft/basic/transports/index.mdx",
+            "docs/specification/draft/basic/transports/streamable-http.mdx",
+            "schema/draft/schema.json"
+          ],
+          "sourceId": "core-2026-07-28-candidate"
+        }
       ]
     },
     {
       "derivation": "sourceCopy",
       "path": "extension-schema.json",
       "sha256": "b17cb4a2534379c214b17770bd5d3d54f69fde16a953bfb542c58235a61274bb",
-      "sourceId": "tasks-extension",
-      "sourcePaths": [
-        "schema/draft/schema.json"
+      "sources": [
+        {
+          "paths": [
+            "schema/draft/schema.json"
+          ],
+          "sourceId": "tasks-extension"
+        }
       ]
     },
     {
       "derivation": "sourceCopy",
       "path": "extension-sep-2663.md",
       "sha256": "36a3ff0ab2d56e625425a29cb269bbf7d96535e9c45a156b2691d6aa96fb82b7",
-      "sourceId": "tasks-extension",
-      "sourcePaths": [
-        "seps/2663-tasks-extension.md"
+      "sources": [
+        {
+          "paths": [
+            "seps/2663-tasks-extension.md"
+          ],
+          "sourceId": "tasks-extension"
+        }
       ]
     },
     {
       "derivation": "sourceCopy",
       "path": "extension-tasks.md",
       "sha256": "ae908a883d8489f1ebfee47496dd8818f182b467a4196c17df98b40a3d8b2b11",
-      "sourceId": "tasks-extension",
-      "sourcePaths": [
-        "specification/draft/tasks.md"
+      "sources": [
+        {
+          "paths": [
+            "specification/draft/tasks.md"
+          ],
+          "sourceId": "tasks-extension"
+        }
       ]
     },
     {
       "derivation": "reviewedVector",
       "path": "extension-wire-vectors.json",
-      "sha256": "f3627cda036dc76f76ba1e530f35b6b21d79dad93382f7e1ba02ef03431aaef1",
-      "sourceId": "tasks-extension",
-      "sourcePaths": [
-        "schema/draft/schema.json",
-        "seps/2663-tasks-extension.md",
-        "specification/draft/tasks.md"
+      "sha256": "a8ffea4e8f3fc369f776d84e8b096e84c117d4b44f32aa78e3ee71325fab8a2c",
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/draft/basic/index.mdx",
+            "schema/draft/schema.json"
+          ],
+          "sourceId": "core-2026-07-28-candidate"
+        },
+        {
+          "paths": [
+            "schema/draft/schema.json",
+            "seps/2663-tasks-extension.md",
+            "specification/draft/tasks.md"
+          ],
+          "sourceId": "tasks-extension"
+        }
       ]
     },
     {
       "derivation": "sourceCopy",
       "path": "legacy-progress.mdx",
       "sha256": "8de8c02945544dde615be30156638c2357125795640d5aef3041898032a0e431",
-      "sourceId": "legacy-2025-11-25",
-      "sourcePaths": [
-        "docs/specification/2025-11-25/basic/utilities/progress.mdx"
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/2025-11-25/basic/utilities/progress.mdx"
+          ],
+          "sourceId": "legacy-2025-11-25"
+        }
       ]
     },
     {
       "derivation": "sourceCopy",
       "path": "legacy-schema.json",
       "sha256": "1ffe4c5577974012f5fa02af14ea88df4b7146679df1abaaad497c8d9230ca8a",
-      "sourceId": "legacy-2025-11-25",
-      "sourcePaths": [
-        "schema/2025-11-25/schema.json"
+      "sources": [
+        {
+          "paths": [
+            "schema/2025-11-25/schema.json"
+          ],
+          "sourceId": "legacy-2025-11-25"
+        }
       ]
     },
     {
       "derivation": "sourceCopy",
       "path": "legacy-tasks.mdx",
       "sha256": "6afbdf560a2f0740f6f168b40b3f36a9bee522c4d3c6037373fc48b54aa8e462",
-      "sourceId": "legacy-2025-11-25",
-      "sourcePaths": [
-        "docs/specification/2025-11-25/basic/utilities/tasks.mdx"
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/2025-11-25/basic/utilities/tasks.mdx"
+          ],
+          "sourceId": "legacy-2025-11-25"
+        }
       ]
     },
     {
       "derivation": "reviewedVector",
       "path": "legacy-wire-vectors.json",
       "sha256": "2e5370d96187b0e2b317bd20cfe8abfd343fdee6364d14c560c4c9a650c4dd21",
-      "sourceId": "legacy-2025-11-25",
-      "sourcePaths": [
-        "docs/specification/2025-11-25/basic/utilities/tasks.mdx",
-        "schema/2025-11-25/schema.json"
+      "sources": [
+        {
+          "paths": [
+            "docs/specification/2025-11-25/basic/utilities/tasks.mdx",
+            "schema/2025-11-25/schema.json"
+          ],
+          "sourceId": "legacy-2025-11-25"
+        }
       ]
     }
   ],
-  "formatVersion": 1,
+  "formatVersion": 2,
   "importer": {
     "command": "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> [--final-ref 2026-07-28]",
-    "version": 1
+    "version": 2
   },
   "protocolRevision": "2026-07-28",
   "sources": [
     {
-      "commit": "9d700ed62dcf86cb77475c9b81930611a9182f46",
-      "id": "core-2026-07-28-rc",
+      "commit": "31eefec6b979b09ab2092490e2271c0eb38ccd38",
+      "id": "core-2026-07-28-candidate",
       "repository": "https://github.com/modelcontextprotocol/modelcontextprotocol",
-      "revision": "2026-07-28-RC"
+      "revision": "2026-07-28-pre-tag"
     },
     {
       "commit": "38c84e9f93ad191d9eb26d92b945d17bd0efcaf3",
@@ -127,7 +219,7 @@
     {
       "commit": "8966bea9c4f4e6d71060cc8284a539086e9e234f",
       "id": "tasks-extension",
-      "repository": "https://github.com/modelcontextprotocol/experimental-ext-tasks",
+      "repository": "https://github.com/modelcontextprotocol/ext-tasks",
       "revision": "SEP-2663-final"
     }
   ]

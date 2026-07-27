@@ -2628,13 +2628,16 @@ impl CliMcpServer {
             "resultType": "complete",
             "supportedVersions": [McpProtocolTarget::V2026_07_28.as_str()],
             "capabilities": capabilities,
-            "serverInfo": {
-                "name": self.registry.server_name(),
-                "title": "MCP Twill",
-                "version": env!("CARGO_PKG_VERSION"),
-                "description": self.registry.server_description(),
-            },
             "instructions": instructions,
+        })
+    }
+
+    pub(crate) fn stateless_server_info(&self) -> Value {
+        json!({
+            "name": self.registry.server_name(),
+            "title": "MCP Twill",
+            "version": env!("CARGO_PKG_VERSION"),
+            "description": self.registry.server_description(),
         })
     }
 
