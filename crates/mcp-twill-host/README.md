@@ -15,7 +15,7 @@ not re-author schemas or application behavior.
 
 ```toml
 [dependencies]
-mcp-twill-host = "0.1.0"
+mcp-twill-host = "0.1.1"
 ```
 
 The package requires Rust 1.88 or newer. API documentation is available on

@@ -14,14 +14,15 @@ use rmcp::{
     Peer, RoleServer, ServerHandler,
     handler::server::tool::schema_for_type,
     model::{
-        CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, Content,
-        CreateTaskResult, CustomResult, ErrorCode, Extensions, GetPromptRequestParams,
+        CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, ClientResult,
+        Content, CreateTaskResult, CustomResult, ErrorCode, Extensions, GetPromptRequestParams,
         GetPromptResult, GetTaskInfoParams, GetTaskPayloadResult, GetTaskResult,
         GetTaskResultParams, Implementation, JsonRpcMessage, ListPromptsResult,
-        ListResourcesResult, ListTasksResult, ListToolsResult, Meta, PaginatedRequestParams,
-        ProgressNotificationParam, ProtocolVersion, RawResource, ReadResourceRequestParams,
-        ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, ServerResult, Task,
-        TaskStatus, TaskSupport, Tool, ToolAnnotations, ToolExecution,
+        ListResourcesResult, ListRootsRequest, ListTasksResult, ListToolsResult, Meta,
+        PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, RawResource,
+        ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
+        ServerInfo, ServerRequest, ServerResult, Task, TaskStatus, TaskSupport, Tool,
+        ToolAnnotations, ToolExecution,
     },
     service::{RequestContext, RunningService, ServerInitializeError, TxJsonRpcMessage},
     transport::{IntoTransport, Transport},
@@ -744,8 +745,13 @@ impl CliMcpServer {
         let negotiated = context
             .peer
             .peer_info()
-            .map(|info| info.protocol_version.as_str());
-        validate_protocol_observations(self.protocol_version(), request, transport, negotiated)
+            .map(|info| info.protocol_version.clone());
+        validate_protocol_observations(
+            self.protocol_version(),
+            request,
+            transport,
+            negotiated.as_ref().map(|version| version.as_str()),
+        )
     }
 
     fn ensure_tasks_supported(&self) -> std::result::Result<(), rmcp::ErrorData> {
@@ -2084,9 +2090,16 @@ impl CliMcpServer {
             // The client's roots are the access boundary. If listing them
             // fails, treat the observation as present-and-empty: requirements
             // stay unresolved rather than widening to declared roots.
-            let roots = match client.list_roots().await {
-                Ok(result) => McpRootsObservation::from(result),
+            let roots = match client
+                .send_request(ServerRequest::ListRootsRequest(ListRootsRequest {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                }))
+                .await
+            {
+                Ok(ClientResult::ListRootsResult(result)) => McpRootsObservation::from(result),
                 Err(_) => McpRootsObservation::new(Vec::new()),
+                Ok(_) => McpRootsObservation::new(Vec::new()),
             };
             observations = observations.with_mcp_roots(roots);
         }

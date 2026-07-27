@@ -25,7 +25,7 @@ cargo xtask verify-release-archives
 ```
 
 Run `npm ci && npm test` in
-`target/package/release-verification/mcp-twill-host-0.1.0/tests/typescript`
+`target/package/release-verification/mcp-twill-host-0.1.1/tests/typescript`
 after archive verification. The test generates and validates both TypeScript
 transport variants from the packaged host crate.
 
@@ -50,6 +50,6 @@ Create a disposable project outside this repository that depends only on the
 three registry versions. Compile a minimal resolver use, Twill server, and host
 profile without path patches. Record the resolved package sources and versions.
 
-After the registry-only consumer check passes, create the annotated `v0.1.0`
+After the registry-only consumer check passes, create the annotated `v0.1.1`
 tag at the published commit and a GitHub release containing the three archive
 SHA-256 values. Configure crates.io trusted publishing for subsequent releases.

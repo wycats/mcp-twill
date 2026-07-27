@@ -10,7 +10,7 @@ use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = "0.1.1";
 const MAX_CRATE_BYTES: u64 = 10 * 1024 * 1024;
 
 pub fn verify_archives() -> Result<()> {
@@ -40,9 +40,9 @@ pub fn verify_archives() -> Result<()> {
     patch_dependency(
         &core.join("Cargo.toml"),
         "mcp-workspace-resolver",
-        "../mcp-workspace-resolver-0.1.0",
+        "../mcp-workspace-resolver-0.1.1",
     )?;
-    patch_dependency(&host.join("Cargo.toml"), "mcp-twill", "../mcp-twill-0.1.0")?;
+    patch_dependency(&host.join("Cargo.toml"), "mcp-twill", "../mcp-twill-0.1.1")?;
 
     cargo_test(&resolver, &["--all-features", "--all-targets"])?;
     cargo_test(&core, &["--all-targets"])?;
