@@ -192,7 +192,30 @@ fn core_vectors_freeze_the_pre_tag_final_contract() {
         "mcp-twill-fixture-server"
     );
     assert_eq!(
+        error("optional-client-info")["headers"],
+        json!({
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/list"
+        })
+    );
+    assert_eq!(
         error("base64-tool-routing")["headers"]["Mcp-Name"],
         "=?base64?cmVwb3J0X2dlbmVyYXRl?="
     );
+}
+
+#[test]
+fn successful_extension_vectors_include_server_identity_metadata() {
+    let extension = fixture("extension-wire-vectors.json");
+    for case in extension["cases"].as_array().expect("extension cases") {
+        let Some(result) = case["response"].get("result") else {
+            continue;
+        };
+        assert_eq!(
+            result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            "mcp-twill-fixture-server",
+            "{}",
+            case["name"]
+        );
+    }
 }

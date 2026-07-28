@@ -1142,7 +1142,28 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+        let mut discovery_keys = value["result"]
+            .as_object()
+            .expect("discovery result")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        discovery_keys.sort_unstable();
+        assert_eq!(
+            discovery_keys,
+            vec![
+                "_meta",
+                "cacheScope",
+                "capabilities",
+                "instructions",
+                "resultType",
+                "supportedVersions",
+                "ttlMs",
+            ]
+        );
         assert_eq!(value["result"]["resultType"], "complete");
+        assert_eq!(value["result"]["cacheScope"], "public");
+        assert_eq!(value["result"]["ttlMs"], 0);
         assert_eq!(
             value["result"]["supportedVersions"],
             json!([PROTOCOL_VERSION])

@@ -3,7 +3,7 @@
     {
       "bytes": 1153401,
       "path": "bundle.json",
-      "sha256": "7e930a4ff3ec27431ece186bd501b1b6619eb96f4446c38e1a402d0c16429083"
+      "sha256": "0478dcc83870a80fd6b88481af5b086ac205db09fc95c5252f116bdcb6afc608"
     },
     {
       "bytes": 16039,
@@ -76,7 +76,7 @@
     {
       "path": "crates/mcp-twill/src/rmcp_adapter.rs",
       "provenance": "Repository source used by the Twill evidence generator.",
-      "sha256": "5c19de554886f8a49c7b9ed680d44a7f29c16d89f4731d285b1e525fe1fe734c"
+      "sha256": "497b8d0153178d29a12ce7edeb677597059a19c0bdc672333279e0298bd02a0f"
     },
     {
       "path": "crates/mcp-twill/tests/fixtures/vbl/v0.4.9/manifest.json",

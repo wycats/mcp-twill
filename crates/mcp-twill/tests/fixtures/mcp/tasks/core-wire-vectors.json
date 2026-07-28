@@ -57,6 +57,10 @@
       }
     },
     {
+      "headers": {
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/list"
+      },
       "httpStatus": 200,
       "name": "optional-client-info",
       "request": {

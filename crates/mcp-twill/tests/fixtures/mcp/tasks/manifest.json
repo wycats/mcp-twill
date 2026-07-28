@@ -69,7 +69,7 @@
     {
       "derivation": "reviewedVector",
       "path": "core-wire-vectors.json",
-      "sha256": "01f1a8a3681551084f4b19d72de9899f1a17049af2109f02935da669b02f0009",
+      "sha256": "be38390865e17c9a17690f5a783cb844db6e16335f8f1128555f521bf11d39e8",
       "sources": [
         {
           "paths": [
@@ -124,7 +124,7 @@
     {
       "derivation": "reviewedVector",
       "path": "extension-wire-vectors.json",
-      "sha256": "a8ffea4e8f3fc369f776d84e8b096e84c117d4b44f32aa78e3ee71325fab8a2c",
+      "sha256": "027a9ccd4171fe0ca64b3df2736e86630def8b7dce56e0dc73ffb9c5030a24d1",
       "sources": [
         {
           "paths": [

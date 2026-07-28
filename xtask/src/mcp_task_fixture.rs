@@ -23,7 +23,7 @@ pub const FINAL_RELEASE_TAG: &str = "2026-07-28";
 pub const IMPORT_COMMAND: &str = "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> [--final-ref 2026-07-28]";
 
 const EXPECTED_MANIFEST_SHA256: &str =
-    "a58c94ed2ce7f435e14aa26efc4cde8dae5580e5dfbdf5e528c7cc0609666f18";
+    "e7ef333365aa32241ce3ee6f80907c54b341db2528f7fd2e4eb58b706a989db9";
 const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = None;
 
 const SOURCE_COPIES: [SourceCopy; 11] = [
@@ -908,6 +908,15 @@ fn request_metadata(with_tasks_extension: bool) -> Value {
     })
 }
 
+fn response_metadata() -> Value {
+    json!({
+        "io.modelcontextprotocol/serverInfo": {
+            "name": "mcp-twill-fixture-server",
+            "version": "1.0.0"
+        }
+    })
+}
+
 fn core_vectors() -> Value {
     json!({
         "protocolRevision": PROTOCOL_REVISION,
@@ -927,8 +936,9 @@ fn core_vectors() -> Value {
             {
                 "name": "optional-client-info",
                 "httpStatus": 200,
+                "headers": {"MCP-Protocol-Version":PROTOCOL_REVISION,"Mcp-Method":"tools/list"},
                 "request": {"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/protocolVersion":PROTOCOL_REVISION}}},
-                "response": {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-twill-fixture-server","version":"1.0.0"}}}}
+                "response": {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","_meta":response_metadata()}}
             },
             {
                 "name": "header-mismatch",
@@ -956,22 +966,22 @@ fn extension_vectors() -> Value {
             {
                 "name": "server-directed-task",
                 "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":request_metadata(true),"name":"report_generate","arguments":{}}},
-                "response": {"jsonrpc":"2.0","id":1,"result":{"resultType":"task","taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttlMs":60000,"pollIntervalMs":1000}}
+                "response": {"jsonrpc":"2.0","id":1,"result":{"resultType":"task","taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttlMs":60000,"pollIntervalMs":1000,"_meta":response_metadata()}}
             },
             {
                 "name": "completed-tool-error-is-completed",
                 "request": {"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"_meta":request_metadata(true),"taskId":"task-example"}},
-                "response": {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttlMs":60000,"pollIntervalMs":1000,"result":{"resultType":"complete","content":[{"type":"text","text":"application refusal"}],"isError":true}}}
+                "response": {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttlMs":60000,"pollIntervalMs":1000,"result":{"resultType":"complete","content":[{"type":"text","text":"application refusal"}],"isError":true},"_meta":response_metadata()}}
             },
             {
                 "name": "update-acknowledgement",
                 "request": {"jsonrpc":"2.0","id":3,"method":"tasks/update","params":{"_meta":request_metadata(true),"taskId":"task-example","inputResponses":{}}},
-                "response": {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete"}}
+                "response": {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","_meta":response_metadata()}}
             },
             {
                 "name": "cooperative-cancel-acknowledgement",
                 "request": {"jsonrpc":"2.0","id":4,"method":"tasks/cancel","params":{"_meta":request_metadata(true),"taskId":"task-example"}},
-                "response": {"jsonrpc":"2.0","id":4,"result":{"resultType":"complete"}}
+                "response": {"jsonrpc":"2.0","id":4,"result":{"resultType":"complete","_meta":response_metadata()}}
             },
             {
                 "name": "missing-required-capability",

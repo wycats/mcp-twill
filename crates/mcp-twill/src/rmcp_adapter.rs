@@ -2626,6 +2626,8 @@ impl CliMcpServer {
         };
         json!({
             "resultType": "complete",
+            "cacheScope": "public",
+            "ttlMs": 0,
             "supportedVersions": [McpProtocolTarget::V2026_07_28.as_str()],
             "capabilities": capabilities,
             "instructions": instructions,
