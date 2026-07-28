@@ -20,7 +20,8 @@ use crate::{CliMcpServer, FrameworkError};
 use rmcp::model::Extensions;
 
 const PROTOCOL_VERSION: &str = "2026-07-28";
-const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = None;
+const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> =
+    Some("5f5440bb26a62e2cf3440b92da5a667efa03b267");
 const HEADER_MISMATCH: i32 = -32020;
 const MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021;
 const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
@@ -962,6 +963,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn explicit_unsealed_evidence_still_fails_before_serving() {
+        let registry = registry(TaskSupportSpec::Optional);
+        let surface = NativeToolSurface::builder("tasks")
+            .framework_help(FrameworkHelpProjection::Omitted)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .task_delivery(TaskDeliveryDecl::tasks_extension(
+                ExtensionOptionalPolicy::DeferredWhenAvailable,
+                60_000,
+            ))
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        let server = CliMcpServer::builder(registry)
+            .surface(surface)
+            .task_runtime(
+                InMemoryTaskStore::server_instance(),
+                TaskAccessPolicy::CapabilityId,
+            )
+            .build()
+            .unwrap();
+        assert!(matches!(
+            server.into_stateless_service_with_evidence(false),
+            Err(FrameworkError::ProtocolReleaseUnsealed)
+        ));
+    }
+
     fn service(support: TaskSupportSpec) -> StatelessMcpHttpService {
         service_from_registry(registry(support))
     }
@@ -1281,6 +1309,21 @@ mod tests {
                     "unknown/method",
                     None,
                     json!({ "_meta": meta(false) }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], -32601);
+
+        let (status, value) = response_value(
+            service
+                .call(request(
+                    6,
+                    "subscriptions/listen",
+                    None,
+                    json!({ "_meta": meta(true) }),
                 ))
                 .await
                 .unwrap(),

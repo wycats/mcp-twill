@@ -12,21 +12,17 @@ fn fixture(name: &str) -> Value {
 }
 
 #[test]
-fn manifest_pins_each_external_authority_and_allows_only_a_canonical_release_seal() {
+fn manifest_pins_each_external_authority_and_the_canonical_release_seal() {
     let manifest = fixture("manifest.json");
     assert_eq!(manifest["formatVersion"], 2);
     assert_eq!(manifest["protocolRevision"], "2026-07-28");
     assert_eq!(manifest["extensionId"], "io.modelcontextprotocol/tasks");
-    if let Some(release) = manifest.get("finalRelease") {
-        assert_eq!(release["tag"], "2026-07-28");
-        let commit = release["peeledCommit"].as_str().expect("release peel");
-        assert_eq!(commit.len(), 40);
-        assert!(
-            commit
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        );
-    }
+    let release = manifest.get("finalRelease").expect("final release seal");
+    assert_eq!(release["tag"], "2026-07-28");
+    assert_eq!(
+        release["peeledCommit"],
+        "5f5440bb26a62e2cf3440b92da5a667efa03b267"
+    );
 
     let sources = manifest["sources"]
         .as_array()
@@ -47,6 +43,10 @@ fn manifest_pins_each_external_authority_and_allows_only_a_canonical_release_sea
                 "31eefec6b979b09ab2092490e2271c0eb38ccd38"
             ),
             (
+                "core-2026-07-28-final",
+                "5f5440bb26a62e2cf3440b92da5a667efa03b267"
+            ),
+            (
                 "legacy-2025-11-25",
                 "38c84e9f93ad191d9eb26d92b945d17bd0efcaf3"
             ),
@@ -55,6 +55,50 @@ fn manifest_pins_each_external_authority_and_allows_only_a_canonical_release_sea
                 "8966bea9c4f4e6d71060cc8284a539086e9e234f"
             ),
         ])
+    );
+}
+
+#[test]
+fn final_core_reconciliation_is_exact_and_contract_neutral() {
+    let reconciliation = fixture("core-final-reconciliation.json");
+    assert_eq!(
+        reconciliation["candidateCommit"],
+        "31eefec6b979b09ab2092490e2271c0eb38ccd38"
+    );
+    assert_eq!(
+        reconciliation["finalRelease"],
+        json!({
+            "tag": "2026-07-28",
+            "peeledCommit": "5f5440bb26a62e2cf3440b92da5a667efa03b267"
+        })
+    );
+    let changes = reconciliation["changes"]
+        .as_array()
+        .expect("reviewed final changes");
+    assert_eq!(changes.len(), 5);
+    assert_eq!(
+        changes
+            .iter()
+            .filter(|change| change["classification"] == "versionedLinksOnly")
+            .count(),
+        4
+    );
+    assert!(changes.iter().any(|change| {
+        change["classification"] == "subscriptionsListenEnvelopeAndMetaRename"
+            && change["candidatePath"] == "schema/draft/schema.json"
+            && change["finalPath"] == "schema/2026-07-28/schema.json"
+    }));
+    assert_eq!(
+        reconciliation["twillContractImpact"],
+        json!({
+            "publicApi": "unchanged",
+            "protocolRuntime": "unchanged",
+            "servingGate": "sealed",
+            "surfaceIdentity": "unchanged",
+            "taskDelivery": "pollingOnly",
+            "taskRuntimeContract": "unchanged",
+            "subscriptionsListen": "unsupportedMethod"
+        })
     );
 }
 
@@ -161,7 +205,7 @@ fn current_protocol_vectors_carry_complete_request_local_metadata() {
 }
 
 #[test]
-fn core_vectors_freeze_the_pre_tag_final_contract() {
+fn core_vectors_freeze_the_final_contract() {
     let core = fixture("core-wire-vectors.json");
     let cases = core["cases"].as_array().expect("core cases");
     let error = |name: &str| {

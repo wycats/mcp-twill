@@ -14,99 +14,113 @@ use tempfile::TempDir;
 
 pub const LEGACY_COMMIT: &str = "38c84e9f93ad191d9eb26d92b945d17bd0efcaf3";
 pub const CORE_CANDIDATE_COMMIT: &str = "31eefec6b979b09ab2092490e2271c0eb38ccd38";
+pub const FINAL_RELEASE_COMMIT: &str = "5f5440bb26a62e2cf3440b92da5a667efa03b267";
 pub const EXTENSION_COMMIT: &str = "8966bea9c4f4e6d71060cc8284a539086e9e234f";
 pub const CORE_REPOSITORY: &str = "https://github.com/modelcontextprotocol/modelcontextprotocol";
 pub const EXTENSION_REPOSITORY: &str = "https://github.com/modelcontextprotocol/ext-tasks";
 pub const PROTOCOL_REVISION: &str = "2026-07-28";
 pub const EXTENSION_ID: &str = "io.modelcontextprotocol/tasks";
 pub const FINAL_RELEASE_TAG: &str = "2026-07-28";
-pub const IMPORT_COMMAND: &str = "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> [--final-ref 2026-07-28]";
+pub const IMPORT_COMMAND: &str = "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> --final-ref 2026-07-28";
 
 const EXPECTED_MANIFEST_SHA256: &str =
-    "e7ef333365aa32241ce3ee6f80907c54b341db2528f7fd2e4eb58b706a989db9";
-const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = None;
+    "b50014b829c65165622293468b668435ab1464ec370ec0dbe7422999e5a1806f";
+const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = Some(FINAL_RELEASE_COMMIT);
 
 const SOURCE_COPIES: [SourceCopy; 11] = [
     SourceCopy {
         destination: "core-schema.json",
-        source_id: "core-2026-07-28-candidate",
-        source_path: "schema/draft/schema.json",
-        final_source_path: Some("schema/2026-07-28/schema.json"),
+        source_id: "core-2026-07-28-final",
+        source_path: "schema/2026-07-28/schema.json",
     },
     SourceCopy {
         destination: "core-basic.mdx",
-        source_id: "core-2026-07-28-candidate",
-        source_path: "docs/specification/draft/basic/index.mdx",
-        final_source_path: Some("docs/specification/2026-07-28/basic/index.mdx"),
+        source_id: "core-2026-07-28-final",
+        source_path: "docs/specification/2026-07-28/basic/index.mdx",
     },
     SourceCopy {
         destination: "core-transports-index.mdx",
-        source_id: "core-2026-07-28-candidate",
-        source_path: "docs/specification/draft/basic/transports/index.mdx",
-        final_source_path: Some("docs/specification/2026-07-28/basic/transports/index.mdx"),
+        source_id: "core-2026-07-28-final",
+        source_path: "docs/specification/2026-07-28/basic/transports/index.mdx",
     },
     SourceCopy {
         destination: "core-stdio.mdx",
-        source_id: "core-2026-07-28-candidate",
-        source_path: "docs/specification/draft/basic/transports/stdio.mdx",
-        final_source_path: Some("docs/specification/2026-07-28/basic/transports/stdio.mdx"),
+        source_id: "core-2026-07-28-final",
+        source_path: "docs/specification/2026-07-28/basic/transports/stdio.mdx",
     },
     SourceCopy {
         destination: "core-streamable-http.mdx",
-        source_id: "core-2026-07-28-candidate",
-        source_path: "docs/specification/draft/basic/transports/streamable-http.mdx",
-        final_source_path: Some(
-            "docs/specification/2026-07-28/basic/transports/streamable-http.mdx",
-        ),
+        source_id: "core-2026-07-28-final",
+        source_path: "docs/specification/2026-07-28/basic/transports/streamable-http.mdx",
     },
     SourceCopy {
         destination: "extension-schema.json",
         source_id: "tasks-extension",
         source_path: "schema/draft/schema.json",
-        final_source_path: None,
     },
     SourceCopy {
         destination: "extension-sep-2663.md",
         source_id: "tasks-extension",
         source_path: "seps/2663-tasks-extension.md",
-        final_source_path: None,
     },
     SourceCopy {
         destination: "extension-tasks.md",
         source_id: "tasks-extension",
         source_path: "specification/draft/tasks.md",
-        final_source_path: None,
     },
     SourceCopy {
         destination: "legacy-progress.mdx",
         source_id: "legacy-2025-11-25",
         source_path: "docs/specification/2025-11-25/basic/utilities/progress.mdx",
-        final_source_path: None,
     },
     SourceCopy {
         destination: "legacy-schema.json",
         source_id: "legacy-2025-11-25",
         source_path: "schema/2025-11-25/schema.json",
-        final_source_path: None,
     },
     SourceCopy {
         destination: "legacy-tasks.mdx",
         source_id: "legacy-2025-11-25",
         source_path: "docs/specification/2025-11-25/basic/utilities/tasks.mdx",
-        final_source_path: None,
     },
 ];
 
-const REVIEWED_VECTORS: [ReviewedVector; 3] = [
+const REVIEWED_VECTORS: [ReviewedVector; 4] = [
+    ReviewedVector {
+        destination: "core-final-reconciliation.json",
+        sources: &[
+            ReviewedSource {
+                source_id: "core-2026-07-28-candidate",
+                source_paths: &[
+                    "docs/specification/draft/basic/index.mdx",
+                    "docs/specification/draft/basic/transports/index.mdx",
+                    "docs/specification/draft/basic/transports/stdio.mdx",
+                    "docs/specification/draft/basic/transports/streamable-http.mdx",
+                    "schema/draft/schema.json",
+                ],
+            },
+            ReviewedSource {
+                source_id: "core-2026-07-28-final",
+                source_paths: &[
+                    "docs/specification/2026-07-28/basic/index.mdx",
+                    "docs/specification/2026-07-28/basic/transports/index.mdx",
+                    "docs/specification/2026-07-28/basic/transports/stdio.mdx",
+                    "docs/specification/2026-07-28/basic/transports/streamable-http.mdx",
+                    "schema/2026-07-28/schema.json",
+                ],
+            },
+        ],
+        value: core_final_reconciliation,
+    },
     ReviewedVector {
         destination: "core-wire-vectors.json",
         sources: &[ReviewedSource {
-            source_id: "core-2026-07-28-candidate",
+            source_id: "core-2026-07-28-final",
             source_paths: &[
-                "docs/specification/draft/basic/index.mdx",
-                "docs/specification/draft/basic/transports/index.mdx",
-                "docs/specification/draft/basic/transports/streamable-http.mdx",
-                "schema/draft/schema.json",
+                "docs/specification/2026-07-28/basic/index.mdx",
+                "docs/specification/2026-07-28/basic/transports/index.mdx",
+                "docs/specification/2026-07-28/basic/transports/streamable-http.mdx",
+                "schema/2026-07-28/schema.json",
             ],
         }],
         value: core_vectors,
@@ -115,10 +129,10 @@ const REVIEWED_VECTORS: [ReviewedVector; 3] = [
         destination: "extension-wire-vectors.json",
         sources: &[
             ReviewedSource {
-                source_id: "core-2026-07-28-candidate",
+                source_id: "core-2026-07-28-final",
                 source_paths: &[
-                    "docs/specification/draft/basic/index.mdx",
-                    "schema/draft/schema.json",
+                    "docs/specification/2026-07-28/basic/index.mdx",
+                    "schema/2026-07-28/schema.json",
                 ],
             },
             ReviewedSource {
@@ -149,8 +163,53 @@ struct SourceCopy {
     destination: &'static str,
     source_id: &'static str,
     source_path: &'static str,
-    final_source_path: Option<&'static str>,
 }
+
+struct CoreReconciliation {
+    candidate_path: &'static str,
+    final_path: &'static str,
+    candidate_sha256: &'static str,
+    final_sha256: &'static str,
+    classification: &'static str,
+}
+
+const CORE_RECONCILIATIONS: [CoreReconciliation; 5] = [
+    CoreReconciliation {
+        candidate_path: "docs/specification/draft/basic/index.mdx",
+        final_path: "docs/specification/2026-07-28/basic/index.mdx",
+        candidate_sha256: "24014ae75bed0fbb28ef42612cd86d8165cedd802c2e6417f6bc85e768697e16",
+        final_sha256: "ce6b16e0b22544bb7efc201b09906b5f3efb6d55a83881766b36b8a71cfbeb95",
+        classification: "versionedLinksOnly",
+    },
+    CoreReconciliation {
+        candidate_path: "docs/specification/draft/basic/transports/index.mdx",
+        final_path: "docs/specification/2026-07-28/basic/transports/index.mdx",
+        candidate_sha256: "23ef5932869304b6f6d18ebe7e50ab98b2cecdece4ea5c2cd4320b15ccba937d",
+        final_sha256: "59cc01897f5efadc1d412007a47df4f19b30725cdeaf264bbaf25e6b6b0aeb51",
+        classification: "versionedLinksOnly",
+    },
+    CoreReconciliation {
+        candidate_path: "docs/specification/draft/basic/transports/stdio.mdx",
+        final_path: "docs/specification/2026-07-28/basic/transports/stdio.mdx",
+        candidate_sha256: "0e2b9315a1adc04107539ab9eed6591c9ac1861e543b2127f4716cffec22ced1",
+        final_sha256: "6fd49766c40dc093d1f5993ab584bad0a06cbb496c2d3019c50f8fe3c8171e57",
+        classification: "versionedLinksOnly",
+    },
+    CoreReconciliation {
+        candidate_path: "docs/specification/draft/basic/transports/streamable-http.mdx",
+        final_path: "docs/specification/2026-07-28/basic/transports/streamable-http.mdx",
+        candidate_sha256: "dd6a6255abab9207007d3aca525e5ee235fd6f66a22c240698831b3cc61d9034",
+        final_sha256: "22574bf11e004068493787203ce92be1162107cad717bcb805a15780d4fa69c9",
+        classification: "versionedLinksOnly",
+    },
+    CoreReconciliation {
+        candidate_path: "schema/draft/schema.json",
+        final_path: "schema/2026-07-28/schema.json",
+        candidate_sha256: "9281c4890630e2d1e61792fa23b4084c4ea360cd58519610cd050545ab7b8708",
+        final_sha256: "ef70b61f99b6d2e5e3b46863822eab08dff6a45bedc7a08914e0e5b133f40203",
+        classification: "subscriptionsListenEnvelopeAndMetaRename",
+    },
+];
 
 struct ReviewedSource {
     source_id: &'static str,
@@ -230,30 +289,34 @@ pub fn import(
     ensure_repository(extension_repository, "extension")?;
     verify_commit(core_repository, LEGACY_COMMIT)?;
     verify_commit(core_repository, CORE_CANDIDATE_COMMIT)?;
+    verify_commit(core_repository, FINAL_RELEASE_COMMIT)?;
     verify_commit(extension_repository, EXTENSION_COMMIT)?;
 
+    let reference =
+        final_reference.context("the final MCP task fixture requires --final-ref 2026-07-28")?;
+    ensure!(
+        reference == FINAL_RELEASE_TAG,
+        "the final release accepts only --final-ref {FINAL_RELEASE_TAG}"
+    );
+    let peeled_commit = resolve_final_release_commit(core_repository, reference)?;
+    ensure!(
+        peeled_commit == FINAL_RELEASE_COMMIT,
+        "final release tag does not peel to the pinned commit"
+    );
+
     let legacy = archive(core_repository, LEGACY_COMMIT)?;
-    let core = archive(core_repository, CORE_CANDIDATE_COMMIT)?;
+    let candidate_core = archive(core_repository, CORE_CANDIDATE_COMMIT)?;
+    let final_core = archive(core_repository, FINAL_RELEASE_COMMIT)?;
     let extension = archive(extension_repository, EXTENSION_COMMIT)?;
-    let final_release = if let Some(reference) = final_reference {
-        ensure!(
-            reference == FINAL_RELEASE_TAG,
-            "the final release accepts only --final-ref {FINAL_RELEASE_TAG}"
-        );
-        let peeled_commit = resolve_final_release_commit(core_repository, reference)?;
-        let final_core = archive(core_repository, &peeled_commit)?;
-        verify_final_core_inputs(core.path(), final_core.path())?;
-        Some(FinalRelease {
-            tag: FINAL_RELEASE_TAG.to_string(),
-            peeled_commit,
-        })
-    } else {
-        None
+    verify_final_core_inputs(candidate_core.path(), final_core.path())?;
+    let final_release = FinalRelease {
+        tag: FINAL_RELEASE_TAG.to_string(),
+        peeled_commit,
     };
     let generated = TempDir::new().context("create generated task fixture")?;
     generate_bundle(
         legacy.path(),
-        core.path(),
+        final_core.path(),
         extension.path(),
         final_release,
         generated.path(),
@@ -265,7 +328,7 @@ pub fn import(
         validate_bundle(&destination)?;
         compare_directories(generated.path(), &destination)?;
         println!(
-            "MCP task fixture matches legacy {LEGACY_COMMIT}, core {CORE_CANDIDATE_COMMIT}, and extension {EXTENSION_COMMIT}"
+            "MCP task fixture matches legacy {LEGACY_COMMIT}, final core {FINAL_RELEASE_COMMIT}, and extension {EXTENSION_COMMIT}"
         );
     } else {
         replace_directory(generated.path(), &destination)?;
@@ -345,12 +408,12 @@ fn generate_bundle(
     legacy: &Path,
     core: &Path,
     extension: &Path,
-    final_release: Option<FinalRelease>,
+    final_release: FinalRelease,
     output: &Path,
 ) -> Result<()> {
     let archives = BTreeMap::from([
         ("legacy-2025-11-25", legacy),
-        ("core-2026-07-28-candidate", core),
+        ("core-2026-07-28-final", core),
         ("tasks-extension", extension),
     ]);
     let mut files = Vec::new();
@@ -404,7 +467,7 @@ fn generate_bundle(
             version: 2,
             command: IMPORT_COMMAND.to_string(),
         },
-        final_release,
+        final_release: Some(final_release),
         files,
     };
     fs::write(
@@ -415,25 +478,97 @@ fn generate_bundle(
     Ok(())
 }
 
-fn verify_final_core_inputs(locked_core: &Path, final_core: &Path) -> Result<()> {
-    for copy in SOURCE_COPIES
-        .iter()
-        .filter(|copy| copy.source_id == "core-2026-07-28-candidate")
-    {
-        let final_source_path = copy
-            .final_source_path
-            .expect("candidate core inputs have final source paths");
-        let locked = fs::read(locked_core.join(copy.source_path))
-            .with_context(|| format!("read locked core input {}", copy.source_path))?;
-        let final_bytes = fs::read(final_core.join(final_source_path))
-            .with_context(|| format!("read final core input {final_source_path}"))?;
+fn verify_final_core_inputs(candidate_core: &Path, final_core: &Path) -> Result<()> {
+    for reconciliation in &CORE_RECONCILIATIONS {
+        let candidate =
+            fs::read(candidate_core.join(reconciliation.candidate_path)).with_context(|| {
+                format!(
+                    "read candidate core input {}",
+                    reconciliation.candidate_path
+                )
+            })?;
+        let final_bytes = fs::read(final_core.join(reconciliation.final_path))
+            .with_context(|| format!("read final core input {}", reconciliation.final_path))?;
         ensure!(
-            locked == final_bytes,
-            "final MCP release changes normative input {}",
-            copy.source_path
+            sha256(&candidate) == reconciliation.candidate_sha256,
+            "candidate MCP input {} does not match the reviewed hash",
+            reconciliation.candidate_path
         );
+        ensure!(
+            sha256(&final_bytes) == reconciliation.final_sha256,
+            "final MCP input {} does not match the reviewed hash",
+            reconciliation.final_path
+        );
+        match reconciliation.classification {
+            "versionedLinksOnly" => {
+                ensure!(
+                    normalize_documentation(&candidate)? == normalize_documentation(&final_bytes)?,
+                    "final MCP documentation changes behavior in {}",
+                    reconciliation.final_path
+                );
+            }
+            "subscriptionsListenEnvelopeAndMetaRename" => {
+                ensure!(
+                    normalize_final_schema(&final_bytes)? == parse_json(&candidate)?,
+                    "final MCP schema changes more than the reviewed subscriptions/listen delta"
+                );
+            }
+            classification => bail!("unknown final reconciliation classification {classification}"),
+        }
     }
     Ok(())
+}
+
+fn normalize_documentation(bytes: &[u8]) -> Result<String> {
+    let text = std::str::from_utf8(bytes).context("MCP documentation is not UTF-8")?;
+    Ok(text
+        .replace("/specification/2026-07-28", "/specification/draft")
+        .replace("/docs/draft/learn/architecture", "/docs/learn/architecture")
+        .split_whitespace()
+        .map(|token| {
+            if token.len() >= 3 && token.bytes().all(|byte| byte == b'-') {
+                "---"
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+fn parse_json(bytes: &[u8]) -> Result<Value> {
+    serde_json::from_slice(bytes).context("parse MCP schema JSON")
+}
+
+fn normalize_final_schema(bytes: &[u8]) -> Result<Value> {
+    let mut schema = parse_json(bytes)?;
+    let definitions = schema
+        .get_mut("$defs")
+        .and_then(Value::as_object_mut)
+        .context("final MCP schema has no definitions object")?;
+    let metadata = definitions
+        .remove("SubscriptionsListenResultMetaObject")
+        .context("final MCP schema has no subscriptions metadata object")?;
+    ensure!(
+        definitions
+            .insert("SubscriptionsListenResultMeta".to_string(), metadata)
+            .is_none(),
+        "final MCP schema already has the candidate subscriptions metadata name"
+    );
+    definitions
+        .remove("SubscriptionsListenResultResponse")
+        .context("final MCP schema has no subscriptions response envelope")?;
+    let reference = definitions
+        .get_mut("SubscriptionsListenResult")
+        .and_then(Value::as_object_mut)
+        .and_then(|result| result.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .and_then(|properties| properties.get_mut("_meta"))
+        .and_then(Value::as_object_mut)
+        .and_then(|metadata| metadata.get_mut("$ref"))
+        .context("final MCP subscriptions result has no metadata reference")?;
+    *reference = Value::String("#/$defs/SubscriptionsListenResultMeta".to_string());
+    Ok(schema)
 }
 
 fn expected_sources() -> Vec<SourceIdentity> {
@@ -443,6 +578,12 @@ fn expected_sources() -> Vec<SourceIdentity> {
             repository: CORE_REPOSITORY.to_string(),
             revision: "2026-07-28-pre-tag".to_string(),
             commit: CORE_CANDIDATE_COMMIT.to_string(),
+        },
+        SourceIdentity {
+            id: "core-2026-07-28-final".to_string(),
+            repository: CORE_REPOSITORY.to_string(),
+            revision: FINAL_RELEASE_TAG.to_string(),
+            commit: FINAL_RELEASE_COMMIT.to_string(),
         },
         SourceIdentity {
             id: "legacy-2025-11-25".to_string(),
@@ -463,19 +604,10 @@ pub fn validate_bundle(directory: &Path) -> Result<()> {
     let manifest_bytes = fs::read(directory.join("manifest.json"))
         .with_context(|| format!("read fixture manifest in {}", directory.display()))?;
     let manifest_hash = sha256(&manifest_bytes);
-    if manifest_hash != EXPECTED_MANIFEST_SHA256 {
-        let mut sealed: Manifest =
-            serde_json::from_slice(&manifest_bytes).context("parse sealed fixture manifest")?;
-        ensure!(
-            sealed.final_release.take().is_some(),
-            "manifest.json does not match the pinned MCP task bundle: found {manifest_hash}"
-        );
-        let unsealed = canonical_value(serde_json::to_value(sealed)?)?;
-        ensure!(
-            sha256(&unsealed) == EXPECTED_MANIFEST_SHA256,
-            "sealed manifest does not preserve the pinned MCP task bundle"
-        );
-    }
+    ensure!(
+        manifest_hash == EXPECTED_MANIFEST_SHA256,
+        "manifest.json does not match the pinned MCP task bundle: found {manifest_hash}"
+    );
     validate_bundle_structure(directory)
 }
 
@@ -666,9 +798,15 @@ fn validate_manifest(manifest: &Manifest) -> Result<()> {
         }
     }
 
-    if let Some(release) = &manifest.final_release {
-        validate_final_release(release)?;
-    }
+    let release = manifest
+        .final_release
+        .as_ref()
+        .context("fixture manifest is missing final release evidence")?;
+    validate_final_release(release)?;
+    ensure!(
+        release.peeled_commit == FINAL_RELEASE_COMMIT,
+        "fixture final release peel is not pinned"
+    );
     Ok(())
 }
 
@@ -917,6 +1055,37 @@ fn response_metadata() -> Value {
     })
 }
 
+fn core_final_reconciliation() -> Value {
+    json!({
+        "candidateCommit": CORE_CANDIDATE_COMMIT,
+        "finalRelease": {
+            "tag": FINAL_RELEASE_TAG,
+            "peeledCommit": FINAL_RELEASE_COMMIT
+        },
+        "changes": CORE_RECONCILIATIONS
+            .iter()
+            .map(|reconciliation| {
+                json!({
+                    "candidatePath": reconciliation.candidate_path,
+                    "finalPath": reconciliation.final_path,
+                    "candidateSha256": reconciliation.candidate_sha256,
+                    "finalSha256": reconciliation.final_sha256,
+                    "classification": reconciliation.classification,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "twillContractImpact": {
+            "publicApi": "unchanged",
+            "protocolRuntime": "unchanged",
+            "servingGate": "sealed",
+            "surfaceIdentity": "unchanged",
+            "taskDelivery": "pollingOnly",
+            "taskRuntimeContract": "unchanged",
+            "subscriptionsListen": "unsupportedMethod"
+        }
+    })
+}
+
 fn core_vectors() -> Value {
     json!({
         "protocolRevision": PROTOCOL_REVISION,
@@ -1083,38 +1252,35 @@ mod tests {
     }
 
     #[test]
-    fn final_seal_is_the_only_permitted_change_to_the_pinned_manifest() -> Result<()> {
-        let sealed = fixture_copy()?;
-        let mut manifest = read_manifest(sealed.path())?;
-        manifest.final_release = Some(FinalRelease {
-            tag: FINAL_RELEASE_TAG.to_string(),
-            peeled_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
-        });
-        write_manifest(sealed.path(), &manifest)?;
-        validate_bundle(sealed.path())?;
+    fn final_manifest_and_payload_are_immutable() -> Result<()> {
+        let missing_release = fixture_copy()?;
+        let mut manifest = read_manifest(missing_release.path())?;
+        manifest.final_release = None;
+        write_manifest(missing_release.path(), &manifest)?;
+        assert!(validate_bundle(missing_release.path()).is_err());
 
+        let changed_payload = fixture_copy()?;
+        let mut manifest = read_manifest(changed_payload.path())?;
         let changed = canonical_value(json!({"changed": true}))?;
-        fs::write(sealed.path().join("core-wire-vectors.json"), &changed)?;
+        fs::write(
+            changed_payload.path().join("core-wire-vectors.json"),
+            &changed,
+        )?;
         manifest
             .files
             .iter_mut()
             .find(|entry| entry.path == "core-wire-vectors.json")
             .expect("core vector")
             .sha256 = sha256(&changed);
-        write_manifest(sealed.path(), &manifest)?;
-        assert!(
-            validate_bundle(sealed.path())
-                .unwrap_err()
-                .to_string()
-                .contains("does not preserve the pinned MCP task bundle")
-        );
+        write_manifest(changed_payload.path(), &manifest)?;
+        assert!(validate_bundle(changed_payload.path()).is_err());
         Ok(())
     }
 
     #[test]
-    fn pre_tag_bundle_fails_the_release_seal_gate() -> Result<()> {
-        let manifest = read_manifest(&fixture_directory())?;
-        assert!(manifest.final_release.is_none());
+    fn missing_final_release_fails_the_release_seal_gate() -> Result<()> {
+        let mut manifest = read_manifest(&fixture_directory())?;
+        manifest.final_release = None;
         assert!(
             validate_release_manifest(&manifest)
                 .unwrap_err()
@@ -1137,7 +1303,7 @@ mod tests {
             validate_release_manifest(&manifest)
                 .unwrap_err()
                 .to_string()
-                .contains("commit is not pinned")
+                .contains("does not match the pinned commit")
         );
         assert!(
             validate_release_manifest_against(
@@ -1157,33 +1323,55 @@ mod tests {
     }
 
     #[test]
-    fn final_release_requires_byte_identical_frozen_core_inputs() -> Result<()> {
-        let locked = TempDir::new()?;
-        let final_core = TempDir::new()?;
-        for copy in SOURCE_COPIES
-            .iter()
-            .filter(|copy| copy.source_id == "core-2026-07-28-candidate")
-        {
-            let locked_path = locked.path().join(copy.source_path);
-            let final_path = final_core.path().join(
-                copy.final_source_path
-                    .expect("candidate core input has a final path"),
-            );
-            fs::create_dir_all(locked_path.parent().expect("source has parent"))?;
-            fs::create_dir_all(final_path.parent().expect("source has parent"))?;
-            fs::write(&locked_path, copy.source_path.as_bytes())?;
-            fs::write(&final_path, copy.source_path.as_bytes())?;
-        }
-        verify_final_core_inputs(locked.path(), final_core.path())?;
-        fs::write(
-            final_core.path().join("schema/2026-07-28/schema.json"),
-            b"normative delta",
-        )?;
-        assert!(
-            verify_final_core_inputs(locked.path(), final_core.path())
-                .unwrap_err()
-                .to_string()
-                .contains("changes normative input")
+    fn schema_reconciliation_removes_only_the_reviewed_subscription_delta() -> Result<()> {
+        let candidate = json!({
+            "$defs": {
+                "SubscriptionsListenResult": {
+                    "properties": {
+                        "_meta": {"$ref": "#/$defs/SubscriptionsListenResultMeta"}
+                    }
+                },
+                "SubscriptionsListenResultMeta": {"type": "object"},
+                "Unrelated": {"const": true}
+            }
+        });
+        let final_schema = json!({
+            "$defs": {
+                "SubscriptionsListenResult": {
+                    "properties": {
+                        "_meta": {"$ref": "#/$defs/SubscriptionsListenResultMetaObject"}
+                    }
+                },
+                "SubscriptionsListenResultMetaObject": {"type": "object"},
+                "SubscriptionsListenResultResponse": {"type": "object"},
+                "Unrelated": {"const": true}
+            }
+        });
+        assert_eq!(
+            normalize_final_schema(&serde_json::to_vec(&final_schema)?)?,
+            candidate
+        );
+
+        let mut changed = final_schema;
+        changed["$defs"]["Unrelated"]["const"] = Value::Bool(false);
+        assert_ne!(
+            normalize_final_schema(&serde_json::to_vec(&changed)?)?,
+            candidate
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn documentation_reconciliation_accepts_only_versioned_links_and_layout() -> Result<()> {
+        let candidate = b"See [schema](/specification/draft/schema).\\n| A | B |\\n";
+        let final_text = b"See [schema](/specification/2026-07-28/schema).\\n| A    | B |\\n";
+        assert_eq!(
+            normalize_documentation(candidate)?,
+            normalize_documentation(final_text)?
+        );
+        assert_ne!(
+            normalize_documentation(candidate)?,
+            normalize_documentation(b"Behavior changed.")?
         );
         Ok(())
     }
