@@ -27,9 +27,15 @@
         "id": 1,
         "jsonrpc": "2.0",
         "result": {
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "mcp-twill-fixture-server",
+              "version": "1.0.0"
+            }
+          },
           "createdAt": "2025-11-25T10:30:00Z",
           "lastUpdatedAt": "2025-11-25T10:30:00Z",
-          "pollIntervalMs": 1000,
+          "pollIntervalMs": 100,
           "resultType": "task",
           "status": "working",
           "statusMessage": "Task is running",
@@ -64,9 +70,15 @@
         "id": 2,
         "jsonrpc": "2.0",
         "result": {
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "mcp-twill-fixture-server",
+              "version": "1.0.0"
+            }
+          },
           "createdAt": "2025-11-25T10:30:00Z",
           "lastUpdatedAt": "2025-11-25T10:30:01Z",
-          "pollIntervalMs": 1000,
+          "pollIntervalMs": 100,
           "result": {
             "content": [
               {
@@ -112,6 +124,12 @@
         "id": 3,
         "jsonrpc": "2.0",
         "result": {
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "mcp-twill-fixture-server",
+              "version": "1.0.0"
+            }
+          },
           "resultType": "complete"
         }
       }
@@ -142,6 +160,12 @@
         "id": 4,
         "jsonrpc": "2.0",
         "result": {
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "mcp-twill-fixture-server",
+              "version": "1.0.0"
+            }
+          },
           "resultType": "complete"
         }
       }
@@ -168,7 +192,7 @@
       },
       "response": {
         "error": {
-          "code": -32003,
+          "code": -32021,
           "data": {
             "requiredCapabilities": {
               "extensions": {

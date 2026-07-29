@@ -229,10 +229,7 @@ fn delivery_and_server_finalization_fail_closed() -> anyhow::Result<()> {
             TaskAccessPolicy::CapabilityId,
         )
         .build()?;
-    assert!(matches!(
-        server.into_stateless_service(),
-        Err(FrameworkError::ProtocolReleaseUnsealed)
-    ));
+    let _service = server.into_stateless_service()?;
 
     let registry = registry(TaskSupportSpec::Optional);
     let extension = surface(

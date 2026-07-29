@@ -38,12 +38,35 @@ struct ResourceParams {
     unknown: Map<String, Value>,
 }
 
+#[derive(Deserialize)]
+struct RawMetaCarrier {
+    #[serde(rename = "_meta", default)]
+    meta: Option<Box<RawValue>>,
+    #[serde(flatten)]
+    unknown: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct StandardRequestMeta {
+    #[serde(rename = "io.modelcontextprotocol/clientCapabilities", default)]
+    client_capabilities: Option<Box<RawValue>>,
+    #[serde(rename = "io.modelcontextprotocol/clientInfo", default)]
+    client_info: Option<Box<RawValue>>,
+    #[serde(rename = "io.modelcontextprotocol/logLevel", default)]
+    log_level: Option<Box<RawValue>>,
+    #[serde(rename = "io.modelcontextprotocol/protocolVersion", default)]
+    protocol_version: Option<Box<RawValue>>,
+    #[serde(rename = "progressToken", default)]
+    progress_token: Option<Box<RawValue>>,
+    #[serde(flatten)]
+    unknown: Map<String, Value>,
+}
+
 pub(crate) struct Request {
     pub(crate) id: Value,
     pub(crate) has_id: bool,
     pub(crate) method: String,
     pub(crate) params: Map<String, Value>,
-    pub(crate) known_method: bool,
 }
 
 pub(crate) enum WireError {
@@ -64,22 +87,21 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
     if request.jsonrpc != "2.0" {
         return Err(WireError::InvalidRequest);
     }
+    let params = request.params.as_deref().map(RawValue::get).unwrap_or("{}");
     let known_method = known_method(&request.method, tasks_extension_enabled);
+    if known_method || serde_json::from_str::<Value>(params).is_ok_and(|params| params.is_object())
+    {
+        validate_standard_request_metadata(params).map_err(|_| WireError::InvalidParams)?;
+    }
     if !known_method {
-        let params = request
-            .params
-            .as_deref()
-            .and_then(|params| serde_json::from_str::<Map<String, Value>>(params.get()).ok())
-            .unwrap_or_default();
+        let params = serde_json::from_str::<Map<String, Value>>(params).unwrap_or_default();
         return Ok(Request {
             id: request.id,
             has_id,
             method: request.method,
             params,
-            known_method,
         });
     }
-    let params = request.params.as_deref().map(RawValue::get).unwrap_or("{}");
     if request.method == "tools/call"
         || (tasks_extension_enabled
             && matches!(
@@ -99,8 +121,38 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
         has_id,
         method: request.method,
         params,
-        known_method,
     })
+}
+
+pub(crate) fn is_notification_envelope(bytes: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.contains_key("id") {
+        return false;
+    }
+    serde_json::from_slice::<RawRequest>(bytes).is_ok_and(|request| request.jsonrpc == "2.0")
+}
+
+fn validate_standard_request_metadata(params: &str) -> serde_json::Result<()> {
+    let carrier = serde_json::from_str::<RawMetaCarrier>(params)?;
+    let _ = carrier.unknown;
+    let Some(meta) = carrier.meta else {
+        return Ok(());
+    };
+    let meta = serde_json::from_str::<StandardRequestMeta>(meta.get())?;
+    let _ = (
+        meta.client_capabilities,
+        meta.client_info,
+        meta.log_level,
+        meta.protocol_version,
+        meta.progress_token,
+        meta.unknown,
+    );
+    Ok(())
 }
 
 pub(crate) fn valid_request_id(id: &Value) -> bool {
@@ -178,6 +230,52 @@ mod tests {
             parse(duplicate_meta, true),
             Err(WireError::InvalidParams)
         ));
+
+        for duplicate_standard_metadata in [
+            br#"{
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"tools/list",
+                "params":{"_meta":{
+                    "io.modelcontextprotocol/clientCapabilities":{},
+                    "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                    "io.modelcontextprotocol/protocolVersion":"2099-01-01"
+                }}
+            }"#
+            .as_slice(),
+            br#"{
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"tools/list",
+                "params":{"_meta":{
+                    "io.modelcontextprotocol/clientCapabilities":{},
+                    "io.modelcontextprotocol/clientCapabilities":{"extensions":{}},
+                    "io.modelcontextprotocol/protocolVersion":"2026-07-28"
+                }}
+            }"#
+            .as_slice(),
+        ] {
+            assert!(matches!(
+                parse(duplicate_standard_metadata, true),
+                Err(WireError::InvalidParams)
+            ));
+        }
+    }
+
+    #[test]
+    fn notification_classification_requires_a_valid_envelope() {
+        assert!(is_notification_envelope(
+            br#"{"jsonrpc":"2.0","method":"tools/list","params":false}"#
+        ));
+        assert!(!is_notification_envelope(
+            br#"{"jsonrpc":"2.0","params":{}}"#
+        ));
+        assert!(!is_notification_envelope(
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#
+        ));
+        assert!(!is_notification_envelope(
+            br#"{"jsonrpc":"2.0","method":"tools/list","extra":true}"#
+        ));
     }
 
     #[test]
@@ -240,7 +338,7 @@ mod tests {
         let Ok(parsed) = parse(unknown, true) else {
             panic!("unknown methods route without validating their params");
         };
-        assert!(!parsed.known_method);
+        assert_eq!(parsed.method, "unknown/method");
         assert!(parsed.params.is_empty());
     }
 }

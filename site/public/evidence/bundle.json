@@ -103,7 +103,7 @@
       "crates/mcp-twill/src/native_surfaces.rs": "d332bf976cc0e688eb2266582321c4afba02fca28e33a2d6b64935841828ff8a",
       "crates/mcp-twill/src/presentation.rs": "2801d82f725d7b693e623725eb6add8b6d55a62bb6b6eea6ba2b5986e03c1ad4",
       "crates/mcp-twill/src/registry.rs": "dac43f29a498b64f02d868b48c43ca2aa2d7203d161f5acf3bf1c1c7f9dffd89",
-      "crates/mcp-twill/src/rmcp_adapter.rs": "f122326da641e4e524f13e0694435d236f33d3a94c5bd17b60c70ab1b24ed2a5",
+      "crates/mcp-twill/src/rmcp_adapter.rs": "0f59fe2e88a2edbcf34bfdf9485271a22e4a675fd803a088d6b70a92abfd6a7d",
       "crates/mcp-twill/tests/fixtures/vbl/v0.4.9/manifest.json": "8f891cfdfb1e5d20e968c339e83b04da203d272fce4d6f419346d68101fb44d0",
       "docs/adoption/visible-browser-lab/baseline/catalog-measurement.json": "771d9e0225d64e801ba836d1273d8509a0a72e2bf6b5e711dcae2bf2169519bc",
       "xtask/src/site_evidence.rs": "b20aff6a281f92f6e27ecd6ccc395b9f7cc2f69b0e3d6675df215c5ce24fb3df"

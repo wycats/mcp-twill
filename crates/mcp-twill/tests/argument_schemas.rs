@@ -85,6 +85,27 @@ fn registry_with_schema(schema: Value) -> CommandRegistry {
 }
 
 #[test]
+fn transport_header_annotation_is_preserved_without_changing_typed_schema_equality() {
+    let registry = CommandRegistry::new("schema-test", "Argument schema test server").register(
+        CommandSpec::new(["value", "take"], "Take", "Take one value").with_arg(
+            ArgSpec::string("value", "Value").with_inline_schema(json!({
+                "type": "string",
+                "x-mcp-header": "Value"
+            })),
+        ),
+        |_context| async { Ok(CommandOutput::structured(json!({}))) },
+    );
+    registry.validate_argument_schemas().unwrap();
+    let catalog = registry.catalog();
+    let ArgumentSchemaUse::Inline { schema } =
+        catalog.operations[0].args[0].schema.as_ref().unwrap()
+    else {
+        panic!("expected inline schema");
+    };
+    assert_eq!(schema["x-mcp-header"], "Value");
+}
+
+#[test]
 fn bounded_integer_plans_and_redacts_mismatches() {
     let registry = bounded_registry();
     registry.validate_argument_schemas().unwrap();

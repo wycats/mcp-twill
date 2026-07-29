@@ -29,11 +29,71 @@
       }
     },
     {
+      "headers": {
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "=?base64?cmVwb3J0X2dlbmVyYXRl?="
+      },
+      "httpStatus": 200,
+      "name": "base64-tool-routing",
+      "request": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {}
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "name": "mcp-twill-fixture-client",
+              "version": "1.0.0"
+            },
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          },
+          "arguments": {},
+          "name": "report_generate"
+        }
+      }
+    },
+    {
+      "headers": {
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/list"
+      },
+      "httpStatus": 200,
+      "name": "optional-client-info",
+      "request": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "method": "tools/list",
+        "params": {
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+          }
+        }
+      },
+      "response": {
+        "id": 3,
+        "jsonrpc": "2.0",
+        "result": {
+          "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+              "name": "mcp-twill-fixture-server",
+              "version": "1.0.0"
+            }
+          },
+          "resultType": "complete"
+        }
+      }
+    },
+    {
       "httpStatus": 400,
       "name": "header-mismatch",
       "response": {
         "error": {
-          "code": -32001,
+          "code": -32020,
           "message": "Header mismatch"
         },
         "id": 1,
@@ -45,7 +105,7 @@
       "name": "unsupported-protocol-version",
       "response": {
         "error": {
-          "code": -32004,
+          "code": -32022,
           "data": {
             "requested": "2099-01-01",
             "supported": [
