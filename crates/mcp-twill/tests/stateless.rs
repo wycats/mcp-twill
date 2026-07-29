@@ -141,3 +141,36 @@ async fn public_stateless_http_accepts_argument_free_calls_without_an_arguments_
     assert_eq!(status, StatusCode::OK, "{value}");
     assert_eq!(value["result"]["structuredContent"], json!({ "ok": true }));
 }
+
+#[tokio::test]
+async fn public_stateless_http_rejects_malformed_extension_capabilities_at_preflight() {
+    let mut service = public_http_service();
+    for (id, method, routed_name, extensions) in [
+        (1, "tools/list", None, json!({ "example": {} })),
+        (
+            2,
+            "tasks/get",
+            Some("task-example"),
+            json!({ "io.modelcontextprotocol/tasks": { "version": 1 } }),
+        ),
+    ] {
+        let mut metadata = meta();
+        metadata["io.modelcontextprotocol/clientCapabilities"] =
+            json!({ "extensions": extensions });
+        let response = service
+            .call(request(
+                id,
+                method,
+                routed_name,
+                json!({
+                    "_meta": metadata,
+                    "taskId": "task-example"
+                }),
+            ))
+            .await
+            .unwrap();
+        let (status, value) = response_value(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method}: {value}");
+        assert_eq!(value["error"]["code"], -32602, "{method}: {value}");
+    }
+}

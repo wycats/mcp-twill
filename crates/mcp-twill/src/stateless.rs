@@ -24,7 +24,7 @@ const PROTOCOL_VERSION: &str = "2026-07-28";
 const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> =
     Some("5f5440bb26a62e2cf3440b92da5a667efa03b267");
 const EXPECTED_RELEASE_EVIDENCE_MANIFEST_SHA256: &str =
-    "b50014b829c65165622293468b668435ab1464ec370ec0dbe7422999e5a1806f";
+    "ebcd836319018e10a093f8d25564e548338d512c450f393cdfae6a5d60d46a00";
 const RELEASE_EVIDENCE_PAYLOADS: [(&str, &[u8]); 15] = [
     (
         "core-basic.mdx",
@@ -766,18 +766,56 @@ fn validate_client_capabilities(capabilities: &Map<String, Value>) -> std::resul
             }
         }
     }
-    for name in ["experimental", "extensions"] {
-        let Some(capability) = capabilities.get(name) else {
-            continue;
-        };
-        if !capability
+    if capabilities.get("experimental").is_some_and(|capability| {
+        !capability
             .as_object()
             .is_some_and(|entries| entries.values().all(Value::is_object))
+    }) {
+        return Err(());
+    }
+    if let Some(extensions) = capabilities.get("extensions") {
+        let extensions = extensions.as_object().ok_or(())?;
+        if !extensions
+            .iter()
+            .all(|(name, value)| valid_extension_identifier(name) && value.is_object())
+        {
+            return Err(());
+        }
+        if extensions
+            .get("io.modelcontextprotocol/tasks")
+            .and_then(Value::as_object)
+            .is_some_and(|capability| !capability.is_empty())
         {
             return Err(());
         }
     }
     Ok(())
+}
+
+fn valid_extension_identifier(identifier: &str) -> bool {
+    let Some((prefix, name)) = identifier.split_once('/') else {
+        return false;
+    };
+    !prefix.is_empty() && prefix.split('.').all(valid_meta_prefix_label) && valid_meta_name(name)
+}
+
+fn valid_meta_prefix_label(label: &str) -> bool {
+    let bytes = label.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
+
+fn valid_meta_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    name.is_empty()
+        || bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+            && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'))
 }
 
 fn decoded_header_value(value: &str) -> std::result::Result<String, ()> {
@@ -2085,7 +2123,7 @@ mod tests {
         let request = with_capabilities(
             request(2, "tools/list", None, json!({ "_meta": meta(false) })),
             json!({
-                "extensions": { "example.extension": {} },
+                "extensions": { "com.example/extension": {} },
                 "sampling": {
                     "tools": {},
                     "exampleFutureMember": true
@@ -2144,6 +2182,41 @@ mod tests {
             assert_eq!(value["error"]["code"], -32602);
         }
 
+        for (id, method, name, capabilities) in [
+            (
+                9,
+                "tools/list",
+                None,
+                json!({ "extensions": { "example": {} } }),
+            ),
+            (
+                10,
+                "tasks/get",
+                Some("task-example"),
+                json!({
+                    "extensions": {
+                        "io.modelcontextprotocol/tasks": { "version": 1 }
+                    }
+                }),
+            ),
+        ] {
+            let request = with_capabilities(
+                request(
+                    id,
+                    method,
+                    name,
+                    json!({
+                        "_meta": meta(false),
+                        "taskId": "task-example"
+                    }),
+                ),
+                capabilities,
+            );
+            let (status, value) = response_value(service.call(request).await.unwrap()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(value["error"]["code"], -32602);
+        }
+
         let valid = with_meta_member(
             with_meta_member(
                 request(2, "tools/list", None, json!({ "_meta": meta(false) })),
@@ -2168,6 +2241,14 @@ mod tests {
         );
         let valid = with_meta_member(valid, "progressToken", json!(1.0));
         let valid = with_meta_member(valid, "com.example/futureMetadata", json!(true));
+        let valid = with_capabilities(
+            valid,
+            json!({
+                "extensions": {
+                    "com.example/future-extension": { "version": 1 }
+                }
+            }),
+        );
         let (status, value) = response_value(service.call(valid).await.unwrap()).await;
         assert_eq!(status, StatusCode::OK);
         assert!(value["result"]["tools"].is_array());

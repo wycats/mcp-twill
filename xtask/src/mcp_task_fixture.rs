@@ -24,7 +24,7 @@ pub const FINAL_RELEASE_TAG: &str = "2026-07-28";
 pub const IMPORT_COMMAND: &str = "cargo xtask import-mcp-task-fixture --core-repository <local-git-repository> --extension-repository <local-git-repository> --final-ref 2026-07-28";
 
 const EXPECTED_MANIFEST_SHA256: &str =
-    "b50014b829c65165622293468b668435ab1464ec370ec0dbe7422999e5a1806f";
+    "ebcd836319018e10a093f8d25564e548338d512c450f393cdfae6a5d60d46a00";
 const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> = Some(FINAL_RELEASE_COMMIT);
 
 const SOURCE_COPIES: [SourceCopy; 11] = [
@@ -999,12 +999,12 @@ fn legacy_vectors() -> Value {
             {
                 "name": "create-working-task",
                 "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"report_generate","arguments":{},"task":{"ttl":60000}}},
-                "response": {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/related-task":{"taskId":"task-example"}},"task":{"taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttl":60000,"pollInterval":1000}}}
+                "response": {"jsonrpc":"2.0","id":1,"result":{"_meta":{"io.modelcontextprotocol/related-task":{"taskId":"task-example"}},"task":{"taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttl":60000,"pollInterval":100}}}
             },
             {
                 "name": "poll-completed-task",
                 "request": {"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"taskId":"task-example"}},
-                "response": {"jsonrpc":"2.0","id":2,"result":{"taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttl":60000,"pollInterval":1000}}
+                "response": {"jsonrpc":"2.0","id":2,"result":{"taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttl":60000,"pollInterval":100}}
             },
             {
                 "name": "retrieve-tool-result",
@@ -1019,7 +1019,7 @@ fn legacy_vectors() -> Value {
             {
                 "name": "poll-application-error-task",
                 "request": {"jsonrpc":"2.0","id":5,"method":"tasks/get","params":{"taskId":"task-application-refusal"}},
-                "response": {"jsonrpc":"2.0","id":5,"result":{"taskId":"task-application-refusal","status":"failed","statusMessage":"Task failed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttl":60000,"pollInterval":1000}}
+                "response": {"jsonrpc":"2.0","id":5,"result":{"taskId":"task-application-refusal","status":"failed","statusMessage":"Task failed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttl":60000,"pollInterval":100}}
             },
             {
                 "name": "retrieve-application-error-result",
@@ -1135,12 +1135,12 @@ fn extension_vectors() -> Value {
             {
                 "name": "server-directed-task",
                 "request": {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":request_metadata(true),"name":"report_generate","arguments":{}}},
-                "response": {"jsonrpc":"2.0","id":1,"result":{"resultType":"task","taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttlMs":60000,"pollIntervalMs":1000,"_meta":response_metadata()}}
+                "response": {"jsonrpc":"2.0","id":1,"result":{"resultType":"task","taskId":"task-example","status":"working","statusMessage":"Task is running","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:00Z","ttlMs":60000,"pollIntervalMs":100,"_meta":response_metadata()}}
             },
             {
                 "name": "completed-tool-error-is-completed",
                 "request": {"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"_meta":request_metadata(true),"taskId":"task-example"}},
-                "response": {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttlMs":60000,"pollIntervalMs":1000,"result":{"resultType":"complete","content":[{"type":"text","text":"application refusal"}],"isError":true},"_meta":response_metadata()}}
+                "response": {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","taskId":"task-example","status":"completed","statusMessage":"Task completed","createdAt":"2025-11-25T10:30:00Z","lastUpdatedAt":"2025-11-25T10:30:01Z","ttlMs":60000,"pollIntervalMs":100,"result":{"resultType":"complete","content":[{"type":"text","text":"application refusal"}],"isError":true},"_meta":response_metadata()}}
             },
             {
                 "name": "update-acknowledgement",

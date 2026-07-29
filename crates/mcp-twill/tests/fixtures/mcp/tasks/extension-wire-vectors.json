@@ -35,7 +35,7 @@
           },
           "createdAt": "2025-11-25T10:30:00Z",
           "lastUpdatedAt": "2025-11-25T10:30:00Z",
-          "pollIntervalMs": 1000,
+          "pollIntervalMs": 100,
           "resultType": "task",
           "status": "working",
           "statusMessage": "Task is running",
@@ -78,7 +78,7 @@
           },
           "createdAt": "2025-11-25T10:30:00Z",
           "lastUpdatedAt": "2025-11-25T10:30:01Z",
-          "pollIntervalMs": 1000,
+          "pollIntervalMs": 100,
           "result": {
             "content": [
               {
