@@ -12,6 +12,7 @@ use bytes::Bytes;
 use http::{HeaderMap, Method, Request, Response, StatusCode, header::CONTENT_TYPE};
 use http_body::{Body, Frame, SizeHint};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc};
 use tower_service::Service;
@@ -22,6 +23,70 @@ use rmcp::model::Extensions;
 const PROTOCOL_VERSION: &str = "2026-07-28";
 const EXPECTED_FINAL_RELEASE_COMMIT: Option<&str> =
     Some("5f5440bb26a62e2cf3440b92da5a667efa03b267");
+const EXPECTED_RELEASE_EVIDENCE_MANIFEST_SHA256: &str =
+    "b50014b829c65165622293468b668435ab1464ec370ec0dbe7422999e5a1806f";
+const RELEASE_EVIDENCE_PAYLOADS: [(&str, &[u8]); 15] = [
+    (
+        "core-basic.mdx",
+        include_bytes!("../tests/fixtures/mcp/tasks/core-basic.mdx"),
+    ),
+    (
+        "core-final-reconciliation.json",
+        include_bytes!("../tests/fixtures/mcp/tasks/core-final-reconciliation.json"),
+    ),
+    (
+        "core-schema.json",
+        include_bytes!("../tests/fixtures/mcp/tasks/core-schema.json"),
+    ),
+    (
+        "core-stdio.mdx",
+        include_bytes!("../tests/fixtures/mcp/tasks/core-stdio.mdx"),
+    ),
+    (
+        "core-streamable-http.mdx",
+        include_bytes!("../tests/fixtures/mcp/tasks/core-streamable-http.mdx"),
+    ),
+    (
+        "core-transports-index.mdx",
+        include_bytes!("../tests/fixtures/mcp/tasks/core-transports-index.mdx"),
+    ),
+    (
+        "core-wire-vectors.json",
+        include_bytes!("../tests/fixtures/mcp/tasks/core-wire-vectors.json"),
+    ),
+    (
+        "extension-schema.json",
+        include_bytes!("../tests/fixtures/mcp/tasks/extension-schema.json"),
+    ),
+    (
+        "extension-sep-2663.md",
+        include_bytes!("../tests/fixtures/mcp/tasks/extension-sep-2663.md"),
+    ),
+    (
+        "extension-tasks.md",
+        include_bytes!("../tests/fixtures/mcp/tasks/extension-tasks.md"),
+    ),
+    (
+        "extension-wire-vectors.json",
+        include_bytes!("../tests/fixtures/mcp/tasks/extension-wire-vectors.json"),
+    ),
+    (
+        "legacy-progress.mdx",
+        include_bytes!("../tests/fixtures/mcp/tasks/legacy-progress.mdx"),
+    ),
+    (
+        "legacy-schema.json",
+        include_bytes!("../tests/fixtures/mcp/tasks/legacy-schema.json"),
+    ),
+    (
+        "legacy-tasks.mdx",
+        include_bytes!("../tests/fixtures/mcp/tasks/legacy-tasks.mdx"),
+    ),
+    (
+        "legacy-wire-vectors.json",
+        include_bytes!("../tests/fixtures/mcp/tasks/legacy-wire-vectors.json"),
+    ),
+];
 const HEADER_MISMATCH: i32 = -32020;
 const MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021;
 const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
@@ -343,14 +408,24 @@ impl Service<Request<Bytes>> for StatelessMcpHttpService {
                     );
                     Ok(response)
                 }
-                Err(dispatched) => {
-                    let mut response =
-                        Response::new(StatelessMcpHttpBody::immediate(dispatched.body));
+                Err(mut dispatched) => {
+                    if is_json_notification(&body) {
+                        dispatched.body = Bytes::new();
+                    }
+                    let has_body = !dispatched.body.is_empty();
+                    let body = if has_body {
+                        StatelessMcpHttpBody::immediate(dispatched.body)
+                    } else {
+                        StatelessMcpHttpBody::empty()
+                    };
+                    let mut response = Response::new(body);
                     *response.status_mut() = dispatched.status;
-                    response.headers_mut().insert(
-                        CONTENT_TYPE,
-                        http::HeaderValue::from_static("application/json"),
-                    );
+                    if has_body {
+                        response.headers_mut().insert(
+                            CONTENT_TYPE,
+                            http::HeaderValue::from_static("application/json"),
+                        );
+                    }
                     Ok(response)
                 }
             }
@@ -512,13 +587,7 @@ fn preflight(
         if let Some(headers) = headers
             && exact_header(headers, "mcp-protocol-version", PROTOCOL_VERSION).is_err()
         {
-            return Err(response(
-                StatusCode::BAD_REQUEST,
-                id,
-                HEADER_MISMATCH,
-                "Header mismatch",
-                None,
-            ));
+            return Err(empty_response(StatusCode::BAD_REQUEST));
         }
         return Ok(request);
     }
@@ -706,7 +775,7 @@ async fn dispatch_request(
         .await
     {
         Ok(mut result) => {
-            prepare_success_result(&mut result, server.stateless_server_info());
+            prepare_success_result(&method, &mut result, server.stateless_server_info());
             success(id, result)
         }
         Err(error) => {
@@ -720,13 +789,23 @@ async fn dispatch_request(
     }
 }
 
-fn prepare_success_result(result: &mut Value, server_info: Value) {
+fn prepare_success_result(method: &str, result: &mut Value, server_info: Value) {
     let Some(result) = result.as_object_mut() else {
         return;
     };
     result
         .entry("resultType".to_string())
         .or_insert_with(|| Value::String("complete".to_string()));
+    if matches!(
+        method,
+        "tools/list" | "resources/list" | "prompts/list" | "resources/read"
+    ) {
+        result.insert(
+            "cacheScope".to_string(),
+            Value::String("private".to_string()),
+        );
+        result.insert("ttlMs".to_string(), Value::from(0));
+    }
     let meta = result
         .entry("_meta".to_string())
         .or_insert_with(|| Value::Object(Map::new()));
@@ -835,18 +914,53 @@ fn response(
     }
 }
 
+fn empty_response(status: StatusCode) -> DispatchedResponse {
+    DispatchedResponse {
+        status,
+        body: Bytes::new(),
+    }
+}
+
 fn release_evidence_is_sealed() -> bool {
-    let manifest: Value =
-        serde_json::from_str(include_str!("../tests/fixtures/mcp/tasks/manifest.json"))
-            .unwrap_or(Value::Null);
+    release_evidence_is_sealed_with(
+        include_bytes!("../tests/fixtures/mcp/tasks/manifest.json"),
+        &RELEASE_EVIDENCE_PAYLOADS,
+    )
+}
+
+fn release_evidence_is_sealed_with(manifest_bytes: &[u8], payloads: &[(&str, &[u8])]) -> bool {
+    if hex_sha256(manifest_bytes) != EXPECTED_RELEASE_EVIDENCE_MANIFEST_SHA256 {
+        return false;
+    }
+    let manifest: Value = serde_json::from_slice(manifest_bytes).unwrap_or(Value::Null);
     let release = manifest.get("finalRelease").and_then(Value::as_object);
-    match (EXPECTED_FINAL_RELEASE_COMMIT, release) {
+    let release_matches = match (EXPECTED_FINAL_RELEASE_COMMIT, release) {
         (Some(expected), Some(release)) => {
             release.get("tag").and_then(Value::as_str) == Some(PROTOCOL_VERSION)
                 && release.get("peeledCommit").and_then(Value::as_str) == Some(expected)
         }
         _ => false,
+    };
+    if !release_matches {
+        return false;
     }
+    let Some(files) = manifest.get("files").and_then(Value::as_array) else {
+        return false;
+    };
+    if files.len() != payloads.len() {
+        return false;
+    }
+    files
+        .iter()
+        .zip(payloads)
+        .all(|(file, (expected_path, bytes))| {
+            file.get("path").and_then(Value::as_str) == Some(*expected_path)
+                && file.get("sha256").and_then(Value::as_str) == Some(hex_sha256(bytes).as_str())
+        })
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 pub(crate) struct StatelessDispatchError {
@@ -945,6 +1059,7 @@ mod tests {
             }
         });
         prepare_success_result(
+            "tools/call",
             &mut result,
             json!({
                 "name": "tasks",
@@ -961,6 +1076,55 @@ mod tests {
                 "version": "0.1.1"
             })
         );
+    }
+
+    #[test]
+    fn cacheable_results_receive_conservative_framework_cache_policy() {
+        for method in [
+            "tools/list",
+            "resources/list",
+            "prompts/list",
+            "resources/read",
+        ] {
+            let mut result = json!({
+                "cacheScope": "public",
+                "ttlMs": 86_400_000,
+            });
+            prepare_success_result(method, &mut result, json!({ "name": "tasks" }));
+            assert_eq!(result["cacheScope"], "private", "{method}");
+            assert_eq!(result["ttlMs"], 0, "{method}");
+        }
+
+        let mut result = json!({});
+        prepare_success_result("tools/call", &mut result, json!({ "name": "tasks" }));
+        assert!(result.get("cacheScope").is_none());
+        assert!(result.get("ttlMs").is_none());
+    }
+
+    #[test]
+    fn serving_seal_authenticates_manifest_and_every_payload() {
+        assert!(release_evidence_is_sealed());
+
+        let mut manifest = include_bytes!("../tests/fixtures/mcp/tasks/manifest.json").to_vec();
+        manifest[0] ^= 1;
+        assert!(!release_evidence_is_sealed_with(
+            &manifest,
+            &RELEASE_EVIDENCE_PAYLOADS
+        ));
+
+        let mut tampered_payload = RELEASE_EVIDENCE_PAYLOADS[0].1.to_vec();
+        tampered_payload[0] ^= 1;
+        let mut payloads = RELEASE_EVIDENCE_PAYLOADS.to_vec();
+        payloads[0].1 = &tampered_payload;
+        assert!(!release_evidence_is_sealed_with(
+            include_bytes!("../tests/fixtures/mcp/tasks/manifest.json"),
+            &payloads
+        ));
+
+        assert!(!release_evidence_is_sealed_with(
+            include_bytes!("../tests/fixtures/mcp/tasks/manifest.json"),
+            &RELEASE_EVIDENCE_PAYLOADS[..RELEASE_EVIDENCE_PAYLOADS.len() - 1]
+        ));
     }
 
     #[test]
@@ -1134,6 +1298,8 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(value["result"]["tools"].is_array());
+        assert_eq!(value["result"]["cacheScope"], "private");
+        assert_eq!(value["result"]["ttlMs"], 0);
 
         let mut with_charset = request(10, "tools/list", None, json!({ "_meta": meta(false) }));
         with_charset.headers_mut().insert(
@@ -1410,9 +1576,62 @@ mod tests {
                 .unwrap(),
             ))
             .unwrap();
-        let (status, value) = response_value(service.call(missing_protocol).await.unwrap()).await;
+        let response = service.call(missing_protocol).await.unwrap();
+        assert!(response.headers().get(CONTENT_TYPE).is_none());
+        let (status, bytes) = response_bytes(response).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(value["error"]["code"], HEADER_MISMATCH);
+        assert!(bytes.is_empty());
+
+        for protocol_headers in [
+            vec![("MCP-Protocol-Version", "2099-01-01")],
+            vec![
+                ("MCP-Protocol-Version", PROTOCOL_VERSION),
+                ("MCP-Protocol-Version", PROTOCOL_VERSION),
+            ],
+        ] {
+            let mut builder = Request::builder()
+                .method(Method::POST)
+                .header(CONTENT_TYPE, "application/json")
+                .header("Accept", "application/json, text/event-stream");
+            for (name, value) in protocol_headers {
+                builder = builder.header(name, value);
+            }
+            let request = builder
+                .body(Bytes::from(
+                    serde_json::to_vec(&json!({
+                        "jsonrpc": "2.0",
+                        "method": "tools/list",
+                        "params": { "_meta": meta(false) }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap();
+            let response = service.call(request).await.unwrap();
+            assert!(response.headers().get(CONTENT_TYPE).is_none());
+            let (status, bytes) = response_bytes(response).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(bytes.is_empty());
+        }
+
+        let invalid_content_type = Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, "text/plain")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+            .body(Bytes::from(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": { "_meta": meta(false) }
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = service.call(invalid_content_type).await.unwrap();
+        assert!(response.headers().get(CONTENT_TYPE).is_none());
+        let (status, bytes) = response_bytes(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(bytes.is_empty());
     }
 
     #[tokio::test]
