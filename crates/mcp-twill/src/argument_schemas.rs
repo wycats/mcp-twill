@@ -487,6 +487,7 @@ fn strip_annotations(value: &mut Value) {
     };
     object.remove("title");
     object.remove("description");
+    object.remove("x-mcp-header");
     for_each_child_schema_mut(object, strip_annotations);
 }
 
@@ -975,6 +976,7 @@ fn validate_schema_node(schema: &Value, root_schema: &Value, root: bool) -> crat
         "$ref",
         "title",
         "description",
+        "x-mcp-header",
         "type",
         "const",
         "enum",
@@ -1006,7 +1008,7 @@ fn validate_schema_node(schema: &Value, root_schema: &Value, root: bool) -> crat
             "argument schema `$schema` is supported only at the schema root",
         ));
     }
-    for annotation in ["title", "description"] {
+    for annotation in ["title", "description", "x-mcp-header"] {
         if object
             .get(annotation)
             .is_some_and(|value| !value.is_string())

@@ -1393,10 +1393,29 @@ impl CliMcpServer {
         self.registry.lane_specs(&self.config.execution_tool_name)
     }
 
-    fn tools(&self) -> Vec<Tool> {
+    pub(crate) fn tools(&self) -> Vec<Tool> {
         match &self.surface {
             McpToolSurface::EffectLanes(surface) => surface.tools().to_vec(),
             McpToolSurface::Native(surface) => surface.snapshot().tools().to_vec(),
+        }
+    }
+
+    pub(crate) fn stateless_tool_input_schema(
+        &self,
+        name: &str,
+    ) -> Option<&serde_json::Map<String, Value>> {
+        match &self.surface {
+            McpToolSurface::EffectLanes(surface) => surface
+                .tools()
+                .iter()
+                .find(|tool| tool.name == name)
+                .map(|tool| tool.input_schema.as_ref()),
+            McpToolSurface::Native(surface) => surface
+                .snapshot()
+                .tools()
+                .iter()
+                .find(|tool| tool.name == name)
+                .map(|tool| tool.input_schema.as_ref()),
         }
     }
 

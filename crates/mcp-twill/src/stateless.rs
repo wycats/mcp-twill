@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     convert::Infallible,
     future::Future,
     pin::Pin,
@@ -125,6 +125,7 @@ impl CliMcpServer {
         if !sealed {
             return Err(FrameworkError::ProtocolReleaseUnsealed);
         }
+        validate_tool_header_annotations(&self)?;
         Ok(StatelessMcpService { server: self })
     }
 }
@@ -604,8 +605,14 @@ fn preflight(
 
     if !request.known_method {
         if let Some(headers) = headers
-            && validate_http_headers(headers, &request.method, &request.params, observed_version)
-                .is_err()
+            && validate_http_headers(
+                server,
+                headers,
+                &request.method,
+                &request.params,
+                observed_version,
+            )
+            .is_err()
         {
             return Err(response(
                 StatusCode::BAD_REQUEST,
@@ -631,8 +638,14 @@ fn preflight(
     }
 
     if let Some(headers) = headers
-        && validate_http_headers(headers, &request.method, &request.params, observed_version)
-            .is_err()
+        && validate_http_headers(
+            server,
+            headers,
+            &request.method,
+            &request.params,
+            observed_version,
+        )
+        .is_err()
     {
         return Err(response(
             StatusCode::BAD_REQUEST,
@@ -659,9 +672,11 @@ fn preflight(
 
 fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<&str, ()> {
     let meta = params.get("_meta").and_then(Value::as_object).ok_or(())?;
-    meta.get("io.modelcontextprotocol/clientCapabilities")
+    let capabilities = meta
+        .get("io.modelcontextprotocol/clientCapabilities")
         .and_then(Value::as_object)
         .ok_or(())?;
+    validate_client_capabilities(capabilities)?;
     if let Some(client_info) = meta.get("io.modelcontextprotocol/clientInfo") {
         let client_info = client_info.as_object().ok_or(())?;
         client_info.get("name").and_then(Value::as_str).ok_or(())?;
@@ -675,15 +690,55 @@ fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<&st
         .ok_or(())
 }
 
+fn validate_client_capabilities(capabilities: &Map<String, Value>) -> std::result::Result<(), ()> {
+    for name in ["elicitation", "roots", "sampling"] {
+        let Some(capability) = capabilities.get(name) else {
+            continue;
+        };
+        let capability = capability.as_object().ok_or(())?;
+        let known_members: &[&str] = match name {
+            "elicitation" => &["form", "url"],
+            "sampling" => &["context", "tools"],
+            _ => &[],
+        };
+        for member in known_members {
+            if capability
+                .get(*member)
+                .is_some_and(|value| !value.is_object())
+            {
+                return Err(());
+            }
+        }
+    }
+    for name in ["experimental", "extensions"] {
+        let Some(capability) = capabilities.get(name) else {
+            continue;
+        };
+        if !capability
+            .as_object()
+            .is_some_and(|entries| entries.values().all(Value::is_object))
+        {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
 fn decoded_header_value(value: &str) -> std::result::Result<String, ()> {
+    decoded_header(value).map(|(value, _)| value)
+}
+
+fn decoded_header(value: &str) -> std::result::Result<(String, bool), ()> {
     let Some(encoded) = value
         .strip_prefix(BASE64_HEADER_PREFIX)
         .and_then(|value| value.strip_suffix(BASE64_HEADER_SUFFIX))
     else {
-        return Ok(value.to_string());
+        return Ok((value.to_string(), false));
     };
     let decoded = BASE64_STANDARD.decode(encoded).map_err(|_| ())?;
-    String::from_utf8(decoded).map_err(|_| ())
+    String::from_utf8(decoded)
+        .map(|value| (value, true))
+        .map_err(|_| ())
 }
 
 fn validated_response_id(body: &[u8]) -> Value {
@@ -835,6 +890,7 @@ fn sse_progress(progress: Value) -> Bytes {
 }
 
 fn validate_http_headers(
+    server: &CliMcpServer,
     headers: &HeaderMap,
     method: &str,
     params: &Map<String, Value>,
@@ -853,7 +909,228 @@ fn validate_http_headers(
     if let Some(routed_name) = routed_name {
         exact_name_header(headers, routed_name)?;
     }
+    if method == "tools/call" {
+        validate_parameter_headers(server, headers, params)?;
+    }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum HeaderParameterKind {
+    String,
+    Integer,
+    Boolean,
+}
+
+struct HeaderParameter {
+    name: String,
+    path: Vec<String>,
+    kind: HeaderParameterKind,
+}
+
+fn validate_tool_header_annotations(server: &CliMcpServer) -> crate::Result<()> {
+    for tool in server.tools() {
+        collect_header_parameters(&Value::Object((*tool.input_schema).clone())).map_err(|_| {
+            FrameworkError::Build(format!(
+                "tool `{}` has an invalid `x-mcp-header` annotation",
+                tool.name
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn collect_header_parameters(schema: &Value) -> std::result::Result<Vec<HeaderParameter>, ()> {
+    let mut parameters = Vec::new();
+    let mut names = BTreeSet::new();
+    collect_header_parameters_at(
+        schema,
+        &mut Vec::new(),
+        true,
+        false,
+        &mut names,
+        &mut parameters,
+    )?;
+    Ok(parameters)
+}
+
+fn collect_header_parameters_at(
+    schema: &Value,
+    path: &mut Vec<String>,
+    static_path: bool,
+    property: bool,
+    names: &mut BTreeSet<String>,
+    parameters: &mut Vec<HeaderParameter>,
+) -> std::result::Result<(), ()> {
+    let object = schema.as_object().ok_or(())?;
+    if let Some(name) = object.get("x-mcp-header") {
+        let name = name.as_str().ok_or(())?;
+        if !property
+            || !static_path
+            || object.contains_key("$ref")
+            || object.contains_key("oneOf")
+            || object.contains_key("items")
+            || name.is_empty()
+            || !name.bytes().all(is_http_token_byte)
+            || !names.insert(name.to_ascii_lowercase())
+        {
+            return Err(());
+        }
+        parameters.push(HeaderParameter {
+            name: name.to_string(),
+            path: path.clone(),
+            kind: annotated_primitive_kind(object.get("type").ok_or(())?)?,
+        });
+    }
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        for (name, child) in properties {
+            path.push(name.clone());
+            collect_header_parameters_at(child, path, static_path, true, names, parameters)?;
+            path.pop();
+        }
+    }
+    for keyword in ["$defs", "items", "additionalProperties"] {
+        let Some(children) = object.get(keyword) else {
+            continue;
+        };
+        if keyword == "$defs" {
+            for child in children.as_object().ok_or(())?.values() {
+                collect_header_parameters_at(child, path, false, false, names, parameters)?;
+            }
+        } else if children.is_object() {
+            collect_header_parameters_at(children, path, false, false, names, parameters)?;
+        }
+    }
+    if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
+        for branch in branches {
+            collect_header_parameters_at(branch, path, false, false, names, parameters)?;
+        }
+    }
+    Ok(())
+}
+
+fn annotated_primitive_kind(value: &Value) -> std::result::Result<HeaderParameterKind, ()> {
+    let kind = if let Some(kind) = value.as_str() {
+        kind
+    } else {
+        let kinds = value.as_array().ok_or(())?;
+        if kinds.len() != 2 || !kinds.iter().any(|kind| kind.as_str() == Some("null")) {
+            return Err(());
+        }
+        kinds
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|kind| *kind != "null")
+            .ok_or(())?
+    };
+    match kind {
+        "string" => Ok(HeaderParameterKind::String),
+        "integer" => Ok(HeaderParameterKind::Integer),
+        "boolean" => Ok(HeaderParameterKind::Boolean),
+        _ => Err(()),
+    }
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn validate_parameter_headers(
+    server: &CliMcpServer,
+    headers: &HeaderMap,
+    params: &Map<String, Value>,
+) -> std::result::Result<(), ()> {
+    let name = params.get("name").and_then(Value::as_str).ok_or(())?;
+    let Some(schema) = server.stateless_tool_input_schema(name) else {
+        return Ok(());
+    };
+    let parameters = collect_header_parameters(&Value::Object(schema.clone()))?;
+    let arguments = params
+        .get("arguments")
+        .filter(|value| value.is_object())
+        .ok_or(())?;
+    for parameter in parameters {
+        let mut value = Some(arguments);
+        for segment in &parameter.path {
+            value = value
+                .and_then(Value::as_object)
+                .and_then(|object| object.get(segment));
+        }
+        let header_name = format!("mcp-param-{}", parameter.name);
+        let mut values = headers.get_all(header_name).iter();
+        let header = values.next();
+        if values.next().is_some() {
+            return Err(());
+        }
+        let Some(value) = value.filter(|value| !value.is_null()) else {
+            if header.is_some() {
+                return Err(());
+            }
+            continue;
+        };
+        let header = header.ok_or(())?.to_str().map_err(|_| ())?;
+        let (decoded, encoded) = decoded_header(header)?;
+        match parameter.kind {
+            HeaderParameterKind::String => {
+                let expected = value.as_str().ok_or(())?;
+                if decoded != expected || (parameter_value_requires_base64(expected) && !encoded) {
+                    return Err(());
+                }
+            }
+            HeaderParameterKind::Boolean => {
+                let expected = value.as_bool().ok_or(())?;
+                if decoded != if expected { "true" } else { "false" } {
+                    return Err(());
+                }
+            }
+            HeaderParameterKind::Integer => {
+                let expected = safe_json_integer(value).ok_or(())?;
+                let observed = decoded.parse::<f64>().map_err(|_| ())?;
+                if !observed.is_finite()
+                    || observed.fract() != 0.0
+                    || observed.abs() > 9_007_199_254_740_991.0
+                    || observed != expected
+                {
+                    return Err(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn safe_json_integer(value: &Value) -> Option<f64> {
+    value
+        .as_number()
+        .and_then(serde_json::Number::as_f64)
+        .filter(|value| {
+            value.is_finite() && value.fract() == 0.0 && value.abs() <= 9_007_199_254_740_991.0
+        })
+}
+
+fn parameter_value_requires_base64(value: &str) -> bool {
+    value.starts_with(BASE64_HEADER_PREFIX) && value.ends_with(BASE64_HEADER_SUFFIX)
+        || value.trim_matches([' ', '\t']) != value
+        || !value
+            .bytes()
+            .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte))
 }
 
 fn exact_header(headers: &HeaderMap, name: &str, expected: &str) -> std::result::Result<(), ()> {
@@ -1023,10 +1300,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        ApplicationResultContract, ApplicationSuccess, CliMcpServer, CommandRegistry, CommandSpec,
-        DynamicCommandFailure, ExtensionOptionalPolicy, FrameworkHelpProjection, InMemoryTaskStore,
-        McpProtocolTarget, NativeConfirmationRoute, NativeToolSurface, OutputContract,
-        TaskAccessContext, TaskAccessPolicy, TaskAccessScope, TaskAccessScopeError,
+        ApplicationResultContract, ApplicationSuccess, ArgSpec, CliMcpServer, CommandRegistry,
+        CommandSpec, DynamicCommandFailure, ExtensionOptionalPolicy, FrameworkHelpProjection,
+        InMemoryTaskStore, McpProtocolTarget, NativeConfirmationRoute, NativeToolSurface,
+        OutputContract, TaskAccessContext, TaskAccessPolicy, TaskAccessScope, TaskAccessScopeError,
         TaskAccessScopeProvider, TaskDeliveryDecl, TaskSupportSpec,
     };
 
@@ -1045,6 +1322,42 @@ mod tests {
         CommandRegistry::new("tasks", "Tasks").register_dynamic(spec, |_| async {
             Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
         })
+    }
+
+    fn header_service() -> StatelessMcpHttpService {
+        let spec = CommandSpec::new(["work"], "Work", "Perform work")
+            .with_arg(
+                ArgSpec::string("region", "Region").with_inline_schema(json!({
+                    "type": "string",
+                    "x-mcp-header": "Region"
+                })),
+            )
+            .with_output(OutputContract {
+                application: Some(ApplicationResultContract::new(json!({
+                    "type": "object",
+                    "properties": { "ok": { "type": "boolean" } },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                }))),
+                ..OutputContract::default()
+            });
+        let registry =
+            CommandRegistry::new("headers", "Headers").register_dynamic(spec, |_| async {
+                Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+            });
+        let surface = NativeToolSurface::builder("headers")
+            .framework_help(FrameworkHelpProjection::Omitted)
+            .confirmation_route(NativeConfirmationRoute::Unavailable)
+            .direct("work", "work")
+            .build(&registry, McpProtocolTarget::V2026_07_28)
+            .unwrap();
+        CliMcpServer::builder(registry)
+            .surface(surface)
+            .build()
+            .unwrap()
+            .into_stateless_service_with_evidence(true)
+            .unwrap()
+            .into_http_service()
     }
 
     #[test]
@@ -1099,6 +1412,80 @@ mod tests {
         prepare_success_result("tools/call", &mut result, json!({ "name": "tasks" }));
         assert!(result.get("cacheScope").is_none());
         assert!(result.get("ttlMs").is_none());
+    }
+
+    #[test]
+    fn tool_parameter_header_annotations_are_closed_and_unambiguous() {
+        let valid = collect_header_parameters(&json!({
+            "type": "object",
+            "properties": {
+                "region": {
+                    "type": "string",
+                    "x-mcp-header": "Region"
+                },
+                "options": {
+                    "type": "object",
+                    "properties": {
+                        "attempts": {
+                            "type": ["null", "integer"],
+                            "x-mcp-header": "Attempts"
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        assert_eq!(valid.len(), 2);
+        assert_eq!(valid[0].path, ["options", "attempts"]);
+        assert_eq!(valid[1].path, ["region"]);
+
+        for invalid in [
+            json!({
+                "type": "object",
+                "properties": {
+                    "first": { "type": "string", "x-mcp-header": "Region" },
+                    "second": { "type": "string", "x-mcp-header": "region" }
+                }
+            }),
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "number", "x-mcp-header": "Value" }
+                }
+            }),
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "oneOf": [
+                            { "type": "string", "x-mcp-header": "Value" }
+                        ]
+                    }
+                }
+            }),
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string", "x-mcp-header": "not valid" }
+                }
+            }),
+        ] {
+            assert!(collect_header_parameters(&invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn parameter_header_comparison_handles_null_and_safe_integer_edges() {
+        assert_eq!(safe_json_integer(&json!(42.0)), Some(42.0));
+        assert_eq!(
+            safe_json_integer(&json!(9_007_199_254_740_991_u64)),
+            Some(9_007_199_254_740_991.0)
+        );
+        assert_eq!(safe_json_integer(&json!(9_007_199_254_740_992_u64)), None);
+        assert!(parameter_value_requires_base64(" padded "));
+        assert!(parameter_value_requires_base64("=?base64?literal?="));
+        assert!(parameter_value_requires_base64("Hello, 世界"));
+        assert!(!parameter_value_requires_base64("us-west1"));
     }
 
     #[test]
@@ -1257,6 +1644,13 @@ mod tests {
                 .unwrap(),
             ))
             .unwrap()
+    }
+
+    fn with_capabilities(mut request: Request<Bytes>, capabilities: Value) -> Request<Bytes> {
+        let mut body: Value = serde_json::from_slice(request.body()).unwrap();
+        body["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = capabilities;
+        *request.body_mut() = Bytes::from(serde_json::to_vec(&body).unwrap());
+        request
     }
 
     async fn response_bytes(response: Response<StatelessMcpHttpBody>) -> (StatusCode, Vec<u8>) {
@@ -1538,6 +1932,106 @@ mod tests {
             response_value(service.call(unknown_without_params).await.unwrap()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(value["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn stateless_http_validates_declared_parameter_headers() {
+        let mut service = header_service();
+        let make_request = |region: &str| {
+            request(
+                1,
+                "tools/call",
+                Some("work"),
+                json!({
+                    "_meta": meta(false),
+                    "name": "work",
+                    "arguments": { "region": region }
+                }),
+            )
+        };
+
+        let mut valid = make_request("us-west1");
+        valid
+            .headers_mut()
+            .insert("Mcp-Param-Region", "us-west1".parse().unwrap());
+        let (status, value) = response_value(service.call(valid).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["result"]["structuredContent"], json!({ "ok": true }));
+
+        for request in [make_request("us-west1"), {
+            let mut request = make_request("us-west1");
+            request
+                .headers_mut()
+                .insert("Mcp-Param-Region", "eu-west1".parse().unwrap());
+            request
+        }] {
+            let (status, value) = response_value(service.call(request).await.unwrap()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(value["error"]["code"], HEADER_MISMATCH);
+        }
+
+        let mut encoded = make_request(" padded ");
+        encoded.headers_mut().insert(
+            "Mcp-Param-Region",
+            "=?base64?IHBhZGRlZCA=?=".parse().unwrap(),
+        );
+        let (status, _) = response_value(service.call(encoded).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let mut unencoded = make_request(" padded ");
+        unencoded
+            .headers_mut()
+            .insert("Mcp-Param-Region", " padded ".parse().unwrap());
+        let (status, value) = response_value(service.call(unencoded).await.unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], HEADER_MISMATCH);
+    }
+
+    #[tokio::test]
+    async fn stateless_preflight_validates_known_capability_shapes_but_allows_unknowns() {
+        let mut service = service(TaskSupportSpec::Optional);
+        for capabilities in [
+            json!({ "extensions": "invalid" }),
+            json!({ "extensions": { "example": true } }),
+            json!({ "sampling": { "tools": false } }),
+            json!({ "elicitation": [] }),
+        ] {
+            let request = with_capabilities(
+                request(1, "tools/list", None, json!({ "_meta": meta(false) })),
+                capabilities,
+            );
+            let (status, value) = response_value(service.call(request).await.unwrap()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(value["error"]["code"], -32602);
+        }
+
+        let malformed_task = with_capabilities(
+            request(
+                3,
+                "tasks/get",
+                Some("missing-task"),
+                json!({ "_meta": meta(true), "taskId": "missing-task" }),
+            ),
+            json!({ "extensions": "invalid" }),
+        );
+        let (status, value) = response_value(service.call(malformed_task).await.unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], -32602);
+
+        let request = with_capabilities(
+            request(2, "tools/list", None, json!({ "_meta": meta(false) })),
+            json!({
+                "extensions": { "example.extension": {} },
+                "sampling": {
+                    "tools": {},
+                    "exampleFutureMember": true
+                },
+                "exampleFutureCapability": true
+            }),
+        );
+        let (status, value) = response_value(service.call(request).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["result"]["tools"].is_array());
     }
 
     #[tokio::test]
