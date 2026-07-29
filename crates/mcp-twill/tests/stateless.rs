@@ -121,3 +121,23 @@ async fn public_stateless_http_applies_framework_cache_policy_to_every_cacheable
         assert_eq!(value["result"]["ttlMs"], 0, "{method}");
     }
 }
+
+#[tokio::test]
+async fn public_stateless_http_accepts_argument_free_calls_without_an_arguments_member() {
+    let mut service = public_http_service();
+    let response = service
+        .call(request(
+            1,
+            "tools/call",
+            Some("work"),
+            json!({
+                "_meta": meta(),
+                "name": "work"
+            }),
+        ))
+        .await
+        .unwrap();
+    let (status, value) = response_value(response).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value["result"]["structuredContent"], json!({ "ok": true }));
+}

@@ -593,7 +593,7 @@ fn preflight(
         return Ok(request);
     }
 
-    let observed_version = validate_request_meta(&request.params).map_err(|_| {
+    let observed_version = request_protocol_version(&request.params).map_err(|_| {
         response(
             StatusCode::BAD_REQUEST,
             id.clone(),
@@ -602,40 +602,6 @@ fn preflight(
             None,
         )
     })?;
-
-    if !request.known_method {
-        if let Some(headers) = headers
-            && validate_http_headers(
-                server,
-                headers,
-                &request.method,
-                &request.params,
-                observed_version,
-            )
-            .is_err()
-        {
-            return Err(response(
-                StatusCode::BAD_REQUEST,
-                id,
-                HEADER_MISMATCH,
-                "Header mismatch",
-                None,
-            ));
-        }
-        if observed_version != PROTOCOL_VERSION {
-            return Err(response(
-                StatusCode::BAD_REQUEST,
-                id,
-                UNSUPPORTED_PROTOCOL_VERSION,
-                "Unsupported protocol version",
-                Some(json!({
-                    "supported": [PROTOCOL_VERSION],
-                    "requested": observed_version,
-                })),
-            ));
-        }
-        return Ok(request);
-    }
 
     if let Some(headers) = headers
         && validate_http_headers(
@@ -655,6 +621,15 @@ fn preflight(
             None,
         ));
     }
+    validate_request_meta(&request.params).map_err(|_| {
+        response(
+            StatusCode::BAD_REQUEST,
+            id.clone(),
+            -32602,
+            "Invalid params",
+            None,
+        )
+    })?;
     if observed_version != PROTOCOL_VERSION {
         return Err(response(
             StatusCode::BAD_REQUEST,
@@ -670,7 +645,16 @@ fn preflight(
     Ok(request)
 }
 
-fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<&str, ()> {
+fn request_protocol_version(params: &Map<String, Value>) -> std::result::Result<&str, ()> {
+    params
+        .get("_meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(Value::as_str)
+        .ok_or(())
+}
+
+fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<(), ()> {
     let meta = params.get("_meta").and_then(Value::as_object).ok_or(())?;
     let capabilities = meta
         .get("io.modelcontextprotocol/clientCapabilities")
@@ -678,16 +662,88 @@ fn validate_request_meta(params: &Map<String, Value>) -> std::result::Result<&st
         .ok_or(())?;
     validate_client_capabilities(capabilities)?;
     if let Some(client_info) = meta.get("io.modelcontextprotocol/clientInfo") {
-        let client_info = client_info.as_object().ok_or(())?;
-        client_info.get("name").and_then(Value::as_str).ok_or(())?;
-        client_info
-            .get("version")
-            .and_then(Value::as_str)
-            .ok_or(())?;
+        validate_implementation(client_info)?;
+    }
+    if meta
+        .get("io.modelcontextprotocol/logLevel")
+        .is_some_and(|value| {
+            !matches!(
+                value.as_str(),
+                Some(
+                    "alert"
+                        | "critical"
+                        | "debug"
+                        | "emergency"
+                        | "error"
+                        | "info"
+                        | "notice"
+                        | "warning"
+                )
+            )
+        })
+    {
+        return Err(());
+    }
+    if meta.get("progressToken").is_some_and(|value| {
+        !value.is_string()
+            && !value
+                .as_number()
+                .is_some_and(crate::JsonInteger::number_is_integer)
+    }) {
+        return Err(());
     }
     meta.get("io.modelcontextprotocol/protocolVersion")
         .and_then(Value::as_str)
-        .ok_or(())
+        .ok_or(())?;
+    Ok(())
+}
+
+fn validate_implementation(value: &Value) -> std::result::Result<(), ()> {
+    let implementation = value.as_object().ok_or(())?;
+    implementation
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or(())?;
+    implementation
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or(())?;
+    for member in ["description", "title", "websiteUrl"] {
+        if implementation
+            .get(member)
+            .is_some_and(|value| !value.is_string())
+        {
+            return Err(());
+        }
+    }
+    if let Some(icons) = implementation.get("icons") {
+        for icon in icons.as_array().ok_or(())? {
+            validate_icon(icon)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_icon(value: &Value) -> std::result::Result<(), ()> {
+    let icon = value.as_object().ok_or(())?;
+    icon.get("src").and_then(Value::as_str).ok_or(())?;
+    if icon.get("mimeType").is_some_and(|value| !value.is_string()) {
+        return Err(());
+    }
+    if let Some(sizes) = icon.get("sizes")
+        && !sizes
+            .as_array()
+            .is_some_and(|sizes| sizes.iter().all(Value::is_string))
+    {
+        return Err(());
+    }
+    if icon
+        .get("theme")
+        .is_some_and(|value| !matches!(value.as_str(), Some("dark" | "light")))
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 fn validate_client_capabilities(capabilities: &Map<String, Value>) -> std::result::Result<(), ()> {
@@ -1062,10 +1118,11 @@ fn validate_parameter_headers(
         return Ok(());
     };
     let parameters = collect_header_parameters(&Value::Object(schema.clone()))?;
-    let arguments = params
-        .get("arguments")
-        .filter(|value| value.is_object())
-        .ok_or(())?;
+    let empty_arguments = Value::Object(Map::new());
+    let arguments = params.get("arguments").unwrap_or(&empty_arguments);
+    if !arguments.is_object() {
+        return Err(());
+    }
     for parameter in parameters {
         let mut value = Some(arguments);
         for segment in &parameter.path {
@@ -1653,6 +1710,13 @@ mod tests {
         request
     }
 
+    fn with_meta_member(mut request: Request<Bytes>, name: &str, value: Value) -> Request<Bytes> {
+        let mut body: Value = serde_json::from_slice(request.body()).unwrap();
+        body["params"]["_meta"][name] = value;
+        *request.body_mut() = Bytes::from(serde_json::to_vec(&body).unwrap());
+        request
+    }
+
     async fn response_bytes(response: Response<StatelessMcpHttpBody>) -> (StatusCode, Vec<u8>) {
         let status = response.status();
         let mut body = Box::pin(response.into_body());
@@ -2032,6 +2096,94 @@ mod tests {
         let (status, value) = response_value(service.call(request).await.unwrap()).await;
         assert_eq!(status, StatusCode::OK);
         assert!(value["result"]["tools"].is_array());
+    }
+
+    #[tokio::test]
+    async fn stateless_preflight_validates_every_standard_request_metadata_member() {
+        let mut service = service(TaskSupportSpec::Optional);
+        for (name, value) in [
+            (
+                "io.modelcontextprotocol/clientInfo",
+                json!({ "name": "test", "version": "1", "icons": 42 }),
+            ),
+            (
+                "io.modelcontextprotocol/clientInfo",
+                json!({
+                    "name": "test",
+                    "version": "1",
+                    "icons": [{ "src": "data:image/png;base64,AA==", "theme": "system" }]
+                }),
+            ),
+            (
+                "io.modelcontextprotocol/clientInfo",
+                json!({ "name": "test", "version": "1", "description": 42 }),
+            ),
+            (
+                "io.modelcontextprotocol/clientInfo",
+                json!({ "name": "test", "version": "1", "icons": [{}] }),
+            ),
+            (
+                "io.modelcontextprotocol/clientInfo",
+                json!({
+                    "name": "test",
+                    "version": "1",
+                    "icons": [{ "src": "data:image/png;base64,AA==", "sizes": "48x48" }]
+                }),
+            ),
+            ("io.modelcontextprotocol/logLevel", json!("verbose")),
+            ("progressToken", json!({ "invalid": true })),
+            ("progressToken", json!(1.5)),
+        ] {
+            let request = with_meta_member(
+                request(1, "tools/list", None, json!({ "_meta": meta(false) })),
+                name,
+                value,
+            );
+            let (status, value) = response_value(service.call(request).await.unwrap()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(value["error"]["code"], -32602);
+        }
+
+        let valid = with_meta_member(
+            with_meta_member(
+                request(2, "tools/list", None, json!({ "_meta": meta(false) })),
+                "io.modelcontextprotocol/clientInfo",
+                json!({
+                    "name": "test",
+                    "version": "1",
+                    "title": "Test Client",
+                    "description": "Acceptance client",
+                    "websiteUrl": "https://example.com",
+                    "icons": [{
+                        "src": "data:image/png;base64,AA==",
+                        "mimeType": "image/png",
+                        "sizes": ["48x48", "any"],
+                        "theme": "dark"
+                    }],
+                    "exampleFutureMember": true
+                }),
+            ),
+            "io.modelcontextprotocol/logLevel",
+            json!("info"),
+        );
+        let valid = with_meta_member(valid, "progressToken", json!(1.0));
+        let valid = with_meta_member(valid, "com.example/futureMetadata", json!(true));
+        let (status, value) = response_value(service.call(valid).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["result"]["tools"].is_array());
+    }
+
+    #[tokio::test]
+    async fn stateless_http_routing_header_failures_precede_metadata_shape_failures() {
+        let mut service = service(TaskSupportSpec::Optional);
+        let mut request = with_capabilities(
+            request(1, "tools/list", None, json!({ "_meta": meta(false) })),
+            json!({ "extensions": "invalid" }),
+        );
+        request.headers_mut().remove("Mcp-Method");
+        let (status, value) = response_value(service.call(request).await.unwrap()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], HEADER_MISMATCH);
     }
 
     #[tokio::test]

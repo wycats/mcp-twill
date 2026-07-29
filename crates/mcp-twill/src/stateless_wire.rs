@@ -43,7 +43,6 @@ pub(crate) struct Request {
     pub(crate) has_id: bool,
     pub(crate) method: String,
     pub(crate) params: Map<String, Value>,
-    pub(crate) known_method: bool,
 }
 
 pub(crate) enum WireError {
@@ -76,7 +75,6 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
             has_id,
             method: request.method,
             params,
-            known_method,
         });
     }
     let params = request.params.as_deref().map(RawValue::get).unwrap_or("{}");
@@ -99,7 +97,6 @@ pub(crate) fn parse(bytes: &[u8], tasks_extension_enabled: bool) -> Result<Reque
         has_id,
         method: request.method,
         params,
-        known_method,
     })
 }
 
@@ -240,7 +237,7 @@ mod tests {
         let Ok(parsed) = parse(unknown, true) else {
             panic!("unknown methods route without validating their params");
         };
-        assert!(!parsed.known_method);
+        assert_eq!(parsed.method, "unknown/method");
         assert!(parsed.params.is_empty());
     }
 }
