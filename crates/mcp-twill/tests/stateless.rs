@@ -174,3 +174,49 @@ async fn public_stateless_http_rejects_malformed_extension_capabilities_at_prefl
         assert_eq!(value["error"]["code"], -32602, "{method}: {value}");
     }
 }
+
+#[tokio::test]
+async fn public_stateless_http_rejects_duplicate_standardized_metadata_keys() {
+    let mut service = public_http_service();
+    for body in [
+        br#"{
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"tools/list",
+            "params":{"_meta":{
+                "io.modelcontextprotocol/clientCapabilities":{},
+                "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                "io.modelcontextprotocol/protocolVersion":"2099-01-01"
+            }}
+        }"#
+        .as_slice(),
+        br#"{
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/list",
+            "params":{"_meta":{
+                "io.modelcontextprotocol/clientCapabilities":{},
+                "io.modelcontextprotocol/clientCapabilities":{"extensions":{}},
+                "io.modelcontextprotocol/protocolVersion":"2026-07-28"
+            }}
+        }"#
+        .as_slice(),
+    ] {
+        let response = service
+            .call(
+                Request::builder()
+                    .method(Method::POST)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header("Accept", "application/json, text/event-stream")
+                    .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+                    .header("Mcp-Method", "tools/list")
+                    .body(Bytes::copy_from_slice(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, value) = response_value(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+        assert_eq!(value["error"]["code"], -32602, "{value}");
+    }
+}

@@ -157,7 +157,7 @@ impl StatelessMcpService {
                 }
                 continue;
             }
-            if is_json_notification(&bytes) {
+            if is_idless_json_object(&bytes) {
                 continue;
             }
             let parsed = crate::stateless_wire::parse(
@@ -232,6 +232,10 @@ impl StatelessMcpService {
 }
 
 fn is_json_notification(bytes: &[u8]) -> bool {
+    crate::stateless_wire::is_notification_envelope(bytes)
+}
+
+fn is_idless_json_object(bytes: &[u8]) -> bool {
     serde_json::from_slice::<Value>(bytes)
         .ok()
         .and_then(|value| value.as_object().map(|object| !object.contains_key("id")))
@@ -1196,13 +1200,8 @@ fn validate_parameter_headers(
                 }
             }
             HeaderParameterKind::Integer => {
-                let expected = safe_json_integer(value).ok_or(())?;
-                let observed = decoded.parse::<f64>().map_err(|_| ())?;
-                if !observed.is_finite()
-                    || observed.fract() != 0.0
-                    || observed.abs() > 9_007_199_254_740_991.0
-                    || observed != expected
-                {
+                let expected = canonical_json_integer(value).ok_or(())?;
+                if decoded != expected {
                     return Err(());
                 }
             }
@@ -1211,13 +1210,28 @@ fn validate_parameter_headers(
     Ok(())
 }
 
-fn safe_json_integer(value: &Value) -> Option<f64> {
-    value
-        .as_number()
-        .and_then(serde_json::Number::as_f64)
-        .filter(|value| {
-            value.is_finite() && value.fract() == 0.0 && value.abs() <= 9_007_199_254_740_991.0
-        })
+fn canonical_json_integer(value: &Value) -> Option<String> {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    let number = value.as_number()?;
+    if let Some(value) = number.as_i64()
+        && value.unsigned_abs() <= MAX_SAFE_INTEGER
+    {
+        return Some(value.to_string());
+    }
+    if let Some(value) = number.as_u64()
+        && value <= MAX_SAFE_INTEGER
+    {
+        return Some(value.to_string());
+    }
+    let value = number.as_f64()?;
+    if !value.is_finite() || value.fract() != 0.0 || value.abs() > MAX_SAFE_INTEGER as f64 {
+        return None;
+    }
+    if value == 0.0 {
+        Some("0".to_string())
+    } else {
+        Some(format!("{value:.0}"))
+    }
 }
 
 fn parameter_value_requires_base64(value: &str) -> bool {
@@ -1427,6 +1441,14 @@ mod tests {
                     "x-mcp-header": "Region"
                 })),
             )
+            .with_arg(
+                ArgSpec::integer("attempts", "Attempts")
+                    .optional()
+                    .with_inline_schema(json!({
+                        "type": "integer",
+                        "x-mcp-header": "Attempts"
+                    })),
+            )
             .with_output(OutputContract {
                 application: Some(ApplicationResultContract::new(json!({
                     "type": "object",
@@ -1571,12 +1593,16 @@ mod tests {
 
     #[test]
     fn parameter_header_comparison_handles_null_and_safe_integer_edges() {
-        assert_eq!(safe_json_integer(&json!(42.0)), Some(42.0));
+        assert_eq!(canonical_json_integer(&json!(42.0)).as_deref(), Some("42"));
         assert_eq!(
-            safe_json_integer(&json!(9_007_199_254_740_991_u64)),
-            Some(9_007_199_254_740_991.0)
+            canonical_json_integer(&json!(9_007_199_254_740_991_u64)).as_deref(),
+            Some("9007199254740991")
         );
-        assert_eq!(safe_json_integer(&json!(9_007_199_254_740_992_u64)), None);
+        assert_eq!(
+            canonical_json_integer(&json!(9_007_199_254_740_992_u64)),
+            None
+        );
+        assert_eq!(canonical_json_integer(&json!(-0.0)).as_deref(), Some("0"));
         assert!(parameter_value_requires_base64(" padded "));
         assert!(parameter_value_requires_base64("=?base64?literal?="));
         assert!(parameter_value_requires_base64("Hello, 世界"));
@@ -2087,6 +2113,38 @@ mod tests {
         let (status, value) = response_value(service.call(unencoded).await.unwrap()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(value["error"]["code"], HEADER_MISMATCH);
+
+        let integer_request = |header: &str| {
+            let mut request = request(
+                2,
+                "tools/call",
+                Some("work"),
+                json!({
+                    "_meta": meta(false),
+                    "name": "work",
+                    "arguments": {
+                        "region": "us-west1",
+                        "attempts": 1
+                    }
+                }),
+            );
+            request
+                .headers_mut()
+                .insert("Mcp-Param-Region", "us-west1".parse().unwrap());
+            request
+                .headers_mut()
+                .insert("Mcp-Param-Attempts", header.parse().unwrap());
+            request
+        };
+        for header in ["1e0", "01", "+1"] {
+            let (status, value) =
+                response_value(service.call(integer_request(header)).await.unwrap()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{header}: {value}");
+            assert_eq!(value["error"]["code"], HEADER_MISMATCH, "{header}");
+        }
+        let (status, value) =
+            response_value(service.call(integer_request("1")).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{value}");
     }
 
     #[tokio::test]
@@ -2359,6 +2417,24 @@ mod tests {
         let (status, bytes) = response_bytes(response).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(bytes.is_empty());
+
+        let invalid_idless_envelope = Request::builder()
+            .method(Method::POST)
+            .header(CONTENT_TYPE, "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+            .body(Bytes::from_static(
+                br#"{"jsonrpc":"2.0","params":{"_meta":{}}}"#,
+            ))
+            .unwrap();
+        let response = service.call(invalid_idless_envelope).await.unwrap();
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let (status, value) = response_value(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], -32600);
     }
 
     #[tokio::test]

@@ -295,7 +295,9 @@ Extension negotiation begins only after the base ingress has validated the reque
 
 Capability declaration is request-local for the complete extension lifecycle. Every extension `tasks/get`, `tasks/update`, and `tasks/cancel` request must carry the same exact extension member in its own `_meta`; neither the creation request nor another request establishes remembered capability. A missing declaration returns `-32021` / `Missing required client capability` with the exact `requiredCapabilities.extensions["io.modelcontextprotocol/tasks"] = {}` data before access-scope derivation, task-id lookup, or store access; Streamable HTTP uses status 400. A malformed declaration is invalid parameters at the same pre-access boundary. An extension surface answers `tasks/result` with `-32601` / `Method not found`; no capability or legacy task record makes that removed method reachable.
 
-Every key under `clientCapabilities.extensions` additionally follows the final core's `_meta` key grammar with its mandatory prefix. An unprefixed extension identifier is malformed standardized metadata and fails at the same pre-task invalid-parameters boundary.
+Every key under `clientCapabilities.extensions` additionally follows the final core's `_meta` key grammar with its mandatory prefix. An unprefixed extension identifier is malformed standardized metadata and fails at the same pre-task invalid-parameters boundary. The raw ingress parser rejects duplicate standardized request-metadata members before converting `_meta` into its private value representation.
+
+An integer mirrored through `Mcp-Param-*` matches only its canonical decimal spelling; exponent, leading-zero, and explicit-plus spellings fail even when they denote the same mathematical value. Empty-body notification handling applies only after the id-less body has been validated as a JSON-RPC notification envelope with exact `jsonrpc: "2.0"` and a textual method; a malformed id-less object receives the ordinary JSON-RPC error body.
 
 After resolving a known public tool route and its homogeneous `TaskSupportSpec`, the extension materialization rule is:
 
