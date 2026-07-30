@@ -61,7 +61,7 @@ pub use results::*;
 pub use rmcp_adapter::{
     CliMcpServer, CliMcpServerConfig, ConversationIdentityCompatibility,
     HostNativeConfirmationMode, HostNativeExecution, HostNativeExecutionOutcome,
-    WorkspaceMetadataCompatibility,
+    NativeMcpInitializeProjection, NativeMcpServerIdentity, WorkspaceMetadataCompatibility,
 };
 pub use runtime::RuntimeIdentity;
 pub use stateless::{StatelessMcpHttpBody, StatelessMcpHttpService, StatelessMcpService};
