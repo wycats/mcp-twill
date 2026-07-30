@@ -17,7 +17,7 @@ use rmcp::{
         CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, ClientResult,
         Content, CreateTaskResult, CustomResult, ErrorCode, Extensions, GetPromptRequestParams,
         GetPromptResult, GetTaskInfoParams, GetTaskPayloadResult, GetTaskResult,
-        GetTaskResultParams, Implementation, JsonRpcMessage, ListPromptsResult,
+        GetTaskResultParams, Implementation, JsonObject, JsonRpcMessage, ListPromptsResult,
         ListResourcesResult, ListRootsRequest, ListTasksResult, ListToolsResult, Meta,
         PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion, RawResource,
         ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
@@ -61,6 +61,99 @@ pub enum WorkspaceMetadataCompatibility {
     #[default]
     Disabled,
     TrustedCodexSandboxState,
+}
+
+/// Server identity advertised by MCP initialize.
+///
+/// Twill derives this identity from the command registry by default. Native
+/// adapters that must preserve an existing public MCP contract can provide an
+/// explicit identity without replacing Twill's server handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeMcpServerIdentity {
+    name: String,
+    version: String,
+    title: Option<String>,
+    description: Option<String>,
+}
+
+impl NativeMcpServerIdentity {
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            version: version.into(),
+            title: None,
+            description: None,
+        }
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    fn implementation(&self) -> Implementation {
+        let mut implementation = Implementation::new(&self.name, &self.version);
+        implementation.title = self.title.clone();
+        implementation.description = self.description.clone();
+        implementation
+    }
+}
+
+/// Projection of the framework-owned MCP initialize response.
+///
+/// Tools and task capabilities remain derived from the compiled Twill
+/// surface. Resources and prompts default to advertised and served, matching
+/// Twill's existing behavior. An adapter may suppress either optional surface,
+/// attach experimental capability metadata, and preserve an existing server
+/// identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeMcpInitializeProjection {
+    resources: bool,
+    prompts: bool,
+    experimental: BTreeMap<String, JsonObject>,
+    server_identity: Option<NativeMcpServerIdentity>,
+}
+
+impl Default for NativeMcpInitializeProjection {
+    fn default() -> Self {
+        Self {
+            resources: true,
+            prompts: true,
+            experimental: BTreeMap::new(),
+            server_identity: None,
+        }
+    }
+}
+
+impl NativeMcpInitializeProjection {
+    pub fn with_resources(mut self, advertised: bool) -> Self {
+        self.resources = advertised;
+        self
+    }
+
+    pub fn with_prompts(mut self, advertised: bool) -> Self {
+        self.prompts = advertised;
+        self
+    }
+
+    pub fn with_experimental_capability(
+        mut self,
+        name: impl Into<String>,
+        settings: JsonObject,
+    ) -> Self {
+        self.experimental.insert(name.into(), settings);
+        self
+    }
+
+    pub fn with_server_identity(mut self, identity: NativeMcpServerIdentity) -> Self {
+        self.server_identity = Some(identity);
+        self
+    }
 }
 
 /// Internal host-adapter confirmation composition selected by a compiled
@@ -271,6 +364,7 @@ fn validate_protocol_observations<'a>(
 pub struct CliMcpServer {
     registry: Arc<CommandRegistry>,
     config: CliMcpServerConfig,
+    native_mcp_initialize_projection: NativeMcpInitializeProjection,
     surface: McpToolSurface,
     native_confirmation_bridge: Option<Arc<dyn NativeConfirmationBridge>>,
     task_runtime: Option<TaskRuntime>,
@@ -535,6 +629,7 @@ pub struct CliMcpServerBuilder {
     registry: CommandRegistry,
     config: CliMcpServerConfig,
     config_authored: bool,
+    native_mcp_initialize_projection: Option<NativeMcpInitializeProjection>,
     surface: Option<McpToolSurface>,
     authorizer: Option<Arc<dyn PermissionAuthorizer>>,
     native_confirmation_bridge: Option<Arc<dyn NativeConfirmationBridge>>,
@@ -548,6 +643,7 @@ impl CliMcpServerBuilder {
             registry,
             config: CliMcpServerConfig::default(),
             config_authored: false,
+            native_mcp_initialize_projection: None,
             surface: None,
             authorizer: None,
             native_confirmation_bridge: None,
@@ -575,6 +671,20 @@ impl CliMcpServerBuilder {
             ));
         } else {
             self.surface = Some(surface.into());
+        }
+        self
+    }
+
+    pub fn native_mcp_initialize_projection(
+        mut self,
+        projection: NativeMcpInitializeProjection,
+    ) -> Self {
+        if self.native_mcp_initialize_projection.is_some() {
+            self.errors.push(FrameworkError::Build(
+                "MCP server assigns `native_mcp_initialize_projection` more than once".to_string(),
+            ));
+        } else {
+            self.native_mcp_initialize_projection = Some(projection);
         }
         self
     }
@@ -758,12 +868,53 @@ impl CliMcpServer {
         if self.task_profile() == Some(SemanticTaskProfile::Legacy2025_11_25) {
             Ok(())
         } else {
-            Err(rmcp::ErrorData::new(
-                ErrorCode::METHOD_NOT_FOUND,
-                "Method not found",
-                None,
-            ))
+            Err(method_not_found())
         }
+    }
+
+    fn ensure_resources_supported(&self) -> std::result::Result<(), rmcp::ErrorData> {
+        if self.native_mcp_initialize_projection.resources {
+            Ok(())
+        } else {
+            Err(method_not_found())
+        }
+    }
+
+    fn ensure_prompts_supported(&self) -> std::result::Result<(), rmcp::ErrorData> {
+        if self.native_mcp_initialize_projection.prompts {
+            Ok(())
+        } else {
+            Err(method_not_found())
+        }
+    }
+
+    fn initialize_capabilities(&self) -> ServerCapabilities {
+        let projection = &self.native_mcp_initialize_projection;
+        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
+        if projection.resources {
+            capabilities.resources = Some(Default::default());
+        }
+        if projection.prompts {
+            capabilities.prompts = Some(Default::default());
+        }
+        if !projection.experimental.is_empty() {
+            capabilities.experimental = Some(projection.experimental.clone());
+        }
+        if self.task_profile() == Some(SemanticTaskProfile::Legacy2025_11_25) {
+            capabilities.tasks = Some(crate::native_surfaces::legacy_tasks_capability());
+        }
+        capabilities
+    }
+
+    fn initialize_server_identity(&self) -> Implementation {
+        if let Some(identity) = &self.native_mcp_initialize_projection.server_identity {
+            return identity.implementation();
+        }
+        let mut implementation =
+            Implementation::new(self.registry.server_name(), env!("CARGO_PKG_VERSION"));
+        implementation.title = Some("MCP Twill".to_string());
+        implementation.description = Some(self.registry.server_description().to_string());
+        implementation
     }
 
     pub fn builder(registry: CommandRegistry) -> CliMcpServerBuilder {
@@ -926,9 +1077,14 @@ impl CliMcpServer {
             .runtime_identity()
             .with_server_version(env!("CARGO_PKG_VERSION"))
             .with_surface(surface_identity);
+        let native_mcp_initialize_projection = builder
+            .native_mcp_initialize_projection
+            .take()
+            .unwrap_or_default();
         Ok(Self {
             registry: Arc::new(registry),
             config,
+            native_mcp_initialize_projection,
             surface,
             native_confirmation_bridge: builder.native_confirmation_bridge,
             task_runtime,
@@ -3024,25 +3180,6 @@ impl CliMcpServer {
 
 impl ServerHandler for CliMcpServer {
     fn get_info(&self) -> ServerInfo {
-        let capabilities = if self.task_profile() == Some(SemanticTaskProfile::Legacy2025_11_25) {
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .enable_prompts()
-                .enable_tasks_with(crate::native_surfaces::legacy_tasks_capability())
-                .build()
-        } else {
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .enable_prompts()
-                .build()
-        };
-        let mut implementation =
-            Implementation::new(self.registry.server_name(), env!("CARGO_PKG_VERSION"));
-        implementation.title = Some("MCP Twill".to_string());
-        implementation.description = Some(self.registry.server_description().to_string());
-
         let (instructions, protocol_version) = match &self.surface {
             McpToolSurface::EffectLanes(surface) => (
                 surface.instructions().to_string(),
@@ -3054,8 +3191,8 @@ impl ServerHandler for CliMcpServer {
                     .expect("compiled protocol target is a protocol version"),
             ),
         };
-        ServerInfo::new(capabilities)
-            .with_server_info(implementation)
+        ServerInfo::new(self.initialize_capabilities())
+            .with_server_info(self.initialize_server_identity())
             .with_protocol_version(protocol_version)
             .with_instructions(instructions)
     }
@@ -3182,6 +3319,7 @@ impl ServerHandler for CliMcpServer {
             request.as_ref().and_then(|request| request.meta.as_ref()),
             &context,
         )?;
+        self.ensure_resources_supported()?;
         Ok(ListResourcesResult::with_all_items(
             self.resources()
                 .into_iter()
@@ -3196,6 +3334,7 @@ impl ServerHandler for CliMcpServer {
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<ReadResourceResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_resources_supported()?;
         if let Some((decl, id)) = self.registry.match_resource_uri(&request.uri) {
             let name = decl.name.clone();
             let reader = self.registry.resource_reader(&name).ok_or_else(|| {
@@ -3255,6 +3394,7 @@ impl ServerHandler for CliMcpServer {
             request.as_ref().and_then(|request| request.meta.as_ref()),
             &context,
         )?;
+        self.ensure_prompts_supported()?;
         Ok(ListPromptsResult::with_all_items(vec![
             rmcp::model::Prompt::new("getting_started", Some("How to use MCP Twill"), None),
         ]))
@@ -3266,6 +3406,7 @@ impl ServerHandler for CliMcpServer {
         context: RequestContext<RoleServer>,
     ) -> std::result::Result<GetPromptResult, rmcp::ErrorData> {
         self.validate_protocol(request.meta.as_ref(), &context)?;
+        self.ensure_prompts_supported()?;
         if request.name != "getting_started" {
             return Err(rmcp::ErrorData::invalid_params(
                 format!("Unknown prompt {}", request.name),
@@ -3837,6 +3978,10 @@ fn task_cancelled_outcome() -> Value {
 
 fn unknown_task() -> rmcp::ErrorData {
     rmcp::ErrorData::invalid_params("Unknown task", None)
+}
+
+fn method_not_found() -> rmcp::ErrorData {
+    rmcp::ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None)
 }
 
 fn task_creation_failed() -> rmcp::ErrorData {
