@@ -958,6 +958,11 @@ pub(crate) fn compile_argument_schema_for_projection(
             if let Some(projected) = compiled.schema.get_mut("items") {
                 restore_authored_required_order(projected, authored);
             }
+            if let (Some(projected), Some(authored)) =
+                (compiled.schema.get_mut("$defs"), authored.get("$defs"))
+            {
+                restore_authored_required_order(projected, authored);
+            }
         } else {
             restore_authored_required_order(&mut compiled.schema, authored);
         }

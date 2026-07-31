@@ -110,14 +110,13 @@ impl NativeMcpServerIdentity {
 /// surface. Resources and prompts default to advertised and served, matching
 /// Twill's existing behavior. An adapter may suppress either optional surface,
 /// attach experimental capability metadata, and preserve an existing server
-/// identity and initialization instructions.
+/// identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeMcpInitializeProjection {
     resources: bool,
     prompts: bool,
     experimental: BTreeMap<String, JsonObject>,
     server_identity: Option<NativeMcpServerIdentity>,
-    instructions: Option<String>,
 }
 
 impl Default for NativeMcpInitializeProjection {
@@ -127,7 +126,6 @@ impl Default for NativeMcpInitializeProjection {
             prompts: true,
             experimental: BTreeMap::new(),
             server_identity: None,
-            instructions: None,
         }
     }
 }
@@ -154,11 +152,6 @@ impl NativeMcpInitializeProjection {
 
     pub fn with_server_identity(mut self, identity: NativeMcpServerIdentity) -> Self {
         self.server_identity = Some(identity);
-        self
-    }
-
-    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
-        self.instructions = Some(instructions.into());
         self
     }
 }
@@ -3198,11 +3191,6 @@ impl ServerHandler for CliMcpServer {
                     .expect("compiled protocol target is a protocol version"),
             ),
         };
-        let instructions = self
-            .native_mcp_initialize_projection
-            .instructions
-            .clone()
-            .unwrap_or(instructions);
         ServerInfo::new(self.initialize_capabilities())
             .with_server_info(self.initialize_server_identity())
             .with_protocol_version(protocol_version)

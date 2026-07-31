@@ -6,9 +6,10 @@ use mcp_twill::{
     CommandRegistry, CommandSpec, ConfirmationMessage, ConfirmationPredicate,
     ConfirmationPresentation, DynamicCommandFailure, ExplicitCarrierPolicy,
     FrameworkHelpProjection, McpProtocolTarget, NativeApplicationErrorDialect,
-    NativeConfirmationRoute, NativeExposurePolicy, NativeToolSurface, NativeToolSurfaceDecl,
-    NoApplicationError, OutputContract, PermissionEffect, PermissionSpec, PrivateResourceReference,
-    RecoveryCardinality, ResolveResource, ResourceBindingMode, ResourceRefusal, TaskDeliveryDecl,
+    NativeConfirmationRoute, NativeExposurePolicy, NativeGroupDescriptionDialect,
+    NativeToolSurface, NativeToolSurfaceDecl, NoApplicationError, OutputContract, PermissionEffect,
+    PermissionSpec, PrivateResourceReference, RecoveryCardinality, ResolveResource,
+    ResourceBindingMode, ResourceRefusal, TaskDeliveryDecl,
 };
 use serde_json::{Value, json};
 
@@ -394,6 +395,7 @@ fn surface_impl(
             exposure: NativeExposurePolicy::Complete,
             framework_help: FrameworkHelpProjection::Omitted,
             application_errors: NativeApplicationErrorDialect::FlatSingleRecovery,
+            group_description_dialect: NativeGroupDescriptionDialect::AuthoredVerbatim,
             confirmation: NativeConfirmationRoute::Bridge,
             resource_bindings: vec![binding],
             task_delivery: TaskDeliveryDecl::Disabled,
@@ -403,6 +405,7 @@ fn surface_impl(
         NativeToolSurface::builder("vbl")
             .framework_help(FrameworkHelpProjection::Omitted)
             .application_errors(NativeApplicationErrorDialect::FlatSingleRecovery)
+            .group_description_dialect(NativeGroupDescriptionDialect::AuthoredVerbatim)
             .confirmation_route(NativeConfirmationRoute::Bridge)
     };
     for tool in observed_surface["tools"]
