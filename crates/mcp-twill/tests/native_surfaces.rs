@@ -15,10 +15,10 @@ use mcp_twill::{
     FrameworkHelpProjection, Grant, InvocationContext, InvocationOrigin, InvocationPlan, Listing,
     McpProtocolTarget, NativeApplicationErrorDialect, NativeConfirmationBridge,
     NativeConfirmationBridgeError, NativeConfirmationDecision, NativeConfirmationRequest,
-    NativeConfirmationRoute, NativeExposurePolicy, NativeToolSurface, OutputContract,
-    PermissionAuthorizer, PermissionDecision, PermissionEffect, PermissionSpec, Release,
-    ResolveResource, Resource, ResourceDecl, ResourceRefusal, RunMode, RunRequest,
-    ServingSurfaceIdentity, TaskDeliveryDecl, TaskSupportSpec,
+    NativeConfirmationRoute, NativeExposurePolicy, NativeGroupDescriptionDialect,
+    NativeToolSurface, OutputContract, PermissionAuthorizer, PermissionDecision, PermissionEffect,
+    PermissionSpec, Release, ResolveResource, Resource, ResourceDecl, ResourceRefusal, RunMode,
+    RunRequest, ServingSurfaceIdentity, TaskDeliveryDecl, TaskSupportSpec,
 };
 use rmcp::{
     ClientHandler, ServiceExt,
@@ -369,6 +369,10 @@ fn declaration_and_snapshot_use_the_accepted_wire_contract() -> anyhow::Result<(
         .expect("compiled items tool");
     assert_eq!(items.title.as_deref(), Some("Items"));
     assert_eq!(
+        items.description.as_deref(),
+        Some("List or read stored items.\n\nOperations:\n- `list`: List items\n- `get`: Get item")
+    );
+    assert_eq!(
         items
             .annotations
             .as_ref()
@@ -380,6 +384,251 @@ fn declaration_and_snapshot_use_the_accepted_wire_contract() -> anyhow::Result<(
         Some(&BTreeMap::from([("operation".to_string(), json!("get"),)]))
     );
     assert_eq!(snapshot.document()["surfaceHash"], Value::Null);
+    Ok(())
+}
+
+#[test]
+fn authored_verbatim_group_descriptions_are_explicit_and_hash_covered() -> anyhow::Result<()> {
+    let registry = item_registry(TaskSupportSpec::Optional);
+    let derived = grouped_surface(&registry, NativeConfirmationRoute::Unavailable)?;
+    let verbatim = NativeToolSurface::builder("item-tools")
+        .framework_help(FrameworkHelpProjection::Tool {
+            name: "framework-help".to_string(),
+        })
+        .application_errors(NativeApplicationErrorDialect::Canonical)
+        .group_description_dialect(NativeGroupDescriptionDialect::AuthoredVerbatim)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .group("items", |group| {
+            group
+                .selector("operation")
+                .member("list", "items.list")
+                .member("get", "items.get")
+                .title("Items")
+                .description("List or read stored items.");
+        })
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+
+    let items = verbatim
+        .snapshot()
+        .tools()
+        .iter()
+        .find(|tool| tool.name == "items")
+        .expect("compiled items tool");
+    assert_eq!(
+        items.description.as_deref(),
+        Some("List or read stored items.")
+    );
+    assert_eq!(
+        serde_json::to_value(verbatim.declaration())?["groupDescriptionDialect"],
+        "authoredVerbatim"
+    );
+    assert_ne!(
+        derived.snapshot().surface_hash(),
+        verbatim.snapshot().surface_hash()
+    );
+    Ok(())
+}
+
+#[test]
+fn native_projection_preserves_authored_required_array_order_without_changing_catalog_identity()
+-> anyhow::Result<()> {
+    let input = json!({
+        "oneOf": [{
+            "type": "object",
+            "properties": {
+                "kind": { "const": "delay", "type": "string" },
+                "duration_ms": { "type": "integer" }
+            },
+            "required": ["kind", "duration_ms"],
+            "additionalProperties": false
+        }]
+    });
+    let output = json!({
+        "type": "object",
+        "properties": {
+            "zeta": { "type": "boolean" },
+            "alpha": { "type": "boolean" }
+        },
+        "required": ["zeta", "alpha"],
+        "additionalProperties": false
+    });
+    let operation = CommandSpec::new(["ordered"], "Ordered", "Preserve projection order")
+        .with_arg(ArgSpec::inline_schema("condition", input, "Wait condition"))
+        .with_output(OutputContract {
+            application: Some(ApplicationResultContract::new(output)),
+            ..OutputContract::default()
+        });
+    let registry = CommandRegistry::new("ordered", "Ordered projection").register_dynamic(
+        operation,
+        |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "zeta": true,
+                "alpha": true
+            })))
+        },
+    );
+    let catalog_hash = registry.catalog_identity().catalog_hash;
+    let canonical = registry.operation_specs().pop().expect("ordered operation");
+    let Some(mcp_twill::ArgumentSchemaUse::Inline {
+        schema: canonical_input,
+    }) = canonical.args[0].schema.as_ref()
+    else {
+        anyhow::bail!("expected inline argument schema");
+    };
+    assert_eq!(
+        canonical_input["oneOf"][0]["required"],
+        json!(["duration_ms", "kind"])
+    );
+    let surface = NativeToolSurface::builder("ordered")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("ordered", "ordered")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let tool = &surface.snapshot().tools()[0];
+
+    assert_eq!(
+        tool.input_schema["properties"]["condition"]["oneOf"][0]["required"],
+        json!(["kind", "duration_ms"])
+    );
+    assert_eq!(
+        tool.output_schema.as_ref().expect("output schema")["required"],
+        json!(["zeta", "alpha"])
+    );
+    assert_eq!(registry.catalog_identity().catalog_hash, catalog_hash);
+    assert_eq!(surface.snapshot().catalog_hash(), catalog_hash);
+    Ok(())
+}
+
+#[test]
+fn repeated_native_projection_restores_required_order_inside_hoisted_definitions()
+-> anyhow::Result<()> {
+    let condition = json!({
+        "$defs": {
+            "wait": {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "delay", "type": "string" },
+                    "duration_ms": { "type": "integer" }
+                },
+                "required": ["kind", "duration_ms"],
+                "additionalProperties": false
+            }
+        },
+        "$ref": "#/$defs/wait"
+    });
+    let operation = CommandSpec::new(
+        ["ordered", "repeated"],
+        "Repeated ordered",
+        "Preserve repeated projection order",
+    )
+    .with_arg(ArgSpec::inline_schema("conditions", condition, "Wait conditions").repeated())
+    .with_output(OutputContract {
+        application: Some(object_contract(
+            json!({ "ok": { "type": "boolean" } }),
+            &["ok"],
+        )),
+        ..OutputContract::default()
+    });
+    let registry = CommandRegistry::new("ordered", "Ordered projection").register_dynamic(
+        operation,
+        |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+        },
+    );
+    let canonical = registry.operation_specs().pop().expect("ordered operation");
+    let Some(mcp_twill::ArgumentSchemaUse::Inline { schema }) = canonical.args[0].schema.as_ref()
+    else {
+        anyhow::bail!("expected inline argument schema");
+    };
+    assert_eq!(
+        schema["$defs"]["wait"]["required"],
+        json!(["duration_ms", "kind"])
+    );
+
+    let surface = NativeToolSurface::builder("ordered")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("ordered-repeated", "ordered.repeated")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    assert_eq!(
+        surface.snapshot().tools()[0].input_schema["$defs"]["wait"]["required"],
+        json!(["kind", "duration_ms"])
+    );
+    Ok(())
+}
+
+#[test]
+fn grouped_members_compare_canonical_schemas_and_preserve_first_authored_order()
+-> anyhow::Result<()> {
+    let first_condition = json!({
+        "type": "object",
+        "properties": {
+            "kind": { "type": "string" },
+            "duration_ms": { "type": "integer" }
+        },
+        "required": ["kind", "duration_ms"],
+        "additionalProperties": false
+    });
+    let second_condition = json!({
+        "type": "object",
+        "properties": {
+            "kind": { "type": "string" },
+            "duration_ms": { "type": "integer" }
+        },
+        "required": ["duration_ms", "kind"],
+        "additionalProperties": false
+    });
+    let output = || OutputContract {
+        application: Some(object_contract(
+            json!({ "ok": { "type": "boolean" } }),
+            &["ok"],
+        )),
+        ..OutputContract::default()
+    };
+    let first = CommandSpec::new(["ordered", "first"], "First", "First operation")
+        .with_arg(ArgSpec::inline_schema(
+            "condition",
+            first_condition,
+            "Wait condition",
+        ))
+        .with_output(output());
+    let second = CommandSpec::new(["ordered", "second"], "Second", "Second operation")
+        .with_arg(ArgSpec::inline_schema(
+            "condition",
+            second_condition,
+            "Wait condition",
+        ))
+        .with_output(output());
+    let registry = CommandRegistry::new("ordered", "Ordered projection")
+        .register_dynamic(first, |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+        })
+        .register_dynamic(second, |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({ "ok": true })))
+        });
+    for operation in registry.operation_specs() {
+        let Some(mcp_twill::ArgumentSchemaUse::Inline { schema }) =
+            operation.args[0].schema.as_ref()
+        else {
+            anyhow::bail!("expected inline argument schema");
+        };
+        assert_eq!(schema["required"], json!(["duration_ms", "kind"]));
+    }
+
+    let surface = NativeToolSurface::builder("ordered")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .group("ordered", |group| {
+            group
+                .selector("operation")
+                .member("first", "ordered.first")
+                .member("second", "ordered.second");
+        })
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    assert_eq!(
+        surface.snapshot().tools()[0].input_schema["properties"]["condition"]["required"],
+        json!(["kind", "duration_ms"])
+    );
     Ok(())
 }
 

@@ -180,6 +180,20 @@ impl CompiledTasksExtensionDelivery {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum NativeGroupDescriptionDialect {
+    #[default]
+    CatalogDerived,
+    AuthoredVerbatim,
+}
+
+impl NativeGroupDescriptionDialect {
+    fn is_catalog_derived(&self) -> bool {
+        matches!(self, Self::CatalogDerived)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeToolSurfaceDecl {
@@ -194,6 +208,11 @@ pub struct NativeToolSurfaceDecl {
         skip_serializing_if = "NativeApplicationErrorDialect::is_canonical"
     )]
     pub application_errors: NativeApplicationErrorDialect,
+    #[serde(
+        default,
+        skip_serializing_if = "NativeGroupDescriptionDialect::is_catalog_derived"
+    )]
+    pub group_description_dialect: NativeGroupDescriptionDialect,
     pub confirmation: NativeConfirmationRoute,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_bindings: Vec<crate::ResourceBindingDecl>,
@@ -474,6 +493,7 @@ pub struct NativeToolSurfaceBuilder {
     exposure_authored: bool,
     framework_help_authored: bool,
     application_errors_authored: bool,
+    group_description_dialect_authored: bool,
     confirmation_authored: bool,
     task_delivery_authored: bool,
     seeded_resource_bindings: BTreeSet<String>,
@@ -491,6 +511,7 @@ impl NativeToolSurfaceBuilder {
                 exposure: NativeExposurePolicy::Complete,
                 framework_help: FrameworkHelpProjection::Omitted,
                 application_errors: NativeApplicationErrorDialect::Canonical,
+                group_description_dialect: NativeGroupDescriptionDialect::CatalogDerived,
                 confirmation: NativeConfirmationRoute::Unavailable,
                 resource_bindings: Vec::new(),
                 task_delivery: TaskDeliveryDecl::Disabled,
@@ -498,6 +519,7 @@ impl NativeToolSurfaceBuilder {
             exposure_authored: false,
             framework_help_authored: false,
             application_errors_authored: false,
+            group_description_dialect_authored: false,
             confirmation_authored: false,
             task_delivery_authored: false,
             seeded_resource_bindings: BTreeSet::new(),
@@ -525,6 +547,7 @@ impl NativeToolSurfaceBuilder {
             exposure_authored: true,
             framework_help_authored: true,
             application_errors_authored: true,
+            group_description_dialect_authored: true,
             confirmation_authored: true,
             task_delivery_authored: true,
             seeded_resource_bindings,
@@ -573,6 +596,18 @@ impl NativeToolSurfaceBuilder {
         } else {
             self.application_errors_authored = true;
             self.declaration.application_errors = dialect;
+        }
+        self
+    }
+
+    pub fn group_description_dialect(mut self, dialect: NativeGroupDescriptionDialect) -> Self {
+        if self.group_description_dialect_authored {
+            self.errors.push(build_error(
+                "native surface assigns `group_description_dialect` more than once",
+            ));
+        } else {
+            self.group_description_dialect_authored = true;
+            self.declaration.group_description_dialect = dialect;
         }
         self
     }
@@ -1212,7 +1247,8 @@ fn compile_native_surface(
                     &effective_bindings,
                 );
                 let defaults = presentation_defaults(&display_title)?;
-                let mut input = schema_object(registry.arg_schema(command), "direct input schema")?;
+                let mut input =
+                    schema_object(registry.native_arg_schema(command), "direct input schema")?;
                 refine_input_schema_for_bindings(
                     &mut input,
                     command,
@@ -1330,22 +1366,30 @@ fn compile_native_surface(
                 )?;
                 let output = compile_group_output(name, selector, &member_operations, members)?;
                 let display_title = title.clone().unwrap_or_else(|| name.clone());
-                let final_description = description
+                let authored_description = description
                     .clone()
                     .unwrap_or_else(|| format!("Select one operation with `{selector}`."));
-                let final_description = append_group_guidance(
-                    final_description,
-                    &member_operations,
-                    members,
-                    &operation_specs,
-                    &declared_routes,
-                );
-                let final_description = append_resource_binding_guidance(
-                    final_description,
-                    member_commands.iter().map(|(command, _)| *command),
-                    registry,
-                    &effective_bindings,
-                );
+                let final_description = if description.is_some()
+                    && matches!(
+                        declaration.group_description_dialect,
+                        NativeGroupDescriptionDialect::AuthoredVerbatim
+                    ) {
+                    authored_description
+                } else {
+                    let description = append_group_guidance(
+                        authored_description,
+                        &member_operations,
+                        members,
+                        &operation_specs,
+                        &declared_routes,
+                    );
+                    append_resource_binding_guidance(
+                        description,
+                        member_commands.iter().map(|(command, _)| *command),
+                        registry,
+                        &effective_bindings,
+                    )
+                };
                 let defaults = presentation_defaults(&display_title)?;
                 let tool = Tool::new(name.clone(), final_description, input)
                     .with_title(display_title.clone())
@@ -2060,38 +2104,68 @@ fn compile_group_input(
         }),
     );
     let mut definitions = Map::new();
+    let mut comparable_properties = Map::new();
+    let mut comparable_definitions = Map::new();
     let mut required_intersection: Option<BTreeSet<String>> = None;
     let mut member_properties = Vec::new();
 
     for (command, member) in members {
-        let schema = registry.arg_schema(command);
-        let mut object = schema.as_object().cloned().ok_or_else(|| {
+        let projected_schema = registry.native_arg_schema(command);
+        let mut projected_object = projected_schema.as_object().cloned().ok_or_else(|| {
             build_error(format!(
                 "native group `{group}` member `{}` has non-object input schema",
                 member.operation_id
             ))
         })?;
-        refine_input_schema_for_bindings(&mut object, command, registry, bindings);
-        let own_properties = object
+        let comparable_schema = registry.arg_schema(command);
+        let mut comparable_object = comparable_schema.as_object().cloned().ok_or_else(|| {
+            build_error(format!(
+                "native group `{group}` member `{}` has non-object canonical input schema",
+                member.operation_id
+            ))
+        })?;
+        refine_input_schema_for_bindings(&mut projected_object, command, registry, bindings);
+        refine_input_schema_for_bindings(&mut comparable_object, command, registry, bindings);
+        let own_properties = projected_object
+            .get("properties")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let own_comparable_properties = comparable_object
             .get("properties")
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
         for (name, schema) in &own_properties {
-            match properties.get(name) {
-                Some(existing) if existing != schema => {
+            let comparable_schema = own_comparable_properties.get(name).ok_or_else(|| {
+                build_error(format!(
+                    "native group `{group}` member `{}` is missing canonical schema for shared argument `{name}`",
+                    member.operation_id
+                ))
+            })?;
+            match comparable_properties.get(name) {
+                Some(existing) if existing != comparable_schema => {
                     return Err(build_error(format!(
                         "native group `{group}` has incompatible schema for shared argument `{name}`"
                     )));
                 }
                 Some(_) => {}
                 None => {
-                    properties.insert(name.clone(), schema.clone());
+                    comparable_properties.insert(name.clone(), comparable_schema.clone());
                 }
             }
+            if !properties.contains_key(name) {
+                properties.insert(name.clone(), schema.clone());
+            }
         }
-        merge_definitions(group, &mut definitions, object.get("$defs"))?;
-        let required = object
+        merge_projected_definitions(
+            group,
+            &mut definitions,
+            &mut comparable_definitions,
+            projected_object.get("$defs"),
+            comparable_object.get("$defs"),
+        )?;
+        let required = projected_object
             .get("required")
             .and_then(Value::as_array)
             .into_iter()
@@ -2105,7 +2179,7 @@ fn compile_group_input(
         });
         let own_relationships = ["dependentRequired", "dependencies"]
             .into_iter()
-            .filter_map(|keyword| object.get(keyword).and_then(Value::as_object))
+            .filter_map(|keyword| projected_object.get(keyword).and_then(Value::as_object))
             .flat_map(|relationships| relationships.iter())
             .filter_map(|(trigger, targets)| {
                 targets.as_array().map(|targets| {
@@ -2212,6 +2286,47 @@ fn merge_definitions(
             Some(_) => {}
             None => {
                 target.insert(name.clone(), schema.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn merge_projected_definitions(
+    group: &str,
+    projected_target: &mut Map<String, Value>,
+    comparable_target: &mut Map<String, Value>,
+    projected_value: Option<&Value>,
+    comparable_value: Option<&Value>,
+) -> Result<()> {
+    let projected = projected_value.and_then(Value::as_object);
+    let comparable = comparable_value.and_then(Value::as_object);
+    match (projected, comparable) {
+        (None, None) => return Ok(()),
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(build_error(format!(
+                "native group `{group}` has inconsistent projected and canonical `$defs`"
+            )));
+        }
+        (Some(projected), Some(comparable)) => {
+            for (name, comparable_schema) in comparable {
+                let projected_schema = projected.get(name).ok_or_else(|| {
+                    build_error(format!(
+                        "native group `{group}` is missing projected `$defs` entry `{name}`"
+                    ))
+                })?;
+                match comparable_target.get(name) {
+                    Some(existing) if existing != comparable_schema => {
+                        return Err(build_error(format!(
+                            "native group `{group}` has conflicting `$defs` entry `{name}`"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        comparable_target.insert(name.clone(), comparable_schema.clone());
+                        projected_target.insert(name.clone(), projected_schema.clone());
+                    }
+                }
             }
         }
     }

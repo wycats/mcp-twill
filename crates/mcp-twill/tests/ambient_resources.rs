@@ -1187,6 +1187,7 @@ fn builder_rejects_ambiguous_incomplete_and_mismatched_sidecars() {
         exposure: mcp_twill::NativeExposurePolicy::Complete,
         framework_help: FrameworkHelpProjection::Omitted,
         application_errors: NativeApplicationErrorDialect::Canonical,
+        group_description_dialect: mcp_twill::NativeGroupDescriptionDialect::CatalogDerived,
         confirmation: NativeConfirmationRoute::Unavailable,
         task_delivery: mcp_twill::TaskDeliveryDecl::Disabled,
         resource_bindings: vec![ResourceBindingDecl {
