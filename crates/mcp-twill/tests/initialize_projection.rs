@@ -71,6 +71,21 @@ fn default_initialize_projection_preserves_twill_capabilities_and_identity() -> 
     Ok(())
 }
 
+#[test]
+fn initialize_projection_can_preserve_long_existing_server_instructions() -> anyhow::Result<()> {
+    let instructions = "Existing server guidance. ".repeat(80);
+    assert!(instructions.chars().count() > 1_024);
+    let server = native_server(
+        NativeMcpInitializeProjection::default().with_instructions(instructions.clone()),
+    )?;
+
+    assert_eq!(
+        server.get_info().instructions.as_deref(),
+        Some(instructions.as_str())
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_initialize_projection_can_preserve_a_tools_only_server_contract()
 -> anyhow::Result<()> {

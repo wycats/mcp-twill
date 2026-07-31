@@ -1910,14 +1910,32 @@ impl CommandRegistry {
     /// (array-wrapped when repeated); no `$ref` indirection and no top-level
     /// `oneOf` appear anywhere in the output.
     pub fn arg_schema(&self, spec: &crate::CommandSpec) -> Value {
+        self.compile_arg_schema(spec, false)
+    }
+
+    pub(crate) fn native_arg_schema(&self, spec: &crate::CommandSpec) -> Value {
+        self.compile_arg_schema(spec, true)
+    }
+
+    fn compile_arg_schema(
+        &self,
+        spec: &crate::CommandSpec,
+        preserve_required_order: bool,
+    ) -> Value {
         let mut properties = serde_json::Map::new();
         let mut required = Vec::new();
         let mut definitions = serde_json::Map::new();
         for arg in &spec.args {
-            let compiled =
+            let compiled = if preserve_required_order {
+                crate::argument_schemas::compile_argument_schema_for_projection(
+                    arg,
+                    &self.argument_schemas,
+                )
+            } else {
                 crate::argument_schemas::compile_argument_schema(arg, &self.argument_schemas)
-                    .ok()
-                    .flatten();
+            }
+            .ok()
+            .flatten();
             let has_compiled_schema = compiled.is_some();
             let base = if let Some(compiled) = compiled {
                 let mut schema = compiled.schema;

@@ -1212,7 +1212,8 @@ fn compile_native_surface(
                     &effective_bindings,
                 );
                 let defaults = presentation_defaults(&display_title)?;
-                let mut input = schema_object(registry.arg_schema(command), "direct input schema")?;
+                let mut input =
+                    schema_object(registry.native_arg_schema(command), "direct input schema")?;
                 refine_input_schema_for_bindings(
                     &mut input,
                     command,
@@ -1330,22 +1331,24 @@ fn compile_native_surface(
                 )?;
                 let output = compile_group_output(name, selector, &member_operations, members)?;
                 let display_title = title.clone().unwrap_or_else(|| name.clone());
-                let final_description = description
-                    .clone()
-                    .unwrap_or_else(|| format!("Select one operation with `{selector}`."));
-                let final_description = append_group_guidance(
-                    final_description,
-                    &member_operations,
-                    members,
-                    &operation_specs,
-                    &declared_routes,
-                );
-                let final_description = append_resource_binding_guidance(
-                    final_description,
-                    member_commands.iter().map(|(command, _)| *command),
-                    registry,
-                    &effective_bindings,
-                );
+                let final_description = match description {
+                    Some(description) => description.clone(),
+                    None => {
+                        let description = append_group_guidance(
+                            format!("Select one operation with `{selector}`."),
+                            &member_operations,
+                            members,
+                            &operation_specs,
+                            &declared_routes,
+                        );
+                        append_resource_binding_guidance(
+                            description,
+                            member_commands.iter().map(|(command, _)| *command),
+                            registry,
+                            &effective_bindings,
+                        )
+                    }
+                };
                 let defaults = presentation_defaults(&display_title)?;
                 let tool = Tool::new(name.clone(), final_description, input)
                     .with_title(display_title.clone())
@@ -2064,7 +2067,7 @@ fn compile_group_input(
     let mut member_properties = Vec::new();
 
     for (command, member) in members {
-        let schema = registry.arg_schema(command);
+        let schema = registry.native_arg_schema(command);
         let mut object = schema.as_object().cloned().ok_or_else(|| {
             build_error(format!(
                 "native group `{group}` member `{}` has non-object input schema",

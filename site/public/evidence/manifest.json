@@ -3,7 +3,7 @@
     {
       "bytes": 1153401,
       "path": "bundle.json",
-      "sha256": "1ffd086062d83124703ba327ce2b6bb15e3d3921f35a3967ee3d2b05f901d960"
+      "sha256": "db681b658a2567247f4ca68a9dfaa9256024e605f187e777ed6b645feec8864f"
     },
     {
       "bytes": 16039,
@@ -61,7 +61,7 @@
     {
       "path": "crates/mcp-twill/src/native_surfaces.rs",
       "provenance": "Repository source used by the Twill evidence generator.",
-      "sha256": "d332bf976cc0e688eb2266582321c4afba02fca28e33a2d6b64935841828ff8a"
+      "sha256": "f4601e4d1cdd13469587856665b05c75ad7c06d7bb3b808f72cd97a4da110c22"
     },
     {
       "path": "crates/mcp-twill/src/presentation.rs",
@@ -71,12 +71,12 @@
     {
       "path": "crates/mcp-twill/src/registry.rs",
       "provenance": "Repository source used by the Twill evidence generator.",
-      "sha256": "dac43f29a498b64f02d868b48c43ca2aa2d7203d161f5acf3bf1c1c7f9dffd89"
+      "sha256": "faa5acd05e6f92727aef37e0dabfc8f832e061fa7a9dfe12cf38e8d905177fff"
     },
     {
       "path": "crates/mcp-twill/src/rmcp_adapter.rs",
       "provenance": "Repository source used by the Twill evidence generator.",
-      "sha256": "ffe13cbf858abe11ee8400f2640cc0350e98ff567c3c9959fba2d38f9d66f472"
+      "sha256": "7e270ea5195ab5dd653cefcd3cc41cc8a1e1fe189cc37ad246a5c6cb03c4b737"
     },
     {
       "path": "crates/mcp-twill/tests/fixtures/vbl/v0.4.9/manifest.json",

@@ -941,6 +941,68 @@ pub(crate) fn compile_argument_schema(
     Ok(Some(CompiledArgumentSchema { identity, schema }))
 }
 
+pub(crate) fn compile_argument_schema_for_projection(
+    arg: &ArgSpec,
+    declarations: &SchemaDecls,
+) -> crate::Result<Option<CompiledArgumentSchema>> {
+    let authored = match arg.schema.as_ref() {
+        Some(ArgumentSchemaUse::Named { name }) => declarations
+            .get(name)
+            .map(|declaration| &declaration.schema),
+        Some(ArgumentSchemaUse::Inline { schema }) => Some(schema),
+        None => None,
+    };
+    let mut compiled = compile_argument_schema(arg, declarations)?;
+    if let (Some(authored), Some(compiled)) = (authored, compiled.as_mut()) {
+        if arg.repeated {
+            if let Some(projected) = compiled.schema.get_mut("items") {
+                restore_authored_required_order(projected, authored);
+            }
+        } else {
+            restore_authored_required_order(&mut compiled.schema, authored);
+        }
+    }
+    Ok(compiled)
+}
+
+pub(crate) fn restore_authored_required_order(projected: &mut Value, authored: &Value) {
+    match (projected, authored) {
+        (Value::Object(projected), Value::Object(authored)) => {
+            if let (Some(Value::Array(projected_required)), Some(Value::Array(authored_required))) =
+                (projected.get_mut("required"), authored.get("required"))
+                && same_string_members(projected_required, authored_required)
+            {
+                *projected_required = authored_required.clone();
+            }
+            for (name, authored_child) in authored {
+                if let Some(projected_child) = projected.get_mut(name) {
+                    restore_authored_required_order(projected_child, authored_child);
+                }
+            }
+        }
+        (Value::Array(projected), Value::Array(authored)) => {
+            for (projected, authored) in projected.iter_mut().zip(authored) {
+                restore_authored_required_order(projected, authored);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn same_string_members(left: &[Value], right: &[Value]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut left = left.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    let mut right = right.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    if left.len() != right.len() {
+        return false;
+    }
+    left.sort_unstable();
+    right.sort_unstable();
+    left == right
+}
+
 pub(crate) fn canonicalize_schema(schema: &mut Value) -> crate::Result<()> {
     let root = schema.as_object_mut().ok_or_else(|| {
         build_error("argument schema root must be an object; boolean schemas are unsupported")

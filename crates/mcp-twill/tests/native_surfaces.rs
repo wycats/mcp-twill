@@ -369,6 +369,10 @@ fn declaration_and_snapshot_use_the_accepted_wire_contract() -> anyhow::Result<(
         .expect("compiled items tool");
     assert_eq!(items.title.as_deref(), Some("Items"));
     assert_eq!(
+        items.description.as_deref(),
+        Some("List or read stored items.")
+    );
+    assert_eq!(
         items
             .annotations
             .as_ref()
@@ -380,6 +384,76 @@ fn declaration_and_snapshot_use_the_accepted_wire_contract() -> anyhow::Result<(
         Some(&BTreeMap::from([("operation".to_string(), json!("get"),)]))
     );
     assert_eq!(snapshot.document()["surfaceHash"], Value::Null);
+    Ok(())
+}
+
+#[test]
+fn native_projection_preserves_authored_required_array_order_without_changing_catalog_identity()
+-> anyhow::Result<()> {
+    let input = json!({
+        "oneOf": [{
+            "type": "object",
+            "properties": {
+                "kind": { "const": "delay", "type": "string" },
+                "duration_ms": { "type": "integer" }
+            },
+            "required": ["kind", "duration_ms"],
+            "additionalProperties": false
+        }]
+    });
+    let output = json!({
+        "type": "object",
+        "properties": {
+            "zeta": { "type": "boolean" },
+            "alpha": { "type": "boolean" }
+        },
+        "required": ["zeta", "alpha"],
+        "additionalProperties": false
+    });
+    let operation = CommandSpec::new(["ordered"], "Ordered", "Preserve projection order")
+        .with_arg(ArgSpec::inline_schema("condition", input, "Wait condition"))
+        .with_output(OutputContract {
+            application: Some(ApplicationResultContract::new(output)),
+            ..OutputContract::default()
+        });
+    let registry = CommandRegistry::new("ordered", "Ordered projection").register_dynamic(
+        operation,
+        |_| async {
+            Ok::<_, DynamicCommandFailure>(ApplicationSuccess::value(json!({
+                "zeta": true,
+                "alpha": true
+            })))
+        },
+    );
+    let catalog_hash = registry.catalog_identity().catalog_hash;
+    let canonical = registry.operation_specs().pop().expect("ordered operation");
+    let Some(mcp_twill::ArgumentSchemaUse::Inline {
+        schema: canonical_input,
+    }) = canonical.args[0].schema.as_ref()
+    else {
+        anyhow::bail!("expected inline argument schema");
+    };
+    assert_eq!(
+        canonical_input["oneOf"][0]["required"],
+        json!(["duration_ms", "kind"])
+    );
+    let surface = NativeToolSurface::builder("ordered")
+        .framework_help(FrameworkHelpProjection::Omitted)
+        .confirmation_route(NativeConfirmationRoute::Unavailable)
+        .direct("ordered", "ordered")
+        .build(&registry, McpProtocolTarget::V2025_11_25)?;
+    let tool = &surface.snapshot().tools()[0];
+
+    assert_eq!(
+        tool.input_schema["properties"]["condition"]["oneOf"][0]["required"],
+        json!(["kind", "duration_ms"])
+    );
+    assert_eq!(
+        tool.output_schema.as_ref().expect("output schema")["required"],
+        json!(["zeta", "alpha"])
+    );
+    assert_eq!(registry.catalog_identity().catalog_hash, catalog_hash);
+    assert_eq!(surface.snapshot().catalog_hash(), catalog_hash);
     Ok(())
 }
 
