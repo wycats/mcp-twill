@@ -16,7 +16,7 @@ The optional `rmcp` feature adds conversions from rmcp root types.
 
 ```toml
 [dependencies]
-mcp-workspace-resolver = { version = "0.1.1", features = ["rmcp"] }
+mcp-workspace-resolver = { version = "0.1.2", features = ["rmcp"] }
 ```
 
 The package requires Rust 1.88 or newer. API documentation is available on

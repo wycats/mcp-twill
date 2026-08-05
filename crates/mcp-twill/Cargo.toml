@@ -21,7 +21,7 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 http = "1"
 http-body = "1"
-mcp-workspace-resolver = { version = "0.1.1", path = "../mcp-workspace-resolver", features = ["rmcp"] }
+mcp-workspace-resolver = { version = "0.1.2", path = "../mcp-workspace-resolver", features = ["rmcp"] }
 rand = "0.8"
 rmcp = { version = "1.7.0", features = ["client", "transport-io"] }
 schemars = { version = "1", features = ["derive"] }

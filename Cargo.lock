@@ -434,7 +434,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "mcp-twill"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-twill-host"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-workspace-resolver"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rmcp",
  "schemars",
