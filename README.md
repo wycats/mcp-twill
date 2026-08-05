@@ -17,12 +17,12 @@ results, and generated host adapters at
 Add the framework to a server:
 
 ```sh
-cargo add mcp-twill@0.1.1
+cargo add mcp-twill@0.1.2
 ```
 
 Applications that embed the reusable resolver or generate host integrations can
 also add `mcp-workspace-resolver` or `mcp-twill-host` at the same version.
-Version 0.1.1 requires Rust 1.88 or newer.
+Version 0.1.2 requires Rust 1.88 or newer.
 
 Project values:
 

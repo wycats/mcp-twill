@@ -52,9 +52,9 @@ jobs:
       - run: cargo publish --workspace --dry-run
       - run: cargo xtask verify-release-archives
       - run: npm ci
-        working-directory: target/package/release-verification/mcp-twill-host-0.1.1/tests/typescript
+        working-directory: target/package/release-verification/mcp-twill-host-0.1.2/tests/typescript
       - run: npm test
-        working-directory: target/package/release-verification/mcp-twill-host-0.1.1/tests/typescript
+        working-directory: target/package/release-verification/mcp-twill-host-0.1.2/tests/typescript
 
   msrv:
     runs-on: ubuntu-latest

@@ -408,7 +408,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "9339cdb6ed421c7b03741d36ccc7552e8adb96557ec095646381294b197f39c0",
+          "hash": "cf939de77d311ff9e6b12536dbb2cddb18a2ecbf01f8176e54b9df9d9478eafc",
           "name": "effect-lanes"
         },
         "tools": [
@@ -1309,7 +1309,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "90c92a40fd93f0c379e66f0e19d7ae1a77995d5efd85bb6edcde368996a66db1",
+        "invocationFingerprint": "6185e80c3c110f4a5e3a1a46eec26f9be5e2b8b666c458e2ebe13901fed19084",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -1378,7 +1378,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "90c92a40fd93f0c379e66f0e19d7ae1a77995d5efd85bb6edcde368996a66db1",
+              "invocationFingerprint": "6185e80c3c110f4a5e3a1a46eec26f9be5e2b8b666c458e2ebe13901fed19084",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -1409,11 +1409,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "cfed349acb116e9ccd66b8d8c8731196c8b21ce512b48273f5051e2d471802e5",
-        "compactSurface": "9339cdb6ed421c7b03741d36ccc7552e8adb96557ec095646381294b197f39c0",
+        "catalog": "a9e45e2533e735c26dc445b19f7bba074d1101e14f19c4468da11571e5a5f0d2",
+        "compactSurface": "cf939de77d311ff9e6b12536dbb2cddb18a2ecbf01f8176e54b9df9d9478eafc",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "90c92a40fd93f0c379e66f0e19d7ae1a77995d5efd85bb6edcde368996a66db1",
-        "nativeSurface": "f8e61769ae6aaba330a58c239e759ae8568dc6715df4c733e20b9fa26c65302b",
+        "invocation": "6185e80c3c110f4a5e3a1a46eec26f9be5e2b8b666c458e2ebe13901fed19084",
+        "nativeSurface": "3a2aafe7f72bc7e6865edc3841d128e2e1c8a98a296ab7820358d7226a9e8bc4",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -1693,7 +1693,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "cfed349acb116e9ccd66b8d8c8731196c8b21ce512b48273f5051e2d471802e5",
+          "catalogHash": "a9e45e2533e735c26dc445b19f7bba074d1101e14f19c4468da11571e5a5f0d2",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -1882,7 +1882,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "f8e61769ae6aaba330a58c239e759ae8568dc6715df4c733e20b9fa26c65302b",
+          "hash": "3a2aafe7f72bc7e6865edc3841d128e2e1c8a98a296ab7820358d7226a9e8bc4",
           "name": "command-woven-native"
         },
         "tool": {
@@ -1953,14 +1953,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "cfed349acb116e9ccd66b8d8c8731196c8b21ce512b48273f5051e2d471802e5",
+        "catalogHash": "a9e45e2533e735c26dc445b19f7bba074d1101e14f19c4468da11571e5a5f0d2",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "90c92a40fd93f0c379e66f0e19d7ae1a77995d5efd85bb6edcde368996a66db1",
+        "invocationFingerprint": "6185e80c3c110f4a5e3a1a46eec26f9be5e2b8b666c458e2ebe13901fed19084",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -1975,7 +1975,7 @@
           }
         ],
         "surface": {
-          "hash": "f8e61769ae6aaba330a58c239e759ae8568dc6715df4c733e20b9fa26c65302b",
+          "hash": "3a2aafe7f72bc7e6865edc3841d128e2e1c8a98a296ab7820358d7226a9e8bc4",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -2189,14 +2189,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "cfed349acb116e9ccd66b8d8c8731196c8b21ce512b48273f5051e2d471802e5",
+              "catalogHash": "a9e45e2533e735c26dc445b19f7bba074d1101e14f19c4468da11571e5a5f0d2",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "90c92a40fd93f0c379e66f0e19d7ae1a77995d5efd85bb6edcde368996a66db1",
+              "invocationFingerprint": "6185e80c3c110f4a5e3a1a46eec26f9be5e2b8b666c458e2ebe13901fed19084",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -2211,7 +2211,7 @@
                 }
               ],
               "surface": {
-                "hash": "f8e61769ae6aaba330a58c239e759ae8568dc6715df4c733e20b9fa26c65302b",
+                "hash": "3a2aafe7f72bc7e6865edc3841d128e2e1c8a98a296ab7820358d7226a9e8bc4",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -2259,7 +2259,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "90c92a40fd93f0c379e66f0e19d7ae1a77995d5efd85bb6edcde368996a66db1",
+            "invocationFingerprint": "6185e80c3c110f4a5e3a1a46eec26f9be5e2b8b666c458e2ebe13901fed19084",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -2272,10 +2272,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "90c92a40fd93f0c379e66f0e19d7ae1a77995d5efd85bb6edcde368996a66db1",
+            "invocationFingerprint": "6185e80c3c110f4a5e3a1a46eec26f9be5e2b8b666c458e2ebe13901fed19084",
             "origin": "operationId",
             "surface": {
-              "hash": "f8e61769ae6aaba330a58c239e759ae8568dc6715df4c733e20b9fa26c65302b",
+              "hash": "3a2aafe7f72bc7e6865edc3841d128e2e1c8a98a296ab7820358d7226a9e8bc4",
               "name": "command-woven-native"
             }
           },
@@ -2607,7 +2607,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "c936641c69380d6b2a84044364cd022e26e49227d0d80142db558add37cfa205",
+          "hash": "2ecbb7b609f7f67a52004605327419a63c3a9cce778a5286c630341f03e98ca5",
           "name": "effect-lanes"
         },
         "tools": [
@@ -3507,7 +3507,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "6eb19282f08f82bd2ae0bfdfbffca51575e5f4cf8d578d9ad012c97830846bfd",
+        "invocationFingerprint": "b92c22b830334a7159c87dd6e61164c36e7a4a246f417a6f605e08dd4fb1330b",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -3576,7 +3576,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "6eb19282f08f82bd2ae0bfdfbffca51575e5f4cf8d578d9ad012c97830846bfd",
+              "invocationFingerprint": "b92c22b830334a7159c87dd6e61164c36e7a4a246f417a6f605e08dd4fb1330b",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -3602,11 +3602,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "551b13302e782b8af0e8ddc5d0bbef9128da09e03aa77a955f463c6c62a5488c",
-        "compactSurface": "c936641c69380d6b2a84044364cd022e26e49227d0d80142db558add37cfa205",
+        "catalog": "cfd4dd40c1eca554321bd8ceeeb3c88ed63e57716840a9c307d95e746870bd8a",
+        "compactSurface": "2ecbb7b609f7f67a52004605327419a63c3a9cce778a5286c630341f03e98ca5",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "6eb19282f08f82bd2ae0bfdfbffca51575e5f4cf8d578d9ad012c97830846bfd",
-        "nativeSurface": "c6c1318ab98ecfebbf76e6ba787ec4ad4f70f0ff4722dc9ac820797613447a8a",
+        "invocation": "b92c22b830334a7159c87dd6e61164c36e7a4a246f417a6f605e08dd4fb1330b",
+        "nativeSurface": "59976f95a45ec264eeb6019d60ebfec63d87b30fa1e686f232da97eff495ec05",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -3884,7 +3884,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "551b13302e782b8af0e8ddc5d0bbef9128da09e03aa77a955f463c6c62a5488c",
+          "catalogHash": "cfd4dd40c1eca554321bd8ceeeb3c88ed63e57716840a9c307d95e746870bd8a",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -4072,7 +4072,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "c6c1318ab98ecfebbf76e6ba787ec4ad4f70f0ff4722dc9ac820797613447a8a",
+          "hash": "59976f95a45ec264eeb6019d60ebfec63d87b30fa1e686f232da97eff495ec05",
           "name": "command-woven-native"
         },
         "tool": {
@@ -4143,14 +4143,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "551b13302e782b8af0e8ddc5d0bbef9128da09e03aa77a955f463c6c62a5488c",
+        "catalogHash": "cfd4dd40c1eca554321bd8ceeeb3c88ed63e57716840a9c307d95e746870bd8a",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "6eb19282f08f82bd2ae0bfdfbffca51575e5f4cf8d578d9ad012c97830846bfd",
+        "invocationFingerprint": "b92c22b830334a7159c87dd6e61164c36e7a4a246f417a6f605e08dd4fb1330b",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -4165,7 +4165,7 @@
           }
         ],
         "surface": {
-          "hash": "c6c1318ab98ecfebbf76e6ba787ec4ad4f70f0ff4722dc9ac820797613447a8a",
+          "hash": "59976f95a45ec264eeb6019d60ebfec63d87b30fa1e686f232da97eff495ec05",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -4379,14 +4379,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "551b13302e782b8af0e8ddc5d0bbef9128da09e03aa77a955f463c6c62a5488c",
+              "catalogHash": "cfd4dd40c1eca554321bd8ceeeb3c88ed63e57716840a9c307d95e746870bd8a",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "6eb19282f08f82bd2ae0bfdfbffca51575e5f4cf8d578d9ad012c97830846bfd",
+              "invocationFingerprint": "b92c22b830334a7159c87dd6e61164c36e7a4a246f417a6f605e08dd4fb1330b",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -4401,7 +4401,7 @@
                 }
               ],
               "surface": {
-                "hash": "c6c1318ab98ecfebbf76e6ba787ec4ad4f70f0ff4722dc9ac820797613447a8a",
+                "hash": "59976f95a45ec264eeb6019d60ebfec63d87b30fa1e686f232da97eff495ec05",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -4449,7 +4449,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "6eb19282f08f82bd2ae0bfdfbffca51575e5f4cf8d578d9ad012c97830846bfd",
+            "invocationFingerprint": "b92c22b830334a7159c87dd6e61164c36e7a4a246f417a6f605e08dd4fb1330b",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -4462,10 +4462,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "6eb19282f08f82bd2ae0bfdfbffca51575e5f4cf8d578d9ad012c97830846bfd",
+            "invocationFingerprint": "b92c22b830334a7159c87dd6e61164c36e7a4a246f417a6f605e08dd4fb1330b",
             "origin": "operationId",
             "surface": {
-              "hash": "c6c1318ab98ecfebbf76e6ba787ec4ad4f70f0ff4722dc9ac820797613447a8a",
+              "hash": "59976f95a45ec264eeb6019d60ebfec63d87b30fa1e686f232da97eff495ec05",
               "name": "command-woven-native"
             }
           },
@@ -4808,7 +4808,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "84c0cc60dd93f84fd15a4af9d1570fd48d9e6af52ce6f227851b81b3a68c591b",
+          "hash": "b66a47305b14e224ca28586afbc3d2069685721e818aacdf583b1de1df64f0e8",
           "name": "effect-lanes"
         },
         "tools": [
@@ -5719,7 +5719,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "ae0085c0f20e0ba4809b7e32f1a4d47ecc9c123d26a8c47bda8d63465ea0e359",
+        "invocationFingerprint": "7deec1a8a297ecfd2ab9617826d26b917f38368d6750d5c5e080e6e7ef133393",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -5788,7 +5788,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "ae0085c0f20e0ba4809b7e32f1a4d47ecc9c123d26a8c47bda8d63465ea0e359",
+              "invocationFingerprint": "7deec1a8a297ecfd2ab9617826d26b917f38368d6750d5c5e080e6e7ef133393",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -5819,11 +5819,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "dfd28175e410258adeaa3c9b71bd8039e61a9c218cc79009dfbd8daf3819292b",
-        "compactSurface": "84c0cc60dd93f84fd15a4af9d1570fd48d9e6af52ce6f227851b81b3a68c591b",
+        "catalog": "e305f60d7552177719122c41204d2765114b322917bc0a49d9c89fd08cee9315",
+        "compactSurface": "b66a47305b14e224ca28586afbc3d2069685721e818aacdf583b1de1df64f0e8",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "ae0085c0f20e0ba4809b7e32f1a4d47ecc9c123d26a8c47bda8d63465ea0e359",
-        "nativeSurface": "87460755c3536b7b3e1c5ed6f5977a7139b68013625a6066dc172a74e83a1f47",
+        "invocation": "7deec1a8a297ecfd2ab9617826d26b917f38368d6750d5c5e080e6e7ef133393",
+        "nativeSurface": "a393d854b4c098ac84091110aa5b90c5161b72290caf7d17422c484abd35f4fe",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -6123,7 +6123,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "dfd28175e410258adeaa3c9b71bd8039e61a9c218cc79009dfbd8daf3819292b",
+          "catalogHash": "e305f60d7552177719122c41204d2765114b322917bc0a49d9c89fd08cee9315",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -6322,7 +6322,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "87460755c3536b7b3e1c5ed6f5977a7139b68013625a6066dc172a74e83a1f47",
+          "hash": "a393d854b4c098ac84091110aa5b90c5161b72290caf7d17422c484abd35f4fe",
           "name": "command-woven-native"
         },
         "tool": {
@@ -6393,14 +6393,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "dfd28175e410258adeaa3c9b71bd8039e61a9c218cc79009dfbd8daf3819292b",
+        "catalogHash": "e305f60d7552177719122c41204d2765114b322917bc0a49d9c89fd08cee9315",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "ae0085c0f20e0ba4809b7e32f1a4d47ecc9c123d26a8c47bda8d63465ea0e359",
+        "invocationFingerprint": "7deec1a8a297ecfd2ab9617826d26b917f38368d6750d5c5e080e6e7ef133393",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -6415,7 +6415,7 @@
           }
         ],
         "surface": {
-          "hash": "87460755c3536b7b3e1c5ed6f5977a7139b68013625a6066dc172a74e83a1f47",
+          "hash": "a393d854b4c098ac84091110aa5b90c5161b72290caf7d17422c484abd35f4fe",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -6629,14 +6629,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "dfd28175e410258adeaa3c9b71bd8039e61a9c218cc79009dfbd8daf3819292b",
+              "catalogHash": "e305f60d7552177719122c41204d2765114b322917bc0a49d9c89fd08cee9315",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "ae0085c0f20e0ba4809b7e32f1a4d47ecc9c123d26a8c47bda8d63465ea0e359",
+              "invocationFingerprint": "7deec1a8a297ecfd2ab9617826d26b917f38368d6750d5c5e080e6e7ef133393",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -6651,7 +6651,7 @@
                 }
               ],
               "surface": {
-                "hash": "87460755c3536b7b3e1c5ed6f5977a7139b68013625a6066dc172a74e83a1f47",
+                "hash": "a393d854b4c098ac84091110aa5b90c5161b72290caf7d17422c484abd35f4fe",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -6699,7 +6699,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "ae0085c0f20e0ba4809b7e32f1a4d47ecc9c123d26a8c47bda8d63465ea0e359",
+            "invocationFingerprint": "7deec1a8a297ecfd2ab9617826d26b917f38368d6750d5c5e080e6e7ef133393",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -6712,10 +6712,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "ae0085c0f20e0ba4809b7e32f1a4d47ecc9c123d26a8c47bda8d63465ea0e359",
+            "invocationFingerprint": "7deec1a8a297ecfd2ab9617826d26b917f38368d6750d5c5e080e6e7ef133393",
             "origin": "operationId",
             "surface": {
-              "hash": "87460755c3536b7b3e1c5ed6f5977a7139b68013625a6066dc172a74e83a1f47",
+              "hash": "a393d854b4c098ac84091110aa5b90c5161b72290caf7d17422c484abd35f4fe",
               "name": "command-woven-native"
             }
           },
@@ -7057,7 +7057,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "2bdffb25490a21594338ac393ecdbec3583908f0e79555accffee8791e92ead5",
+          "hash": "689b77144f71690550f80ea663d125c3481653498903ae310c85683a72bffc36",
           "name": "effect-lanes"
         },
         "tools": [
@@ -7967,7 +7967,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "e9c2a6eff455c20f42de6faca1a77969671ab711c2091c20dfadf81e44d78758",
+        "invocationFingerprint": "a107dfc49614452374ddc2c574e74abd02c048d11b7ba3d1b1dd1add98be83e9",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -8036,7 +8036,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "e9c2a6eff455c20f42de6faca1a77969671ab711c2091c20dfadf81e44d78758",
+              "invocationFingerprint": "a107dfc49614452374ddc2c574e74abd02c048d11b7ba3d1b1dd1add98be83e9",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -8062,11 +8062,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "447e571da91fdf2625c314b9639d6e928f5f6c9109d5a46d4f8bb58bc4d9ad20",
-        "compactSurface": "2bdffb25490a21594338ac393ecdbec3583908f0e79555accffee8791e92ead5",
+        "catalog": "f30a5d6f3817591aea57cecf4a4afae6c56c20533829737ff7638bfe8e637d52",
+        "compactSurface": "689b77144f71690550f80ea663d125c3481653498903ae310c85683a72bffc36",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "e9c2a6eff455c20f42de6faca1a77969671ab711c2091c20dfadf81e44d78758",
-        "nativeSurface": "5e24d7803101e7180ddd14b02a69863474c0dfe1c348ac0689051b91e064ea18",
+        "invocation": "a107dfc49614452374ddc2c574e74abd02c048d11b7ba3d1b1dd1add98be83e9",
+        "nativeSurface": "61af0453234fcfedd56d502ac9fbb3caa5327452ebb2bd492f79d647e4327a52",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -8364,7 +8364,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "447e571da91fdf2625c314b9639d6e928f5f6c9109d5a46d4f8bb58bc4d9ad20",
+          "catalogHash": "f30a5d6f3817591aea57cecf4a4afae6c56c20533829737ff7638bfe8e637d52",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -8562,7 +8562,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "5e24d7803101e7180ddd14b02a69863474c0dfe1c348ac0689051b91e064ea18",
+          "hash": "61af0453234fcfedd56d502ac9fbb3caa5327452ebb2bd492f79d647e4327a52",
           "name": "command-woven-native"
         },
         "tool": {
@@ -8633,14 +8633,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "447e571da91fdf2625c314b9639d6e928f5f6c9109d5a46d4f8bb58bc4d9ad20",
+        "catalogHash": "f30a5d6f3817591aea57cecf4a4afae6c56c20533829737ff7638bfe8e637d52",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "e9c2a6eff455c20f42de6faca1a77969671ab711c2091c20dfadf81e44d78758",
+        "invocationFingerprint": "a107dfc49614452374ddc2c574e74abd02c048d11b7ba3d1b1dd1add98be83e9",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -8655,7 +8655,7 @@
           }
         ],
         "surface": {
-          "hash": "5e24d7803101e7180ddd14b02a69863474c0dfe1c348ac0689051b91e064ea18",
+          "hash": "61af0453234fcfedd56d502ac9fbb3caa5327452ebb2bd492f79d647e4327a52",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -8869,14 +8869,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "447e571da91fdf2625c314b9639d6e928f5f6c9109d5a46d4f8bb58bc4d9ad20",
+              "catalogHash": "f30a5d6f3817591aea57cecf4a4afae6c56c20533829737ff7638bfe8e637d52",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "e9c2a6eff455c20f42de6faca1a77969671ab711c2091c20dfadf81e44d78758",
+              "invocationFingerprint": "a107dfc49614452374ddc2c574e74abd02c048d11b7ba3d1b1dd1add98be83e9",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -8891,7 +8891,7 @@
                 }
               ],
               "surface": {
-                "hash": "5e24d7803101e7180ddd14b02a69863474c0dfe1c348ac0689051b91e064ea18",
+                "hash": "61af0453234fcfedd56d502ac9fbb3caa5327452ebb2bd492f79d647e4327a52",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -8939,7 +8939,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "e9c2a6eff455c20f42de6faca1a77969671ab711c2091c20dfadf81e44d78758",
+            "invocationFingerprint": "a107dfc49614452374ddc2c574e74abd02c048d11b7ba3d1b1dd1add98be83e9",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -8952,10 +8952,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "e9c2a6eff455c20f42de6faca1a77969671ab711c2091c20dfadf81e44d78758",
+            "invocationFingerprint": "a107dfc49614452374ddc2c574e74abd02c048d11b7ba3d1b1dd1add98be83e9",
             "origin": "operationId",
             "surface": {
-              "hash": "5e24d7803101e7180ddd14b02a69863474c0dfe1c348ac0689051b91e064ea18",
+              "hash": "61af0453234fcfedd56d502ac9fbb3caa5327452ebb2bd492f79d647e4327a52",
               "name": "command-woven-native"
             }
           },
@@ -9298,7 +9298,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "90ee3d5a2a3a28c80c8539de37cfc786958a6122b471080a0848460a14d417d7",
+          "hash": "0e048511effa91dc13e552f153a239bd9225f51713c4b7470761ec3e48c04bd9",
           "name": "effect-lanes"
         },
         "tools": [
@@ -10205,7 +10205,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "ee4c1fbdfe22d1619a65598f811d439eba80fada1a8e866b103971f3cb082bff",
+        "invocationFingerprint": "b5b5564a53b47777f69aa15d81c20263f26dec59557713468fbb61c94296d9ba",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -10279,7 +10279,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "ee4c1fbdfe22d1619a65598f811d439eba80fada1a8e866b103971f3cb082bff",
+              "invocationFingerprint": "b5b5564a53b47777f69aa15d81c20263f26dec59557713468fbb61c94296d9ba",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -10310,11 +10310,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "585b8548172f269726ffedc1b019d44318c977cfe8ee8cb219a944e6a0e0eb27",
-        "compactSurface": "90ee3d5a2a3a28c80c8539de37cfc786958a6122b471080a0848460a14d417d7",
+        "catalog": "2f0b1bdc1dd655e84a32948f8d4ea9bc122cdbc3ba96ce74bdb7cd2561507789",
+        "compactSurface": "0e048511effa91dc13e552f153a239bd9225f51713c4b7470761ec3e48c04bd9",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "ee4c1fbdfe22d1619a65598f811d439eba80fada1a8e866b103971f3cb082bff",
-        "nativeSurface": "ae7001953f2acab486c95b22bd88841357955c8759c4da2f33a9991a978e193f",
+        "invocation": "b5b5564a53b47777f69aa15d81c20263f26dec59557713468fbb61c94296d9ba",
+        "nativeSurface": "db8f3b021ad88b6872e73ddc288d95a11b3c615f56aa128499e25bdb3c09fe71",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -10605,7 +10605,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "585b8548172f269726ffedc1b019d44318c977cfe8ee8cb219a944e6a0e0eb27",
+          "catalogHash": "2f0b1bdc1dd655e84a32948f8d4ea9bc122cdbc3ba96ce74bdb7cd2561507789",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -10804,7 +10804,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "ae7001953f2acab486c95b22bd88841357955c8759c4da2f33a9991a978e193f",
+          "hash": "db8f3b021ad88b6872e73ddc288d95a11b3c615f56aa128499e25bdb3c09fe71",
           "name": "command-woven-native"
         },
         "tool": {
@@ -10875,7 +10875,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "585b8548172f269726ffedc1b019d44318c977cfe8ee8cb219a944e6a0e0eb27",
+        "catalogHash": "2f0b1bdc1dd655e84a32948f8d4ea9bc122cdbc3ba96ce74bdb7cd2561507789",
         "commandPath": [
           "issues",
           "create"
@@ -10887,7 +10887,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "ee4c1fbdfe22d1619a65598f811d439eba80fada1a8e866b103971f3cb082bff",
+        "invocationFingerprint": "b5b5564a53b47777f69aa15d81c20263f26dec59557713468fbb61c94296d9ba",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -10907,7 +10907,7 @@
           }
         ],
         "surface": {
-          "hash": "ae7001953f2acab486c95b22bd88841357955c8759c4da2f33a9991a978e193f",
+          "hash": "db8f3b021ad88b6872e73ddc288d95a11b3c615f56aa128499e25bdb3c09fe71",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -11127,7 +11127,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "585b8548172f269726ffedc1b019d44318c977cfe8ee8cb219a944e6a0e0eb27",
+              "catalogHash": "2f0b1bdc1dd655e84a32948f8d4ea9bc122cdbc3ba96ce74bdb7cd2561507789",
               "commandPath": [
                 "issues",
                 "create"
@@ -11139,7 +11139,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "ee4c1fbdfe22d1619a65598f811d439eba80fada1a8e866b103971f3cb082bff",
+              "invocationFingerprint": "b5b5564a53b47777f69aa15d81c20263f26dec59557713468fbb61c94296d9ba",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -11159,7 +11159,7 @@
                 }
               ],
               "surface": {
-                "hash": "ae7001953f2acab486c95b22bd88841357955c8759c4da2f33a9991a978e193f",
+                "hash": "db8f3b021ad88b6872e73ddc288d95a11b3c615f56aa128499e25bdb3c09fe71",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -11217,7 +11217,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "ee4c1fbdfe22d1619a65598f811d439eba80fada1a8e866b103971f3cb082bff",
+            "invocationFingerprint": "b5b5564a53b47777f69aa15d81c20263f26dec59557713468fbb61c94296d9ba",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -11230,10 +11230,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "ee4c1fbdfe22d1619a65598f811d439eba80fada1a8e866b103971f3cb082bff",
+            "invocationFingerprint": "b5b5564a53b47777f69aa15d81c20263f26dec59557713468fbb61c94296d9ba",
             "origin": "operationId",
             "surface": {
-              "hash": "ae7001953f2acab486c95b22bd88841357955c8759c4da2f33a9991a978e193f",
+              "hash": "db8f3b021ad88b6872e73ddc288d95a11b3c615f56aa128499e25bdb3c09fe71",
               "name": "command-woven-native"
             }
           },
@@ -11575,7 +11575,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "b36daf4e45f2e5eff6301091f4fe2dc51e105b7f74410961e078d35c04577bfd",
+          "hash": "3222df13a2ef7546d1462436a62b9bfa87a071163c5be313cc52fa48bdb86680",
           "name": "effect-lanes"
         },
         "tools": [
@@ -12481,7 +12481,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "b8daf930c233dba02ac2052bf8eef4383f5bbc8bb8d828c6ebf5ecb5e05dbe8c",
+        "invocationFingerprint": "872a31fd67d80b8c9f48224d1bf634e5e3cc8388144b64106020762ff514a048",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -12555,7 +12555,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "b8daf930c233dba02ac2052bf8eef4383f5bbc8bb8d828c6ebf5ecb5e05dbe8c",
+              "invocationFingerprint": "872a31fd67d80b8c9f48224d1bf634e5e3cc8388144b64106020762ff514a048",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -12581,11 +12581,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "5c7955b7897b8066e142c06f6c90810ae380fd4f4825c380f08fd113e7d86a59",
-        "compactSurface": "b36daf4e45f2e5eff6301091f4fe2dc51e105b7f74410961e078d35c04577bfd",
+        "catalog": "e013f48a7e18222ddd9403260c170fdcbebaaac63b32b4bc99b0fe9165d551ec",
+        "compactSurface": "3222df13a2ef7546d1462436a62b9bfa87a071163c5be313cc52fa48bdb86680",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "b8daf930c233dba02ac2052bf8eef4383f5bbc8bb8d828c6ebf5ecb5e05dbe8c",
-        "nativeSurface": "91f906834625b381846ebba20a6a41acd00a92b50ad7890cba34eab33109b304",
+        "invocation": "872a31fd67d80b8c9f48224d1bf634e5e3cc8388144b64106020762ff514a048",
+        "nativeSurface": "f505aefaf6fdcb595e634f34f75e25162775ce1777448df13718cee3438e0654",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -12874,7 +12874,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "5c7955b7897b8066e142c06f6c90810ae380fd4f4825c380f08fd113e7d86a59",
+          "catalogHash": "e013f48a7e18222ddd9403260c170fdcbebaaac63b32b4bc99b0fe9165d551ec",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -13072,7 +13072,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "91f906834625b381846ebba20a6a41acd00a92b50ad7890cba34eab33109b304",
+          "hash": "f505aefaf6fdcb595e634f34f75e25162775ce1777448df13718cee3438e0654",
           "name": "command-woven-native"
         },
         "tool": {
@@ -13143,7 +13143,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "5c7955b7897b8066e142c06f6c90810ae380fd4f4825c380f08fd113e7d86a59",
+        "catalogHash": "e013f48a7e18222ddd9403260c170fdcbebaaac63b32b4bc99b0fe9165d551ec",
         "commandPath": [
           "issues",
           "create"
@@ -13155,7 +13155,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "b8daf930c233dba02ac2052bf8eef4383f5bbc8bb8d828c6ebf5ecb5e05dbe8c",
+        "invocationFingerprint": "872a31fd67d80b8c9f48224d1bf634e5e3cc8388144b64106020762ff514a048",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -13175,7 +13175,7 @@
           }
         ],
         "surface": {
-          "hash": "91f906834625b381846ebba20a6a41acd00a92b50ad7890cba34eab33109b304",
+          "hash": "f505aefaf6fdcb595e634f34f75e25162775ce1777448df13718cee3438e0654",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -13395,7 +13395,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "5c7955b7897b8066e142c06f6c90810ae380fd4f4825c380f08fd113e7d86a59",
+              "catalogHash": "e013f48a7e18222ddd9403260c170fdcbebaaac63b32b4bc99b0fe9165d551ec",
               "commandPath": [
                 "issues",
                 "create"
@@ -13407,7 +13407,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "b8daf930c233dba02ac2052bf8eef4383f5bbc8bb8d828c6ebf5ecb5e05dbe8c",
+              "invocationFingerprint": "872a31fd67d80b8c9f48224d1bf634e5e3cc8388144b64106020762ff514a048",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -13427,7 +13427,7 @@
                 }
               ],
               "surface": {
-                "hash": "91f906834625b381846ebba20a6a41acd00a92b50ad7890cba34eab33109b304",
+                "hash": "f505aefaf6fdcb595e634f34f75e25162775ce1777448df13718cee3438e0654",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -13485,7 +13485,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "b8daf930c233dba02ac2052bf8eef4383f5bbc8bb8d828c6ebf5ecb5e05dbe8c",
+            "invocationFingerprint": "872a31fd67d80b8c9f48224d1bf634e5e3cc8388144b64106020762ff514a048",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -13498,10 +13498,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "b8daf930c233dba02ac2052bf8eef4383f5bbc8bb8d828c6ebf5ecb5e05dbe8c",
+            "invocationFingerprint": "872a31fd67d80b8c9f48224d1bf634e5e3cc8388144b64106020762ff514a048",
             "origin": "operationId",
             "surface": {
-              "hash": "91f906834625b381846ebba20a6a41acd00a92b50ad7890cba34eab33109b304",
+              "hash": "f505aefaf6fdcb595e634f34f75e25162775ce1777448df13718cee3438e0654",
               "name": "command-woven-native"
             }
           },
@@ -13854,7 +13854,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "102f84da4e954e622b5d82c2084409847f2b9ff6394a09e04c7694dc35ab108d",
+          "hash": "c15f8bbfd4b67a31107ac8193804d072e66b4bad928ba04635074858cdc46ba5",
           "name": "effect-lanes"
         },
         "tools": [
@@ -14771,7 +14771,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "38c5636e6b06fd5d5b76246d72c012d8e2277f4e995199b197eb7870c93394bf",
+        "invocationFingerprint": "e6782146cfcd5a7e73fef24df492e2b0934b214d1f781dded3edcd3ede098ff1",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -14845,7 +14845,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "38c5636e6b06fd5d5b76246d72c012d8e2277f4e995199b197eb7870c93394bf",
+              "invocationFingerprint": "e6782146cfcd5a7e73fef24df492e2b0934b214d1f781dded3edcd3ede098ff1",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -14876,11 +14876,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "3319c2ca85071ab902eb17d4b76059be0624143873b6deba2f4e3ba7aa6bad91",
-        "compactSurface": "102f84da4e954e622b5d82c2084409847f2b9ff6394a09e04c7694dc35ab108d",
+        "catalog": "4a7edd04133c78923364f56c5deb7503029397d55e3f14cfe6e22d9c60693c72",
+        "compactSurface": "c15f8bbfd4b67a31107ac8193804d072e66b4bad928ba04635074858cdc46ba5",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "38c5636e6b06fd5d5b76246d72c012d8e2277f4e995199b197eb7870c93394bf",
-        "nativeSurface": "92057d0c3d794d0303f5ab49fcfcb55fbed04e9096b801f222e5f1120b4aa65e",
+        "invocation": "e6782146cfcd5a7e73fef24df492e2b0934b214d1f781dded3edcd3ede098ff1",
+        "nativeSurface": "064e18c171da1b232dea39c495b402dd379c42264408144f66f11148e178ac0c",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -15191,7 +15191,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "3319c2ca85071ab902eb17d4b76059be0624143873b6deba2f4e3ba7aa6bad91",
+          "catalogHash": "4a7edd04133c78923364f56c5deb7503029397d55e3f14cfe6e22d9c60693c72",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -15400,7 +15400,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "92057d0c3d794d0303f5ab49fcfcb55fbed04e9096b801f222e5f1120b4aa65e",
+          "hash": "064e18c171da1b232dea39c495b402dd379c42264408144f66f11148e178ac0c",
           "name": "command-woven-native"
         },
         "tool": {
@@ -15471,7 +15471,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "3319c2ca85071ab902eb17d4b76059be0624143873b6deba2f4e3ba7aa6bad91",
+        "catalogHash": "4a7edd04133c78923364f56c5deb7503029397d55e3f14cfe6e22d9c60693c72",
         "commandPath": [
           "issues",
           "create"
@@ -15483,7 +15483,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "38c5636e6b06fd5d5b76246d72c012d8e2277f4e995199b197eb7870c93394bf",
+        "invocationFingerprint": "e6782146cfcd5a7e73fef24df492e2b0934b214d1f781dded3edcd3ede098ff1",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -15503,7 +15503,7 @@
           }
         ],
         "surface": {
-          "hash": "92057d0c3d794d0303f5ab49fcfcb55fbed04e9096b801f222e5f1120b4aa65e",
+          "hash": "064e18c171da1b232dea39c495b402dd379c42264408144f66f11148e178ac0c",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -15723,7 +15723,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "3319c2ca85071ab902eb17d4b76059be0624143873b6deba2f4e3ba7aa6bad91",
+              "catalogHash": "4a7edd04133c78923364f56c5deb7503029397d55e3f14cfe6e22d9c60693c72",
               "commandPath": [
                 "issues",
                 "create"
@@ -15735,7 +15735,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "38c5636e6b06fd5d5b76246d72c012d8e2277f4e995199b197eb7870c93394bf",
+              "invocationFingerprint": "e6782146cfcd5a7e73fef24df492e2b0934b214d1f781dded3edcd3ede098ff1",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -15755,7 +15755,7 @@
                 }
               ],
               "surface": {
-                "hash": "92057d0c3d794d0303f5ab49fcfcb55fbed04e9096b801f222e5f1120b4aa65e",
+                "hash": "064e18c171da1b232dea39c495b402dd379c42264408144f66f11148e178ac0c",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -15813,7 +15813,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "38c5636e6b06fd5d5b76246d72c012d8e2277f4e995199b197eb7870c93394bf",
+            "invocationFingerprint": "e6782146cfcd5a7e73fef24df492e2b0934b214d1f781dded3edcd3ede098ff1",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -15826,10 +15826,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "38c5636e6b06fd5d5b76246d72c012d8e2277f4e995199b197eb7870c93394bf",
+            "invocationFingerprint": "e6782146cfcd5a7e73fef24df492e2b0934b214d1f781dded3edcd3ede098ff1",
             "origin": "operationId",
             "surface": {
-              "hash": "92057d0c3d794d0303f5ab49fcfcb55fbed04e9096b801f222e5f1120b4aa65e",
+              "hash": "064e18c171da1b232dea39c495b402dd379c42264408144f66f11148e178ac0c",
               "name": "command-woven-native"
             }
           },
@@ -16181,7 +16181,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "f109a9a389bd3132cd476ba82789d82ed0d573c2a4ba543f01d40b4221c4096d",
+          "hash": "aa483a9349caad9a082d4a2e37486d74d88305ec82dfaec2455279e93e964064",
           "name": "effect-lanes"
         },
         "tools": [
@@ -17097,7 +17097,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "bcf5293b2a8446461624d4312cf0c65b089f02ffa39c67576e2ab18c3ce67e55",
+        "invocationFingerprint": "fbb1c4e8a9b0c165015763834b7df8d267dae485d7406bece8e58db1eb05f0bd",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -17171,7 +17171,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "bcf5293b2a8446461624d4312cf0c65b089f02ffa39c67576e2ab18c3ce67e55",
+              "invocationFingerprint": "fbb1c4e8a9b0c165015763834b7df8d267dae485d7406bece8e58db1eb05f0bd",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -17197,11 +17197,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n                .with_inline_schema(json!(\n                    { \"type\": \"string\", \"minLength\": 1 }\n                ))\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "382b84b1779fd6833d1e737cb0ced2b2a92508d10f9ee143076f15fd0bb16292",
-        "compactSurface": "f109a9a389bd3132cd476ba82789d82ed0d573c2a4ba543f01d40b4221c4096d",
+        "catalog": "5d3e11a7526a04aa4a23b4eff6e4f9a42be4d9099ec2445d02612045bbc19fcf",
+        "compactSurface": "aa483a9349caad9a082d4a2e37486d74d88305ec82dfaec2455279e93e964064",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "bcf5293b2a8446461624d4312cf0c65b089f02ffa39c67576e2ab18c3ce67e55",
-        "nativeSurface": "461811e65921232d5e9247fd4516aacf2f08d9ec5c5b57be85f88e450657564b",
+        "invocation": "fbb1c4e8a9b0c165015763834b7df8d267dae485d7406bece8e58db1eb05f0bd",
+        "nativeSurface": "84ef1ffa0d7f04ec7eeb619b223f522c67d8470869476bb48ed5e01d68c56011",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -17510,7 +17510,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "382b84b1779fd6833d1e737cb0ced2b2a92508d10f9ee143076f15fd0bb16292",
+          "catalogHash": "5d3e11a7526a04aa4a23b4eff6e4f9a42be4d9099ec2445d02612045bbc19fcf",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -17718,7 +17718,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "461811e65921232d5e9247fd4516aacf2f08d9ec5c5b57be85f88e450657564b",
+          "hash": "84ef1ffa0d7f04ec7eeb619b223f522c67d8470869476bb48ed5e01d68c56011",
           "name": "command-woven-native"
         },
         "tool": {
@@ -17789,7 +17789,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "382b84b1779fd6833d1e737cb0ced2b2a92508d10f9ee143076f15fd0bb16292",
+        "catalogHash": "5d3e11a7526a04aa4a23b4eff6e4f9a42be4d9099ec2445d02612045bbc19fcf",
         "commandPath": [
           "issues",
           "create"
@@ -17801,7 +17801,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "bcf5293b2a8446461624d4312cf0c65b089f02ffa39c67576e2ab18c3ce67e55",
+        "invocationFingerprint": "fbb1c4e8a9b0c165015763834b7df8d267dae485d7406bece8e58db1eb05f0bd",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -17821,7 +17821,7 @@
           }
         ],
         "surface": {
-          "hash": "461811e65921232d5e9247fd4516aacf2f08d9ec5c5b57be85f88e450657564b",
+          "hash": "84ef1ffa0d7f04ec7eeb619b223f522c67d8470869476bb48ed5e01d68c56011",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -18041,7 +18041,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "382b84b1779fd6833d1e737cb0ced2b2a92508d10f9ee143076f15fd0bb16292",
+              "catalogHash": "5d3e11a7526a04aa4a23b4eff6e4f9a42be4d9099ec2445d02612045bbc19fcf",
               "commandPath": [
                 "issues",
                 "create"
@@ -18053,7 +18053,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "bcf5293b2a8446461624d4312cf0c65b089f02ffa39c67576e2ab18c3ce67e55",
+              "invocationFingerprint": "fbb1c4e8a9b0c165015763834b7df8d267dae485d7406bece8e58db1eb05f0bd",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -18073,7 +18073,7 @@
                 }
               ],
               "surface": {
-                "hash": "461811e65921232d5e9247fd4516aacf2f08d9ec5c5b57be85f88e450657564b",
+                "hash": "84ef1ffa0d7f04ec7eeb619b223f522c67d8470869476bb48ed5e01d68c56011",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -18131,7 +18131,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "bcf5293b2a8446461624d4312cf0c65b089f02ffa39c67576e2ab18c3ce67e55",
+            "invocationFingerprint": "fbb1c4e8a9b0c165015763834b7df8d267dae485d7406bece8e58db1eb05f0bd",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -18144,10 +18144,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "bcf5293b2a8446461624d4312cf0c65b089f02ffa39c67576e2ab18c3ce67e55",
+            "invocationFingerprint": "fbb1c4e8a9b0c165015763834b7df8d267dae485d7406bece8e58db1eb05f0bd",
             "origin": "operationId",
             "surface": {
-              "hash": "461811e65921232d5e9247fd4516aacf2f08d9ec5c5b57be85f88e450657564b",
+              "hash": "84ef1ffa0d7f04ec7eeb619b223f522c67d8470869476bb48ed5e01d68c56011",
               "name": "command-woven-native"
             }
           },
@@ -18473,7 +18473,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "5f15258821970e9a154b66d94e3f779238db962dc50417425cc0768c8cf04e93",
+          "hash": "a058948146d2de87eaced04d1af14d93c21226b5b3df07dd2dc83380b5830870",
           "name": "effect-lanes"
         },
         "tools": [
@@ -19367,7 +19367,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "37c4663c68663b6129041aae40633868a660df8b2f42409a985650e26dd4e4ed",
+        "invocationFingerprint": "634c789031484eed126f076a75f4ea0cb4ee87d98f707e1ae2222f0a77af18e0",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -19436,7 +19436,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "37c4663c68663b6129041aae40633868a660df8b2f42409a985650e26dd4e4ed",
+              "invocationFingerprint": "634c789031484eed126f076a75f4ea0cb4ee87d98f707e1ae2222f0a77af18e0",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -19467,11 +19467,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "4201c17b741902578690be307532c95479ef4b26fc8782eff39d47ef049fbc30",
-        "compactSurface": "5f15258821970e9a154b66d94e3f779238db962dc50417425cc0768c8cf04e93",
+        "catalog": "fabad79ddec58b6d708c5a38c50eaa157ea7de06c66abd3fca19a0a265dea884",
+        "compactSurface": "a058948146d2de87eaced04d1af14d93c21226b5b3df07dd2dc83380b5830870",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "37c4663c68663b6129041aae40633868a660df8b2f42409a985650e26dd4e4ed",
-        "nativeSurface": "6ab66d330ef2f2c393e2f1245bd131f4d3905092653852c161de28a4cd0ea2a9",
+        "invocation": "634c789031484eed126f076a75f4ea0cb4ee87d98f707e1ae2222f0a77af18e0",
+        "nativeSurface": "e96b7124ab4b1745249e271c24f0004c215af62be5c319099a69a60e93b3210a",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -19737,7 +19737,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "4201c17b741902578690be307532c95479ef4b26fc8782eff39d47ef049fbc30",
+          "catalogHash": "fabad79ddec58b6d708c5a38c50eaa157ea7de06c66abd3fca19a0a265dea884",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -19919,7 +19919,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "6ab66d330ef2f2c393e2f1245bd131f4d3905092653852c161de28a4cd0ea2a9",
+          "hash": "e96b7124ab4b1745249e271c24f0004c215af62be5c319099a69a60e93b3210a",
           "name": "command-woven-native"
         },
         "tool": {
@@ -19990,14 +19990,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "4201c17b741902578690be307532c95479ef4b26fc8782eff39d47ef049fbc30",
+        "catalogHash": "fabad79ddec58b6d708c5a38c50eaa157ea7de06c66abd3fca19a0a265dea884",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "37c4663c68663b6129041aae40633868a660df8b2f42409a985650e26dd4e4ed",
+        "invocationFingerprint": "634c789031484eed126f076a75f4ea0cb4ee87d98f707e1ae2222f0a77af18e0",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -20012,7 +20012,7 @@
           }
         ],
         "surface": {
-          "hash": "6ab66d330ef2f2c393e2f1245bd131f4d3905092653852c161de28a4cd0ea2a9",
+          "hash": "e96b7124ab4b1745249e271c24f0004c215af62be5c319099a69a60e93b3210a",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -20226,14 +20226,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "4201c17b741902578690be307532c95479ef4b26fc8782eff39d47ef049fbc30",
+              "catalogHash": "fabad79ddec58b6d708c5a38c50eaa157ea7de06c66abd3fca19a0a265dea884",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "37c4663c68663b6129041aae40633868a660df8b2f42409a985650e26dd4e4ed",
+              "invocationFingerprint": "634c789031484eed126f076a75f4ea0cb4ee87d98f707e1ae2222f0a77af18e0",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -20248,7 +20248,7 @@
                 }
               ],
               "surface": {
-                "hash": "6ab66d330ef2f2c393e2f1245bd131f4d3905092653852c161de28a4cd0ea2a9",
+                "hash": "e96b7124ab4b1745249e271c24f0004c215af62be5c319099a69a60e93b3210a",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -20296,7 +20296,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "37c4663c68663b6129041aae40633868a660df8b2f42409a985650e26dd4e4ed",
+            "invocationFingerprint": "634c789031484eed126f076a75f4ea0cb4ee87d98f707e1ae2222f0a77af18e0",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -20309,10 +20309,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "37c4663c68663b6129041aae40633868a660df8b2f42409a985650e26dd4e4ed",
+            "invocationFingerprint": "634c789031484eed126f076a75f4ea0cb4ee87d98f707e1ae2222f0a77af18e0",
             "origin": "operationId",
             "surface": {
-              "hash": "6ab66d330ef2f2c393e2f1245bd131f4d3905092653852c161de28a4cd0ea2a9",
+              "hash": "e96b7124ab4b1745249e271c24f0004c215af62be5c319099a69a60e93b3210a",
               "name": "command-woven-native"
             }
           },
@@ -20637,7 +20637,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "1538865ec4760300f821dcfad707ef0f298cde48a895c562023d2d34b363ae51",
+          "hash": "bf1a26e5f05c562c9b7aa83e8ab70624d695f9ed0cdf33896dec5f280c34d82f",
           "name": "effect-lanes"
         },
         "tools": [
@@ -21530,7 +21530,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "915df45edf85562d76198dbb5a9ee1ca2f065c3a716db9378d0981d1c91a5b20",
+        "invocationFingerprint": "f9335731e6facdc2ad1c9c37b27059fd2b9c85d7ce83c5adc6d8215aebdf973d",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -21599,7 +21599,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "915df45edf85562d76198dbb5a9ee1ca2f065c3a716db9378d0981d1c91a5b20",
+              "invocationFingerprint": "f9335731e6facdc2ad1c9c37b27059fd2b9c85d7ce83c5adc6d8215aebdf973d",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -21625,11 +21625,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "b1bd68544003d0390e9df53c33794e40ebe9692f7ebdeeb456f56f2f006f1536",
-        "compactSurface": "1538865ec4760300f821dcfad707ef0f298cde48a895c562023d2d34b363ae51",
+        "catalog": "7de73ca0b4b3b2218fcea129777f29bf0d982657f7f69a4e5d44858aaf6dddcf",
+        "compactSurface": "bf1a26e5f05c562c9b7aa83e8ab70624d695f9ed0cdf33896dec5f280c34d82f",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "915df45edf85562d76198dbb5a9ee1ca2f065c3a716db9378d0981d1c91a5b20",
-        "nativeSurface": "bb3323d7f5f9aa36eb539a8e1976ca771ae5bfe31e10fe4df5194d238b41e502",
+        "invocation": "f9335731e6facdc2ad1c9c37b27059fd2b9c85d7ce83c5adc6d8215aebdf973d",
+        "nativeSurface": "851e9dfca345d155b37ab197ad1ce298dbb92897b0e8f9a030f978434e9b0a48",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -21893,7 +21893,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "b1bd68544003d0390e9df53c33794e40ebe9692f7ebdeeb456f56f2f006f1536",
+          "catalogHash": "7de73ca0b4b3b2218fcea129777f29bf0d982657f7f69a4e5d44858aaf6dddcf",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -22074,7 +22074,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "bb3323d7f5f9aa36eb539a8e1976ca771ae5bfe31e10fe4df5194d238b41e502",
+          "hash": "851e9dfca345d155b37ab197ad1ce298dbb92897b0e8f9a030f978434e9b0a48",
           "name": "command-woven-native"
         },
         "tool": {
@@ -22145,14 +22145,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "b1bd68544003d0390e9df53c33794e40ebe9692f7ebdeeb456f56f2f006f1536",
+        "catalogHash": "7de73ca0b4b3b2218fcea129777f29bf0d982657f7f69a4e5d44858aaf6dddcf",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "915df45edf85562d76198dbb5a9ee1ca2f065c3a716db9378d0981d1c91a5b20",
+        "invocationFingerprint": "f9335731e6facdc2ad1c9c37b27059fd2b9c85d7ce83c5adc6d8215aebdf973d",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -22167,7 +22167,7 @@
           }
         ],
         "surface": {
-          "hash": "bb3323d7f5f9aa36eb539a8e1976ca771ae5bfe31e10fe4df5194d238b41e502",
+          "hash": "851e9dfca345d155b37ab197ad1ce298dbb92897b0e8f9a030f978434e9b0a48",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -22381,14 +22381,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "b1bd68544003d0390e9df53c33794e40ebe9692f7ebdeeb456f56f2f006f1536",
+              "catalogHash": "7de73ca0b4b3b2218fcea129777f29bf0d982657f7f69a4e5d44858aaf6dddcf",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "915df45edf85562d76198dbb5a9ee1ca2f065c3a716db9378d0981d1c91a5b20",
+              "invocationFingerprint": "f9335731e6facdc2ad1c9c37b27059fd2b9c85d7ce83c5adc6d8215aebdf973d",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -22403,7 +22403,7 @@
                 }
               ],
               "surface": {
-                "hash": "bb3323d7f5f9aa36eb539a8e1976ca771ae5bfe31e10fe4df5194d238b41e502",
+                "hash": "851e9dfca345d155b37ab197ad1ce298dbb92897b0e8f9a030f978434e9b0a48",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -22451,7 +22451,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "915df45edf85562d76198dbb5a9ee1ca2f065c3a716db9378d0981d1c91a5b20",
+            "invocationFingerprint": "f9335731e6facdc2ad1c9c37b27059fd2b9c85d7ce83c5adc6d8215aebdf973d",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -22464,10 +22464,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "915df45edf85562d76198dbb5a9ee1ca2f065c3a716db9378d0981d1c91a5b20",
+            "invocationFingerprint": "f9335731e6facdc2ad1c9c37b27059fd2b9c85d7ce83c5adc6d8215aebdf973d",
             "origin": "operationId",
             "surface": {
-              "hash": "bb3323d7f5f9aa36eb539a8e1976ca771ae5bfe31e10fe4df5194d238b41e502",
+              "hash": "851e9dfca345d155b37ab197ad1ce298dbb92897b0e8f9a030f978434e9b0a48",
               "name": "command-woven-native"
             }
           },
@@ -22803,7 +22803,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "755812d4420509db6faecd603b27390e6b8261993275b0162f19251e7c92ac37",
+          "hash": "480dbabdb059b5ccb562a9ab1d360d57f80a0d7b497eeb892f655040c9753426",
           "name": "effect-lanes"
         },
         "tools": [
@@ -23707,7 +23707,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "c22759827cbd0eb29de5131f42cbb5f785e488a29b5e3b62bdcaf06e4d760eb8",
+        "invocationFingerprint": "5a3d25f693be852b0221c43d28d76b1750c2c258ac150b3b31c66b2b4ef3a141",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -23776,7 +23776,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "c22759827cbd0eb29de5131f42cbb5f785e488a29b5e3b62bdcaf06e4d760eb8",
+              "invocationFingerprint": "5a3d25f693be852b0221c43d28d76b1750c2c258ac150b3b31c66b2b4ef3a141",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -23807,11 +23807,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "d424d6cd17d1a3148d91ee8d27bb59edae6f6b5387d74be55e1742c0c180f84c",
-        "compactSurface": "755812d4420509db6faecd603b27390e6b8261993275b0162f19251e7c92ac37",
+        "catalog": "b157dc81dfa823c35ce4d88398567307db41ffe051e601d73090c2f216623c30",
+        "compactSurface": "480dbabdb059b5ccb562a9ab1d360d57f80a0d7b497eeb892f655040c9753426",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "c22759827cbd0eb29de5131f42cbb5f785e488a29b5e3b62bdcaf06e4d760eb8",
-        "nativeSurface": "6910e7005b84b168a5b7a97951c1dcb2ffdf6ae6b7e22d214ce22ee183fd6a6c",
+        "invocation": "5a3d25f693be852b0221c43d28d76b1750c2c258ac150b3b31c66b2b4ef3a141",
+        "nativeSurface": "c29a5ffd504dc71fc3047f1e57ffc2b426cc2564e05b7b0bad2bebe7d1367835",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -24097,7 +24097,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "d424d6cd17d1a3148d91ee8d27bb59edae6f6b5387d74be55e1742c0c180f84c",
+          "catalogHash": "b157dc81dfa823c35ce4d88398567307db41ffe051e601d73090c2f216623c30",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -24289,7 +24289,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "6910e7005b84b168a5b7a97951c1dcb2ffdf6ae6b7e22d214ce22ee183fd6a6c",
+          "hash": "c29a5ffd504dc71fc3047f1e57ffc2b426cc2564e05b7b0bad2bebe7d1367835",
           "name": "command-woven-native"
         },
         "tool": {
@@ -24360,14 +24360,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "d424d6cd17d1a3148d91ee8d27bb59edae6f6b5387d74be55e1742c0c180f84c",
+        "catalogHash": "b157dc81dfa823c35ce4d88398567307db41ffe051e601d73090c2f216623c30",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "c22759827cbd0eb29de5131f42cbb5f785e488a29b5e3b62bdcaf06e4d760eb8",
+        "invocationFingerprint": "5a3d25f693be852b0221c43d28d76b1750c2c258ac150b3b31c66b2b4ef3a141",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -24382,7 +24382,7 @@
           }
         ],
         "surface": {
-          "hash": "6910e7005b84b168a5b7a97951c1dcb2ffdf6ae6b7e22d214ce22ee183fd6a6c",
+          "hash": "c29a5ffd504dc71fc3047f1e57ffc2b426cc2564e05b7b0bad2bebe7d1367835",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -24596,14 +24596,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "d424d6cd17d1a3148d91ee8d27bb59edae6f6b5387d74be55e1742c0c180f84c",
+              "catalogHash": "b157dc81dfa823c35ce4d88398567307db41ffe051e601d73090c2f216623c30",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "c22759827cbd0eb29de5131f42cbb5f785e488a29b5e3b62bdcaf06e4d760eb8",
+              "invocationFingerprint": "5a3d25f693be852b0221c43d28d76b1750c2c258ac150b3b31c66b2b4ef3a141",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -24618,7 +24618,7 @@
                 }
               ],
               "surface": {
-                "hash": "6910e7005b84b168a5b7a97951c1dcb2ffdf6ae6b7e22d214ce22ee183fd6a6c",
+                "hash": "c29a5ffd504dc71fc3047f1e57ffc2b426cc2564e05b7b0bad2bebe7d1367835",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -24666,7 +24666,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "c22759827cbd0eb29de5131f42cbb5f785e488a29b5e3b62bdcaf06e4d760eb8",
+            "invocationFingerprint": "5a3d25f693be852b0221c43d28d76b1750c2c258ac150b3b31c66b2b4ef3a141",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -24679,10 +24679,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "c22759827cbd0eb29de5131f42cbb5f785e488a29b5e3b62bdcaf06e4d760eb8",
+            "invocationFingerprint": "5a3d25f693be852b0221c43d28d76b1750c2c258ac150b3b31c66b2b4ef3a141",
             "origin": "operationId",
             "surface": {
-              "hash": "6910e7005b84b168a5b7a97951c1dcb2ffdf6ae6b7e22d214ce22ee183fd6a6c",
+              "hash": "c29a5ffd504dc71fc3047f1e57ffc2b426cc2564e05b7b0bad2bebe7d1367835",
               "name": "command-woven-native"
             }
           },
@@ -25017,7 +25017,7 @@
           "name": "run-write"
         },
         "surfaceIdentity": {
-          "hash": "b23467f2889afaadcee741285f2d56352d01b8c64f010cf352d7c84e2bdd90b3",
+          "hash": "e64020e6eb89c313023539882c66c269f937baaed841ad0474888914e75a8e4e",
           "name": "effect-lanes"
         },
         "tools": [
@@ -25920,7 +25920,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "a22bd47454b5ea1fd037eab6fa147e2fea9ae6ccf77fdb7a6cb26f5872f0a307",
+        "invocationFingerprint": "76fa3ab801c2cd3814da16619cafe43f2cf705a1c8db071c309a7990e3a35513",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -25989,7 +25989,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "a22bd47454b5ea1fd037eab6fa147e2fea9ae6ccf77fdb7a6cb26f5872f0a307",
+              "invocationFingerprint": "76fa3ab801c2cd3814da16619cafe43f2cf705a1c8db071c309a7990e3a35513",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -26015,11 +26015,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "e5e63dfdd31a84804407d2e0124910a8cb7385953b6ccb014611f69421bc3205",
-        "compactSurface": "b23467f2889afaadcee741285f2d56352d01b8c64f010cf352d7c84e2bdd90b3",
+        "catalog": "bf1b6635bca4bf7f48f2a35ed5fcf2c4e0e501eb81239dce8d0f3da2bc3e17b4",
+        "compactSurface": "e64020e6eb89c313023539882c66c269f937baaed841ad0474888914e75a8e4e",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "a22bd47454b5ea1fd037eab6fa147e2fea9ae6ccf77fdb7a6cb26f5872f0a307",
-        "nativeSurface": "fcc923818a7efe33a624fe0ec49ea7b3f8fb6622b3e35dc2a49335dfaef6720b",
+        "invocation": "76fa3ab801c2cd3814da16619cafe43f2cf705a1c8db071c309a7990e3a35513",
+        "nativeSurface": "2735889765e1b04e2eda83310cc653aee250f4f9d2d9998595c0d70ec913d7b1",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -26303,7 +26303,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "e5e63dfdd31a84804407d2e0124910a8cb7385953b6ccb014611f69421bc3205",
+          "catalogHash": "bf1b6635bca4bf7f48f2a35ed5fcf2c4e0e501eb81239dce8d0f3da2bc3e17b4",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -26494,7 +26494,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "fcc923818a7efe33a624fe0ec49ea7b3f8fb6622b3e35dc2a49335dfaef6720b",
+          "hash": "2735889765e1b04e2eda83310cc653aee250f4f9d2d9998595c0d70ec913d7b1",
           "name": "command-woven-native"
         },
         "tool": {
@@ -26565,14 +26565,14 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "e5e63dfdd31a84804407d2e0124910a8cb7385953b6ccb014611f69421bc3205",
+        "catalogHash": "bf1b6635bca4bf7f48f2a35ed5fcf2c4e0e501eb81239dce8d0f3da2bc3e17b4",
         "commandPath": [
           "issues",
           "create"
         ],
         "effect": "write",
         "idempotent": true,
-        "invocationFingerprint": "a22bd47454b5ea1fd037eab6fa147e2fea9ae6ccf77fdb7a6cb26f5872f0a307",
+        "invocationFingerprint": "76fa3ab801c2cd3814da16619cafe43f2cf705a1c8db071c309a7990e3a35513",
         "lane": "write",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -26587,7 +26587,7 @@
           }
         ],
         "surface": {
-          "hash": "fcc923818a7efe33a624fe0ec49ea7b3f8fb6622b3e35dc2a49335dfaef6720b",
+          "hash": "2735889765e1b04e2eda83310cc653aee250f4f9d2d9998595c0d70ec913d7b1",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -26801,14 +26801,14 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "e5e63dfdd31a84804407d2e0124910a8cb7385953b6ccb014611f69421bc3205",
+              "catalogHash": "bf1b6635bca4bf7f48f2a35ed5fcf2c4e0e501eb81239dce8d0f3da2bc3e17b4",
               "commandPath": [
                 "issues",
                 "create"
               ],
               "effect": "write",
               "idempotent": true,
-              "invocationFingerprint": "a22bd47454b5ea1fd037eab6fa147e2fea9ae6ccf77fdb7a6cb26f5872f0a307",
+              "invocationFingerprint": "76fa3ab801c2cd3814da16619cafe43f2cf705a1c8db071c309a7990e3a35513",
               "lane": "write",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -26823,7 +26823,7 @@
                 }
               ],
               "surface": {
-                "hash": "fcc923818a7efe33a624fe0ec49ea7b3f8fb6622b3e35dc2a49335dfaef6720b",
+                "hash": "2735889765e1b04e2eda83310cc653aee250f4f9d2d9998595c0d70ec913d7b1",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -26871,7 +26871,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "a22bd47454b5ea1fd037eab6fa147e2fea9ae6ccf77fdb7a6cb26f5872f0a307",
+            "invocationFingerprint": "76fa3ab801c2cd3814da16619cafe43f2cf705a1c8db071c309a7990e3a35513",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -26884,10 +26884,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "a22bd47454b5ea1fd037eab6fa147e2fea9ae6ccf77fdb7a6cb26f5872f0a307",
+            "invocationFingerprint": "76fa3ab801c2cd3814da16619cafe43f2cf705a1c8db071c309a7990e3a35513",
             "origin": "operationId",
             "surface": {
-              "hash": "fcc923818a7efe33a624fe0ec49ea7b3f8fb6622b3e35dc2a49335dfaef6720b",
+              "hash": "2735889765e1b04e2eda83310cc653aee250f4f9d2d9998595c0d70ec913d7b1",
               "name": "command-woven-native"
             }
           },
@@ -27223,7 +27223,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "ea66f1ebb0244a09459262b1325b968d9118a4dc5eaf1901a42947527297d5b5",
+          "hash": "2328f1ab2432db7beefb66f34256381c3050b16dd9625f0129bfcfe0947e23ae",
           "name": "effect-lanes"
         },
         "tools": [
@@ -28123,7 +28123,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "bcd55e0e98e40a8f7e17d9e2fae9551ee642ed9a702617131cea32ec25341734",
+        "invocationFingerprint": "74cece1a14f2a5b132969e039aee4dc935c10e0856be1477de7636e9f50739fc",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -28197,7 +28197,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "bcd55e0e98e40a8f7e17d9e2fae9551ee642ed9a702617131cea32ec25341734",
+              "invocationFingerprint": "74cece1a14f2a5b132969e039aee4dc935c10e0856be1477de7636e9f50739fc",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -28228,11 +28228,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "6229108bb695ad1ad776b83e0afcd95454c61ecee339239de2e4355f3ae4124f",
-        "compactSurface": "ea66f1ebb0244a09459262b1325b968d9118a4dc5eaf1901a42947527297d5b5",
+        "catalog": "7c3c4aa753091256b01200ad00ff27c6dadc95b3be7535484abf72d2329482dd",
+        "compactSurface": "2328f1ab2432db7beefb66f34256381c3050b16dd9625f0129bfcfe0947e23ae",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "bcd55e0e98e40a8f7e17d9e2fae9551ee642ed9a702617131cea32ec25341734",
-        "nativeSurface": "13125f4debfefa38be131a797e9ecf5da854af0020abb8010c9d1c6c3b4ad71f",
+        "invocation": "74cece1a14f2a5b132969e039aee4dc935c10e0856be1477de7636e9f50739fc",
+        "nativeSurface": "144d237d5dfb26c95839dd4d8b48a6a999b9be4eec6cb9bb39791df60f2750d7",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -28509,7 +28509,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "6229108bb695ad1ad776b83e0afcd95454c61ecee339239de2e4355f3ae4124f",
+          "catalogHash": "7c3c4aa753091256b01200ad00ff27c6dadc95b3be7535484abf72d2329482dd",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -28701,7 +28701,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "13125f4debfefa38be131a797e9ecf5da854af0020abb8010c9d1c6c3b4ad71f",
+          "hash": "144d237d5dfb26c95839dd4d8b48a6a999b9be4eec6cb9bb39791df60f2750d7",
           "name": "command-woven-native"
         },
         "tool": {
@@ -28772,7 +28772,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "6229108bb695ad1ad776b83e0afcd95454c61ecee339239de2e4355f3ae4124f",
+        "catalogHash": "7c3c4aa753091256b01200ad00ff27c6dadc95b3be7535484abf72d2329482dd",
         "commandPath": [
           "issues",
           "create"
@@ -28784,7 +28784,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "bcd55e0e98e40a8f7e17d9e2fae9551ee642ed9a702617131cea32ec25341734",
+        "invocationFingerprint": "74cece1a14f2a5b132969e039aee4dc935c10e0856be1477de7636e9f50739fc",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -28804,7 +28804,7 @@
           }
         ],
         "surface": {
-          "hash": "13125f4debfefa38be131a797e9ecf5da854af0020abb8010c9d1c6c3b4ad71f",
+          "hash": "144d237d5dfb26c95839dd4d8b48a6a999b9be4eec6cb9bb39791df60f2750d7",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -29024,7 +29024,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "6229108bb695ad1ad776b83e0afcd95454c61ecee339239de2e4355f3ae4124f",
+              "catalogHash": "7c3c4aa753091256b01200ad00ff27c6dadc95b3be7535484abf72d2329482dd",
               "commandPath": [
                 "issues",
                 "create"
@@ -29036,7 +29036,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "bcd55e0e98e40a8f7e17d9e2fae9551ee642ed9a702617131cea32ec25341734",
+              "invocationFingerprint": "74cece1a14f2a5b132969e039aee4dc935c10e0856be1477de7636e9f50739fc",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -29056,7 +29056,7 @@
                 }
               ],
               "surface": {
-                "hash": "13125f4debfefa38be131a797e9ecf5da854af0020abb8010c9d1c6c3b4ad71f",
+                "hash": "144d237d5dfb26c95839dd4d8b48a6a999b9be4eec6cb9bb39791df60f2750d7",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -29114,7 +29114,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "bcd55e0e98e40a8f7e17d9e2fae9551ee642ed9a702617131cea32ec25341734",
+            "invocationFingerprint": "74cece1a14f2a5b132969e039aee4dc935c10e0856be1477de7636e9f50739fc",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -29127,10 +29127,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "bcd55e0e98e40a8f7e17d9e2fae9551ee642ed9a702617131cea32ec25341734",
+            "invocationFingerprint": "74cece1a14f2a5b132969e039aee4dc935c10e0856be1477de7636e9f50739fc",
             "origin": "operationId",
             "surface": {
-              "hash": "13125f4debfefa38be131a797e9ecf5da854af0020abb8010c9d1c6c3b4ad71f",
+              "hash": "144d237d5dfb26c95839dd4d8b48a6a999b9be4eec6cb9bb39791df60f2750d7",
               "name": "command-woven-native"
             }
           },
@@ -29465,7 +29465,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "d00bfc8f103a1d7e85ad1fda1551127da226dd01d53a30bea09964b0d8209746",
+          "hash": "6997224e6ac1a4acc93b6f0791db4f09351a1c0fd776d12df6ef28bdf9ffff3a",
           "name": "effect-lanes"
         },
         "tools": [
@@ -30364,7 +30364,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "7df719257a6c90befce46a575ab713c0b1b5c6006b806c735f55aaabe6ad4025",
+        "invocationFingerprint": "e587a10bc73f3c9338f21edce7238d74e70fd1c4091c1190e91a6c7db9ac909c",
         "message": "Create this issue?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -30438,7 +30438,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "7df719257a6c90befce46a575ab713c0b1b5c6006b806c735f55aaabe6ad4025",
+              "invocationFingerprint": "e587a10bc73f3c9338f21edce7238d74e70fd1c4091c1190e91a6c7db9ac909c",
               "message": "Create this issue?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -30464,11 +30464,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create this issue?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "64288e3857ee15e36cae7ffa99d95c6575ed5e572c4ba0eb55b1d6052e36f3cd",
-        "compactSurface": "d00bfc8f103a1d7e85ad1fda1551127da226dd01d53a30bea09964b0d8209746",
+        "catalog": "c19461f50998008cf8adba35695c2ea16757b303702973dbec641db974b5030e",
+        "compactSurface": "6997224e6ac1a4acc93b6f0791db4f09351a1c0fd776d12df6ef28bdf9ffff3a",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "7df719257a6c90befce46a575ab713c0b1b5c6006b806c735f55aaabe6ad4025",
-        "nativeSurface": "40f618e0939e762f46f34caf2d49017ef598e4fc0fb2376821f8d8e2081f4139",
+        "invocation": "e587a10bc73f3c9338f21edce7238d74e70fd1c4091c1190e91a6c7db9ac909c",
+        "nativeSurface": "c8d2e6071cbf51da3bdb7e7bf078c79a364304712b7fa5fd96b360090cc1b88a",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -30743,7 +30743,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "64288e3857ee15e36cae7ffa99d95c6575ed5e572c4ba0eb55b1d6052e36f3cd",
+          "catalogHash": "c19461f50998008cf8adba35695c2ea16757b303702973dbec641db974b5030e",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -30934,7 +30934,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "40f618e0939e762f46f34caf2d49017ef598e4fc0fb2376821f8d8e2081f4139",
+          "hash": "c8d2e6071cbf51da3bdb7e7bf078c79a364304712b7fa5fd96b360090cc1b88a",
           "name": "command-woven-native"
         },
         "tool": {
@@ -31005,7 +31005,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "64288e3857ee15e36cae7ffa99d95c6575ed5e572c4ba0eb55b1d6052e36f3cd",
+        "catalogHash": "c19461f50998008cf8adba35695c2ea16757b303702973dbec641db974b5030e",
         "commandPath": [
           "issues",
           "create"
@@ -31017,7 +31017,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "7df719257a6c90befce46a575ab713c0b1b5c6006b806c735f55aaabe6ad4025",
+        "invocationFingerprint": "e587a10bc73f3c9338f21edce7238d74e70fd1c4091c1190e91a6c7db9ac909c",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -31037,7 +31037,7 @@
           }
         ],
         "surface": {
-          "hash": "40f618e0939e762f46f34caf2d49017ef598e4fc0fb2376821f8d8e2081f4139",
+          "hash": "c8d2e6071cbf51da3bdb7e7bf078c79a364304712b7fa5fd96b360090cc1b88a",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -31257,7 +31257,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "64288e3857ee15e36cae7ffa99d95c6575ed5e572c4ba0eb55b1d6052e36f3cd",
+              "catalogHash": "c19461f50998008cf8adba35695c2ea16757b303702973dbec641db974b5030e",
               "commandPath": [
                 "issues",
                 "create"
@@ -31269,7 +31269,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "7df719257a6c90befce46a575ab713c0b1b5c6006b806c735f55aaabe6ad4025",
+              "invocationFingerprint": "e587a10bc73f3c9338f21edce7238d74e70fd1c4091c1190e91a6c7db9ac909c",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -31289,7 +31289,7 @@
                 }
               ],
               "surface": {
-                "hash": "40f618e0939e762f46f34caf2d49017ef598e4fc0fb2376821f8d8e2081f4139",
+                "hash": "c8d2e6071cbf51da3bdb7e7bf078c79a364304712b7fa5fd96b360090cc1b88a",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -31347,7 +31347,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "7df719257a6c90befce46a575ab713c0b1b5c6006b806c735f55aaabe6ad4025",
+            "invocationFingerprint": "e587a10bc73f3c9338f21edce7238d74e70fd1c4091c1190e91a6c7db9ac909c",
             "message": "Create this issue?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -31360,10 +31360,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "7df719257a6c90befce46a575ab713c0b1b5c6006b806c735f55aaabe6ad4025",
+            "invocationFingerprint": "e587a10bc73f3c9338f21edce7238d74e70fd1c4091c1190e91a6c7db9ac909c",
             "origin": "operationId",
             "surface": {
-              "hash": "40f618e0939e762f46f34caf2d49017ef598e4fc0fb2376821f8d8e2081f4139",
+              "hash": "c8d2e6071cbf51da3bdb7e7bf078c79a364304712b7fa5fd96b360090cc1b88a",
               "name": "command-woven-native"
             }
           },
@@ -31709,7 +31709,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "27d3630c243ce94c3599967d03dd00f0bf2b6086763fcb52afa17bb0c3ecbe18",
+          "hash": "9f8ffdc5ef2c56876ef4c31c0f8525213326b777cf7ddac8040d5fa2a30e3cba",
           "name": "effect-lanes"
         },
         "tools": [
@@ -32619,7 +32619,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "efc7c4a13b0c3406cce007a0f6359408964473be569817146c8f855027d3c99f",
+        "invocationFingerprint": "701270408ef85f679c76d8018119a366dbdca035ee88993aa8458bd832f880f2",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -32693,7 +32693,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "efc7c4a13b0c3406cce007a0f6359408964473be569817146c8f855027d3c99f",
+              "invocationFingerprint": "701270408ef85f679c76d8018119a366dbdca035ee88993aa8458bd832f880f2",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -32724,11 +32724,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .uses_conversation_identity()\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "e8df9dab598ae9f5eea6e2b67725d43fa2c3224f507c882aebc477ab4ee64f84",
-        "compactSurface": "27d3630c243ce94c3599967d03dd00f0bf2b6086763fcb52afa17bb0c3ecbe18",
+        "catalog": "d433df688acd88c903048ab6af62c7227735b4345e1c6c7fdfb543a1892031ea",
+        "compactSurface": "9f8ffdc5ef2c56876ef4c31c0f8525213326b777cf7ddac8040d5fa2a30e3cba",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "efc7c4a13b0c3406cce007a0f6359408964473be569817146c8f855027d3c99f",
-        "nativeSurface": "33ddffef1d1a833a5458ff2dbd757bc29ae4c39eac7093192339fc6575db06a0",
+        "invocation": "701270408ef85f679c76d8018119a366dbdca035ee88993aa8458bd832f880f2",
+        "nativeSurface": "b6088b16cdc8a500451fe88977f1b71eb47be19ae0c4b3d133b9154a80e9747d",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -33025,7 +33025,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "e8df9dab598ae9f5eea6e2b67725d43fa2c3224f507c882aebc477ab4ee64f84",
+          "catalogHash": "d433df688acd88c903048ab6af62c7227735b4345e1c6c7fdfb543a1892031ea",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -33227,7 +33227,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "33ddffef1d1a833a5458ff2dbd757bc29ae4c39eac7093192339fc6575db06a0",
+          "hash": "b6088b16cdc8a500451fe88977f1b71eb47be19ae0c4b3d133b9154a80e9747d",
           "name": "command-woven-native"
         },
         "tool": {
@@ -33298,7 +33298,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "e8df9dab598ae9f5eea6e2b67725d43fa2c3224f507c882aebc477ab4ee64f84",
+        "catalogHash": "d433df688acd88c903048ab6af62c7227735b4345e1c6c7fdfb543a1892031ea",
         "commandPath": [
           "issues",
           "create"
@@ -33310,7 +33310,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "efc7c4a13b0c3406cce007a0f6359408964473be569817146c8f855027d3c99f",
+        "invocationFingerprint": "701270408ef85f679c76d8018119a366dbdca035ee88993aa8458bd832f880f2",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -33330,7 +33330,7 @@
           }
         ],
         "surface": {
-          "hash": "33ddffef1d1a833a5458ff2dbd757bc29ae4c39eac7093192339fc6575db06a0",
+          "hash": "b6088b16cdc8a500451fe88977f1b71eb47be19ae0c4b3d133b9154a80e9747d",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -33550,7 +33550,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "e8df9dab598ae9f5eea6e2b67725d43fa2c3224f507c882aebc477ab4ee64f84",
+              "catalogHash": "d433df688acd88c903048ab6af62c7227735b4345e1c6c7fdfb543a1892031ea",
               "commandPath": [
                 "issues",
                 "create"
@@ -33562,7 +33562,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "efc7c4a13b0c3406cce007a0f6359408964473be569817146c8f855027d3c99f",
+              "invocationFingerprint": "701270408ef85f679c76d8018119a366dbdca035ee88993aa8458bd832f880f2",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -33582,7 +33582,7 @@
                 }
               ],
               "surface": {
-                "hash": "33ddffef1d1a833a5458ff2dbd757bc29ae4c39eac7093192339fc6575db06a0",
+                "hash": "b6088b16cdc8a500451fe88977f1b71eb47be19ae0c4b3d133b9154a80e9747d",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -33640,7 +33640,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "efc7c4a13b0c3406cce007a0f6359408964473be569817146c8f855027d3c99f",
+            "invocationFingerprint": "701270408ef85f679c76d8018119a366dbdca035ee88993aa8458bd832f880f2",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -33653,10 +33653,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "efc7c4a13b0c3406cce007a0f6359408964473be569817146c8f855027d3c99f",
+            "invocationFingerprint": "701270408ef85f679c76d8018119a366dbdca035ee88993aa8458bd832f880f2",
             "origin": "operationId",
             "surface": {
-              "hash": "33ddffef1d1a833a5458ff2dbd757bc29ae4c39eac7093192339fc6575db06a0",
+              "hash": "b6088b16cdc8a500451fe88977f1b71eb47be19ae0c4b3d133b9154a80e9747d",
               "name": "command-woven-native"
             }
           },
@@ -34001,7 +34001,7 @@
           "name": "run-network"
         },
         "surfaceIdentity": {
-          "hash": "c522056f23070538292966b76f5aa7ce09d3d3e009d394d96f950bdb76971bc3",
+          "hash": "b924021841be9225ee697fb52381314f8da198650952142feeec752afcc0d8bb",
           "name": "effect-lanes"
         },
         "tools": [
@@ -34910,7 +34910,7 @@
           "title": "Crash on launch"
         },
         "branch": "default",
-        "invocationFingerprint": "cbd3c0a94827f9c062333cab18ad8365ae4396a78ff2fd496fe3ac55e21b9a2f",
+        "invocationFingerprint": "f716692b55cb07411a142cdfe9dd8ddb78ccbc4a1a211b900eecc382308d2321",
         "message": "Create issue \"Crash on launch\"?",
         "operationId": "issues.create",
         "title": "Create issue?"
@@ -34984,7 +34984,7 @@
                 "title": "Crash on launch"
               },
               "branch": "default",
-              "invocationFingerprint": "cbd3c0a94827f9c062333cab18ad8365ae4396a78ff2fd496fe3ac55e21b9a2f",
+              "invocationFingerprint": "f716692b55cb07411a142cdfe9dd8ddb78ccbc4a1a211b900eecc382308d2321",
               "message": "Create issue \"Crash on launch\"?",
               "operationId": "issues.create",
               "title": "Create issue?"
@@ -35010,11 +35010,11 @@
         "text": "server.command(\"issues create\", |command| {\n    command\n        .summary(\"Create an issue\")\n        .description(\"Creates a new issue from typed title and body arguments.\")\n        .use_when(\"reporting a single new problem\")\n        .arg(\n            arg::string(\"title\")\n                .summary(\"Issue title\")\n        )\n        .arg(\n            arg::string(\"body\")\n                .summary(\"Issue body\")\n        )\n        .write(\"issues\", \"Creates a new issue record\")\n        .network(\"tracker.example\", \"Sends the issue to the remote tracker\")\n        .invocation_message(\"Creating an issue\")\n        .confirmation(ConfirmationPresentation::new(\n            ConfirmationMessage::new(\"Create issue?\")\n                .text(\"Create issue \")\n                .argument(\"title\", ArgumentRendering::JsonString, \"(missing title)\")\n                .text(\"?\")\n        ))\n        .idempotent()\n        .task_support(TaskSupportSpec::Optional)\n        .example_with_args(\n            \"issues create --title $args.title --body $args.body\",\n            \"Create an issue with typed title and body values\",\n            json!(\n                {\n                  \"body\": \"The app exits after the splash screen.\",\n                  \"title\": \"Crash on launch\"\n                }\n            ),\n        )\n        // Application errors: none.\n        .result_contract(ApplicationResultContract::new(json!(\n            {\n              \"type\": \"object\",\n              \"required\": [\"id\", \"title\", \"body\", \"status\"],\n              \"properties\": {\n                \"id\": { \"type\": \"integer\" },\n                \"title\": { \"type\": \"string\" },\n                \"body\": { \"type\": \"string\" },\n                \"status\": { \"type\": \"string\" }\n              },\n              \"additionalProperties\": false\n            }\n        )))\n        .handle_dynamic(create_issue);\n});"
       },
       "fingerprints": {
-        "catalog": "4791be5a4ca932fa4feb6cfdafe0682062c1c76ded82b0e6caad1a3326e0ba92",
-        "compactSurface": "c522056f23070538292966b76f5aa7ce09d3d3e009d394d96f950bdb76971bc3",
+        "catalog": "b1062057261992a0891a73bf112dc8aa152e0ae9def012bc5c1b96f2996560a4",
+        "compactSurface": "b924021841be9225ee697fb52381314f8da198650952142feeec752afcc0d8bb",
         "helpSchema": "5e3d7a7b6f1dabf059ac5fea340d6c8da59c101a4bff955366e2508ff4b57cd9",
-        "invocation": "cbd3c0a94827f9c062333cab18ad8365ae4396a78ff2fd496fe3ac55e21b9a2f",
-        "nativeSurface": "3ce45cd01a512f0e02d885ea153aa5be4c570e68d08a7d4e58f1305971a3d25c",
+        "invocation": "f716692b55cb07411a142cdfe9dd8ddb78ccbc4a1a211b900eecc382308d2321",
+        "nativeSurface": "bfa642773f7bfe23cca66e30edcb11f85ca9cc78c2d9ad6b339d56277bfddf61",
         "runSchema": "5cf2aed14d83a8791bf9d2ff4714ef48f8f689ed4b55c82bca80edfff1c2c081"
       },
       "help": {
@@ -35309,7 +35309,7 @@
       },
       "native": {
         "surface": {
-          "catalogHash": "4791be5a4ca932fa4feb6cfdafe0682062c1c76ded82b0e6caad1a3326e0ba92",
+          "catalogHash": "b1062057261992a0891a73bf112dc8aa152e0ae9def012bc5c1b96f2996560a4",
           "declaration": {
             "confirmation": "bridge",
             "frameworkHelp": "omitted",
@@ -35510,7 +35510,7 @@
           "version": 1
         },
         "surfaceIdentity": {
-          "hash": "3ce45cd01a512f0e02d885ea153aa5be4c570e68d08a7d4e58f1305971a3d25c",
+          "hash": "bfa642773f7bfe23cca66e30edcb11f85ca9cc78c2d9ad6b339d56277bfddf61",
           "name": "command-woven-native"
         },
         "tool": {
@@ -35581,7 +35581,7 @@
             "valueType": "string"
           }
         },
-        "catalogHash": "4791be5a4ca932fa4feb6cfdafe0682062c1c76ded82b0e6caad1a3326e0ba92",
+        "catalogHash": "b1062057261992a0891a73bf112dc8aa152e0ae9def012bc5c1b96f2996560a4",
         "commandPath": [
           "issues",
           "create"
@@ -35593,7 +35593,7 @@
           ]
         },
         "idempotent": true,
-        "invocationFingerprint": "cbd3c0a94827f9c062333cab18ad8365ae4396a78ff2fd496fe3ac55e21b9a2f",
+        "invocationFingerprint": "f716692b55cb07411a142cdfe9dd8ddb78ccbc4a1a211b900eecc382308d2321",
         "lane": "network",
         "operationId": "issues.create",
         "origin": "operationId",
@@ -35613,7 +35613,7 @@
           }
         ],
         "surface": {
-          "hash": "3ce45cd01a512f0e02d885ea153aa5be4c570e68d08a7d4e58f1305971a3d25c",
+          "hash": "bfa642773f7bfe23cca66e30edcb11f85ca9cc78c2d9ad6b339d56277bfddf61",
           "name": "command-woven-native"
         },
         "tokens": [],
@@ -35833,7 +35833,7 @@
                   "valueType": "string"
                 }
               },
-              "catalogHash": "4791be5a4ca932fa4feb6cfdafe0682062c1c76ded82b0e6caad1a3326e0ba92",
+              "catalogHash": "b1062057261992a0891a73bf112dc8aa152e0ae9def012bc5c1b96f2996560a4",
               "commandPath": [
                 "issues",
                 "create"
@@ -35845,7 +35845,7 @@
                 ]
               },
               "idempotent": true,
-              "invocationFingerprint": "cbd3c0a94827f9c062333cab18ad8365ae4396a78ff2fd496fe3ac55e21b9a2f",
+              "invocationFingerprint": "f716692b55cb07411a142cdfe9dd8ddb78ccbc4a1a211b900eecc382308d2321",
               "lane": "network",
               "operationId": "issues.create",
               "origin": "operationId",
@@ -35865,7 +35865,7 @@
                 }
               ],
               "surface": {
-                "hash": "3ce45cd01a512f0e02d885ea153aa5be4c570e68d08a7d4e58f1305971a3d25c",
+                "hash": "bfa642773f7bfe23cca66e30edcb11f85ca9cc78c2d9ad6b339d56277bfddf61",
                 "name": "command-woven-native"
               },
               "tokens": [],
@@ -35923,7 +35923,7 @@
               "title": "Crash on launch"
             },
             "branch": "default",
-            "invocationFingerprint": "cbd3c0a94827f9c062333cab18ad8365ae4396a78ff2fd496fe3ac55e21b9a2f",
+            "invocationFingerprint": "f716692b55cb07411a142cdfe9dd8ddb78ccbc4a1a211b900eecc382308d2321",
             "message": "Create issue \"Crash on launch\"?",
             "operationId": "issues.create",
             "title": "Create issue?"
@@ -35936,10 +35936,10 @@
           "id": "trace.dispatch",
           "label": "Dispatch",
           "payload": {
-            "invocationFingerprint": "cbd3c0a94827f9c062333cab18ad8365ae4396a78ff2fd496fe3ac55e21b9a2f",
+            "invocationFingerprint": "f716692b55cb07411a142cdfe9dd8ddb78ccbc4a1a211b900eecc382308d2321",
             "origin": "operationId",
             "surface": {
-              "hash": "3ce45cd01a512f0e02d885ea153aa5be4c570e68d08a7d4e58f1305971a3d25c",
+              "hash": "bfa642773f7bfe23cca66e30edcb11f85ca9cc78c2d9ad6b339d56277bfddf61",
               "name": "command-woven-native"
             }
           },

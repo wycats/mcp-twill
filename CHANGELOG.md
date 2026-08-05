@@ -2,6 +2,18 @@
 
 All notable changes to the public Twill crates are recorded here.
 
+## 0.1.2 - 2026-08-05
+
+- Make native MCP resource and prompt capabilities, experimental metadata, and
+  server identity configurable while keeping initialize instructions derived
+  from the hash-covered compiled surface.
+- Preserve authored nested `required` ordering in native input schemas without
+  changing canonical registry schemas or catalog identity, including repeated
+  schemas with hoisted definitions and canonically equal grouped members.
+- Add an explicit, serialized, hash-covered compatibility dialect for native
+  group descriptions that must remain byte-for-byte authored while retaining
+  catalog-derived guidance as the default.
+
 ## 0.1.1 - 2026-07-26
 
 - Preserve protocol-version observation across rmcp 1.7 and 1.8 ownership
